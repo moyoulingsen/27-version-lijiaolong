@@ -1,0 +1,106 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="mid360">
+
+  <xacro:property name="mid360_length" value="0.10"/>
+  <xacro:property name="mid360_width" value="0.06"/>
+  <xacro:property name="mid360_height" value="0.06"/>
+  <xacro:property name="mid360_mass" value="0.40"/>
+  <xacro:property name="mid360_min_range" value="0.10"/>
+  <xacro:property name="mid360_max_range" value="200.0"/>
+  <xacro:property name="mid360_samples" value="40000"/>
+  <xacro:property name="mid360_resolution" value="0.002"/>
+  <xacro:property name="mid360_noise_mean" value="0.0"/>
+  <xacro:property name="mid360_noise_stddev" value="0.01"/>
+
+  <xacro:macro name="mid360_box_inertia" params="mass x y z">
+    <inertial>
+      <mass value="${mass}"/>
+      <inertia
+        ixx="${mass * (y*y + z*z) / 12.0}"
+        ixy="0.0"
+        ixz="0.0"
+        iyy="${mass * (x*x + z*z) / 12.0}"
+        iyz="0.0"
+        izz="${mass * (x*x + y*y) / 12.0}"/>
+    </inertial>
+  </xacro:macro>
+
+  <!--
+    Local MID360 wrapper based on the supplied Livox simulator.
+    The simulator plugin is libros2_livox.so; install/build that package before
+    starting Gazebo. Keeping the scan CSV in this package makes the model path
+    deterministic after colcon install.
+  -->
+  <xacro:macro
+    name="mid360"
+    params="name:=mid360 parent:=base_link topic:=/mid360_points update_rate:=10.0 *origin">
+
+    <link name="${name}">
+      <xacro:mid360_box_inertia
+        mass="${mid360_mass}"
+        x="${mid360_length}"
+        y="${mid360_width}"
+        z="${mid360_height}"/>
+      <visual name="${name}_visual">
+        <geometry>
+          <box size="${mid360_length} ${mid360_width} ${mid360_height}"/>
+        </geometry>
+        <material name="mid360_green">
+          <color rgba="0.15 0.65 0.25 1.0"/>
+        </material>
+      </visual>
+      <collision name="${name}_collision">
+        <geometry>
+          <box size="${mid360_length} ${mid360_width} ${mid360_height}"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="${name}_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="${name}"/>
+      <xacro:insert_block name="origin"/>
+    </joint>
+
+    <gazebo reference="${name}">
+      <sensor type="ray" name="${name}_sensor">
+        <pose>0 0 0 0 0 0</pose>
+        <visualize>false</visualize>
+        <update_rate>${update_rate}</update_rate>
+        <plugin name="${name}_livox_plugin" filename="libros2_livox.so">
+          <ray>
+            <scan>
+              <horizontal>
+                <samples>100</samples>
+                <resolution>1</resolution>
+                <min_angle>0.0</min_angle>
+                <max_angle>${2.0*3.141592653589793}</max_angle>
+              </horizontal>
+              <vertical>
+                <samples>360</samples>
+                <resolution>1</resolution>
+                <min_angle>${-7.22/180.0*3.141592653589793}</min_angle>
+                <max_angle>${55.22/180.0*3.141592653589793}</max_angle>
+              </vertical>
+            </scan>
+            <range>
+              <min>${mid360_min_range}</min>
+              <max>${mid360_max_range}</max>
+              <resolution>${mid360_resolution}</resolution>
+            </range>
+            <noise>
+              <type>gaussian</type>
+              <mean>${mid360_noise_mean}</mean>
+              <stddev>${mid360_noise_stddev}</stddev>
+            </noise>
+          </ray>
+          <visualize>false</visualize>
+          <samples>${mid360_samples}</samples>
+          <downsample>1</downsample>
+          <csv_file_name>$(find bot_description)/scan_mode/mid360.csv</csv_file_name>
+          <topic>${topic}</topic>
+        </plugin>
+      </sensor>
+    </gazebo>
+  </xacro:macro>
+</robot>
