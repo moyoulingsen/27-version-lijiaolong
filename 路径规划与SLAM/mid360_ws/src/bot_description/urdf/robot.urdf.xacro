@@ -4,10 +4,12 @@
   <xacro:arg name="camera_topic" default="/camera/image_raw"/>
   <xacro:arg name="camera_info_topic" default="/camera/camera_info"/>
   <xacro:arg name="mid360_topic" default="/mid360_points"/>
+  <xacro:arg name="laser_topic" default="/laser_points"/>
 
   <xacro:include filename="$(find bot_description)/urdf/base.urdf.xacro"/>
   <xacro:include filename="$(find bot_description)/urdf/camera.xacro"/>
   <xacro:include filename="$(find bot_description)/urdf/mid360_mount.xacro"/>
+  <xacro:include filename="$(find bot_description)/urdf/laser.xacro"/>
 
   <xacro:base/>
 
@@ -17,7 +19,8 @@
     image_topic="$(arg camera_topic)"
     info_topic="$(arg camera_info_topic)"
     update_rate="10.0">
-    <origin xyz="0.30 0 0.32" rpy="0 0 0"/>
+    <!-- P把相机光学中心放在底盘前方、车顶上方。 -->
+    <origin xyz="0.46 0 0.35" rpy="0 0 0"/>
   </xacro:camera>
 
   <xacro:mid360
@@ -25,8 +28,18 @@
     parent="base_link"
     topic="$(arg mid360_topic)"
     update_rate="10.0">
-    <origin xyz="0 0 0.30" rpy="0 0 0"/>
+    <!-- 高安装可以让 360 度扫描避开底盘顶部，避免遮挡。 -->
+    <origin xyz="0 0 0.52" rpy="0 0 0"/>
   </xacro:mid360>
+
+  <xacro:laser
+    name="laser"
+    parent="base_link"
+    topic="$(arg laser_topic)"
+    update_rate="15.0">
+    <!-- Front/top mount; the point cloud is published independently of MID360. -->
+    <origin xyz="0.18 0 0.48" rpy="0 0 0"/>
+  </xacro:laser>
 
   <!-- A simple planar controller makes cmd_vel/odom available in Gazebo. -->
   <gazebo>

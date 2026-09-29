@@ -4,7 +4,7 @@ project(bot_description)
 find_package(ament_cmake REQUIRED)
 
 install(
-  DIRECTORY urdf meshes scan_mode launch
+  DIRECTORY urdf meshes scan_mode launch worlds rviz
   DESTINATION share/${PROJECT_NAME}
 )
 
