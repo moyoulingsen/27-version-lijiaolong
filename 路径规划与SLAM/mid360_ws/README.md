@@ -39,6 +39,12 @@ source install/setup.bash
 ros2 launch bot_description gazebo.launch.py
 ```
 
+同时启动 Gazebo 和已配置好两个点云显示的 RViz：
+
+```bash
+ros2 launch bot_description sim_with_rviz.launch.py
+```
+
 无图形界面检查：
 
 ```bash
@@ -54,6 +60,7 @@ source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 topic list
 ros2 topic echo /mid360_points --once
+ros2 topic echo /laser_points --once
 ros2 topic echo /camera/camera_info --once
 ros2 run tf2_tools view_frames
 ```
@@ -66,17 +73,22 @@ base_link
 front_camera_link
 front_camera_optical_link
 mid360
+laser_link
 ```
 
 应能看到：
 
 ```text
 /mid360_points
+/laser_points
 /camera/image_raw
 /camera/camera_info
 /cmd_vel
 /odom
 ```
+
+默认 `mid360_demo.world` 含有带 collision 的动态方块和圆柱。它们会受重力下落，
+在 Gazebo 中拖动到车体附近可直接检查不穿模；也可以通过 `world:=...` 替换场景。
 
 无图形界面环境中 Gazebo 可能提示 `Unable to create CameraSensor`，这是渲染
 显示不可用造成的；MID360 插件仍可加载。要观察相机图像，请在有可用 DISPLAY

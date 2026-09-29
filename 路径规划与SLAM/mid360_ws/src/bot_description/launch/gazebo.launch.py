@@ -29,6 +29,7 @@ def generate_launch_description():
         ' camera_topic:=', LaunchConfiguration('camera_topic'),
         ' camera_info_topic:=', LaunchConfiguration('camera_info_topic'),
         ' mid360_topic:=', LaunchConfiguration('mid360_topic'),
+        ' laser_topic:=', LaunchConfiguration('laser_topic'),
     ])
 
     gazebo = IncludeLaunchDescription(
@@ -72,7 +73,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'world',
             default_value=PathJoinSubstitution([
-                FindPackageShare('gazebo_ros'), 'worlds', 'empty.world'
+                FindPackageShare('bot_description'), 'worlds', 'mid360_demo.world'
             ]),
             description='Gazebo world file.',
         ),
@@ -84,6 +85,7 @@ def generate_launch_description():
         DeclareLaunchArgument('camera_topic', default_value='/camera/image_raw'),
         DeclareLaunchArgument('camera_info_topic', default_value='/camera/camera_info'),
         DeclareLaunchArgument('mid360_topic', default_value='/mid360_points'),
+        DeclareLaunchArgument('laser_topic', default_value='/laser_points'),
         gazebo,
         state_publisher,
         # Give gzserver time to load libgazebo_ros_factory before spawning. 
