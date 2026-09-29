@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="robot">
+<!-- 基础部分 robot -->
+<xacro:include filename="$(find bot_description)/urdf/robot/base.urdf.xacro"/>
+<!-- 插件 -->
+<xacro:include filename="$(find bot_description)/urdf/robot/plugins/gazebo_control_plugin.xacro"/>
+
+
+<xacro:robot />
+
+<xacro:gazebo_control_plugin />
+
+</robot>

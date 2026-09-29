@@ -1,0 +1,64 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="robot">
+    <xacro:macro name="robot">
+        <link name="base_link">
+	    <inertial>
+	      <origin
+		xyz="0.00343397415183253 0.00915300053781245 0.0410811828989565"
+		rpy="0 0 0" />
+	      <mass
+		value="7.34385085331047" />
+	      <inertia
+		ixx="0.0730144420719757"
+		ixy="0.000849702101062842"
+		ixz="-0.00280310156080631"
+		iyy="0.0740010304443503"
+		iyz="-0.000789498528188454"
+		izz="0.0961714262699569" />
+	    </inertial>
+	    <visual>
+	      <origin
+		xyz="0 0 0"
+		rpy="0 0 0" />
+	      <geometry>
+		<mesh
+		  filename="file://$(find bot_description)/meshes/base_link.STL" />
+	      </geometry>
+	      <material
+		name="">
+		<color
+		  rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+	      </material>
+	    </visual>
+	    <collision>
+	      <origin
+		xyz="0 0 0"
+		rpy="0 0 0" />
+	      <geometry>
+		<mesh
+		  filename="file://$(find bot_description)/meshes/base_link.STL" />
+	      </geometry>
+	    </collision>
+	  </link>
+
+        <!-- 机器人的虚拟部件，对地面的投影 -->
+        <link name="base_footprint" />
+
+        <joint name="base_link_joint" type="fixed">
+            <origin xyz="0.0 0.0 0.076" rpy="0.0 0.0 0.0"/>
+            <parent link="base_footprint"/>
+            <child link="base_link"/>
+        </joint>
+        <gazebo reference="base_link">
+            <mu1>0.0</mu1>
+            <mu2>0.0</mu2>
+            <kp>20000.0</kp>
+            <kd>10.0</kd>
+            <minDepth>0.001</minDepth>
+            <maxVel>100.0</maxVel>
+        </gazebo>
+        <gazebo reference='base_link'>
+            <material>Gazebo/Red</material>
+        </gazebo>
+    </xacro:macro>
+</robot>
