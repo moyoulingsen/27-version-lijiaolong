@@ -1,0 +1,66 @@
+<?xml version="1.0"?>
+
+<robot name="base_mecanum_gazebo" xmlns:xacro="http://www.ros.org/wiki/xacro">
+    <xacro:property name="M_PI" value="3.1415926535897931" />
+    <xacro:macro name="base_mecanum_gazebo">
+        <gazebo>
+            <plugin name="gazebo_ros_control" filename="libgazebo_ros_control.so">
+                <robotSimType>gazebo_ros_control/DefaultRobotHWSim</robotSimType>
+            </plugin>
+        </gazebo>
+
+        <!-- mu1静,mu2动，kp 刚度系数 kd 阻尼系数 -->
+        <gazebo reference="front_left_wheel">
+            <mu1>0.0</mu1>
+            <mu2>0.0</mu2>
+            <kp>20000.0</kp>
+            <kd>10.0</kd>
+            <minDepth>0.001</minDepth>
+            <maxVel>100.0</maxVel>
+        </gazebo>
+
+        <gazebo reference="front_right_wheel">
+            <mu1>0.0</mu1>
+            <mu2>0.0</mu2>
+            <kp>20000.0</kp>
+            <kd>10.0</kd>
+            <minDepth>0.001</minDepth>
+            <maxVel>100.0</maxVel>
+        </gazebo>
+
+        <gazebo reference="back_left_wheel">
+            <mu1>0.0</mu1>
+            <mu2>0.0</mu2>
+            <kp>20000.0</kp>
+            <kd>10.0</kd>
+            <minDepth>0.001</minDepth>
+            <maxVel>100.0</maxVel>
+        </gazebo>
+
+        <gazebo reference="back_right_wheel">
+            <mu1>0.0</mu1>
+            <mu2>0.0</mu2>
+            <kp>20000.0</kp>
+            <kd>10.0</kd>
+            <minDepth>0.001</minDepth>
+            <maxVel>100.0</maxVel>
+        </gazebo>
+
+        <gazebo>
+            <plugin name="mecanum_controller" filename="libgazebo_ros_planar_move.so">
+                <commandTopic>cmd_vel</commandTopic>
+                <odometryTopic>odom</odometryTopic>
+                <odometryFrame>odom</odometryFrame>
+                <publishWheelTF>false</publishWheelTF>
+                <publishWheelJointState>false</publishWheelJointState>
+                <leftFrontJoint>front_left_wheel</leftFrontJoint>
+                <rightFrontJoint>front_right_wheel</rightFrontJoint>
+                <leftRearJoint>back_left_wheel</leftRearJoint>
+                <rightRearJoint>back_right_wheel</rightRearJoint>
+                <odometryRate>10</odometryRate>
+                <robotBaseFrame>base_footprint</robotBaseFrame>
+                <cmdTimeout>-1.0</cmdTimeout>
+            </plugin>
+        </gazebo>
+    </xacro:macro>
+</robot>
