@@ -10,6 +10,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 find_package(behaviortree_cpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -28,6 +29,7 @@ rosidl_get_typesupport_target(cpp_typesupport_target
   ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
 add_executable(decision_process_node
+  src/behavior_tree_nodes.cpp
   src/decision_process_main.cpp
   src/decision_process_node.cpp
 )
@@ -39,6 +41,7 @@ target_include_directories(decision_process_node PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 ament_target_dependencies(decision_process_node
+  ament_index_cpp
   behaviortree_cpp
   geometry_msgs
   nav_msgs
@@ -69,7 +72,9 @@ install(TARGETS
 )
 
 install(DIRECTORY
+  behavior_trees
   config
+  docs
   launch
   DESTINATION share/${PROJECT_NAME}
 )
@@ -77,6 +82,25 @@ install(DIRECTORY
 install(DIRECTORY include/
   DESTINATION include
 )
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_return_home_logic test/test_return_home_logic.cpp)
+  target_include_directories(test_return_home_logic PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+  ament_add_gtest(test_posture_logic test/test_posture_logic.cpp)
+  target_include_directories(test_posture_logic PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+  ament_add_gtest(test_attack_outpost_logic test/test_attack_outpost_logic.cpp)
+  target_include_directories(test_attack_outpost_logic PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+endif()
 
 ament_export_dependencies(rosidl_default_runtime)
 ament_package()

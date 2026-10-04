@@ -1,6 +1,8 @@
-# decision_process 通信骨架
+# decision_process 决策节点
 
-这个功能包只实现 ROS 2 话题的接收、发送和联调工具，不包含 BehaviorTree.CPP 或具体决策逻辑。
+这个功能包提供 ROS 2 通信层，并开始按任务逐个接入 BehaviorTree.CPP 子树。
+
+当前已经独立完成前 3 个任务：归位、姿态切换和打前哨。每个任务都有单独的 Groot2 XML、逻辑说明和测试。
 
 ## 话题
 
@@ -21,6 +23,20 @@
 | `/decision_to_autoaim` | `decision_process/msg/DecisionToAutoaim` |
 
 `/goal_pose` 默认不发布。只有将 `publish_goal` 参数设为 `true` 时才会发布，并且 `z` 固定为 `1.0`、`frame_id` 默认为 `map`。
+
+行为树启用后，`NavigateToPose` 节点可以直接更新导航命令，不需要手动设置 `publish_goal` 参数。
+
+## 已实现行为树
+
+| 子树 | XML | 说明文档 |
+| --- | --- | --- |
+| 01 归位 | `behavior_trees/01_return_home.xml` | `docs/behavior_trees/01_return_home.md` |
+| 02 姿态切换 | `behavior_trees/02_posture_switch.xml` | `docs/behavior_trees/02_posture_switch.md` |
+| 03 打前哨 | `behavior_trees/03_attack_outpost.xml` | `docs/behavior_trees/03_attack_outpost.md` |
+
+归位触发方式不是简单判断 `time==0`，而是记录比赛曾经进入阶段 2，随后检测到退出阶段 2，避免赛前误触发。
+
+打前哨子树先导航到 `(16,11)`，到点后指定 6 号前哨站；看不见目标时转动云台搜索，看见且有弹时射击，只有完整裁判数据明确报告 `hp_enemy[5]==0` 才释放后续行为。
 
 ## 完整字段处理
 
@@ -83,5 +99,6 @@ ros2 topic echo /goal_pose
 ## 说明
 
 - `test_data_publisher` 只用于没有真实裁判系统、自矄和定位节点时的联调。
+- 传入 `simulate_return_home:=true` 可模拟比赛结束归位；传入 `simulate_attack_outpost:=true` 可模拟导航、搜索、射击和前哨摧毁流程。
 - `output_monitor` 用来确认三个输出话题的消息确实已发布。
 - 后续写决策逻辑时，可以更新 `serial_command_`、`autoaim_command_`和导航目标参数，不需要重写 ROS 2 通信接口。

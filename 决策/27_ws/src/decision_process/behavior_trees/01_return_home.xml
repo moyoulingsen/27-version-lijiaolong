@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <ReactiveFallback name="MainDecision">
+      <SubTree ID="ReturnHome" home_x="4.971" home_y="7.5" home_z="1.0"
+               home_yaw="0.0" frame_id="map" tolerance="0.15"/>
+      <AlwaysSuccess name="OtherBehaviorsPlaceholder"/>
+    </ReactiveFallback>
+  </BehaviorTree>
+
+  <BehaviorTree ID="ReturnHome">
+    <ReactiveSequence name="ReturnHomeSequence">
+      <GameFinished/>
+      <SentryAlive/>
+      <SetPosture posture="3"/>
+      <NavigateToPose x="{home_x}" y="{home_y}" z="{home_z}"
+                      yaw="{home_yaw}" frame_id="{frame_id}"
+                      tolerance="{tolerance}"/>
+    </ReactiveSequence>
+  </BehaviorTree>
+
+  <TreeNodesModel>
+    <SubTree ID="ReturnHome">
+      <input_port name="home_x" default="4.971">哨兵启动点x坐标</input_port>
+      <input_port name="home_y" default="7.5">哨兵启动点y坐标</input_port>
+      <input_port name="home_z" default="1.0">导航目标z坐标</input_port>
+      <input_port name="home_yaw" default="0.0">归位目标朝向</input_port>
+      <input_port name="frame_id" default="map">导航参考坐标系</input_port>
+      <input_port name="tolerance" default="0.15">到达判定容差</input_port>
+    </SubTree>
+    <Condition ID="GameFinished" editable="true"/>
+    <Condition ID="SentryAlive" editable="true"/>
+    <Action ID="SetPosture" editable="true">
+      <input_port name="posture" default="3">1进攻、2防御、3移动</input_port>
+    </Action>
+    <Action ID="NavigateToPose" editable="true">
+      <input_port name="x">目标地图x坐标</input_port>
+      <input_port name="y">目标地图y坐标</input_port>
+      <input_port name="z" default="1.0">目标z坐标</input_port>
+      <input_port name="yaw" default="0.0">目标朝向角</input_port>
+      <input_port name="frame_id" default="map">目标参考坐标系</input_port>
+      <input_port name="tolerance" default="0.15">平面到达容差</input_port>
+    </Action>
+  </TreeNodesModel>
+</root>
