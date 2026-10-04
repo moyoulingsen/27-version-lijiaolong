@@ -49,3 +49,4 @@ ccache/
 .env
 .env.*
 docker-compose.override.yml
+data/
