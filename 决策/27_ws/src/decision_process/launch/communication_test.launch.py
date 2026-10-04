@@ -13,7 +13,7 @@ def generate_launch_description():
         [
             Node(
                 package="decision_process",
-                executable="decision_process_node",
+                executable="decision_process",
                 name="decision_process",
                 output="screen",
                 parameters=[
