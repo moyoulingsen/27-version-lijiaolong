@@ -1,0 +1,22 @@
+decision_process:
+  ros__parameters:
+    publish_rate_hz: 20.0
+
+    # 默认不发送导航目标，防止上电后误移动。
+    publish_goal: false
+    goal_frame_id: map
+    goal_x: 0.0
+    goal_y: 0.0
+    goal_yaw: 0.0
+
+    # 无决策逻辑时的安全默认输出。
+    default_posture: 3
+    default_confirm_respawn: 0
+    default_tripod_mode: 1
+    default_spin_mode: 0
+    default_shoot_mode: 0
+
+    # target=0 表示当前不指定击打目标。
+    default_target_color: 0
+    default_target_number: 0
+    default_decide_yaw: 0.0
