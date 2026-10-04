@@ -10,6 +10,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(behaviortree_cpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -30,11 +31,15 @@ add_executable(decision_process_node
   src/decision_process_main.cpp
   src/decision_process_node.cpp
 )
+set_target_properties(decision_process_node PROPERTIES
+  OUTPUT_NAME decision_process
+)
 target_include_directories(decision_process_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
 ament_target_dependencies(decision_process_node
+  behaviortree_cpp
   geometry_msgs
   nav_msgs
   rclcpp

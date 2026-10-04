@@ -57,6 +57,12 @@ source tools/source_workspace.sh
 ros2 launch decision_process communication.launch.py
 ```
 
+也可以直接运行与功能包同名的决策节点：
+
+```bash
+ros2 run decision_process decision_process
+```
+
 ## 自测全部话题
 
 下面的 launch 会同时启动决策通信节点、模拟输入节点和输出监视节点：
