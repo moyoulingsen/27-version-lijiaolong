@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "behaviortree_cpp/bt_factory.h"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rcl_interfaces/msg/set_parameters_result.hpp"
@@ -18,6 +19,7 @@
 #include "decision_process/msg/decision_to_autoaim.hpp"
 #include "decision_process/msg/desicion_send_data.hpp"
 #include "decision_process/msg/receive_data.hpp"
+#include "decision_process/return_home_logic.hpp"
 
 namespace decision_process
 {
@@ -30,6 +32,11 @@ public:
   RefereeState getRefereeState() const;
   AutoaimState getAutoaimState() const;
   LocalizationState getLocalizationState() const;
+  SerialCommand getSerialCommand() const;
+  AutoaimCommand getAutoaimCommand() const;
+  NavigationCommand getNavigationCommand() const;
+  bool hasGameStarted() const;
+  bool isGameFinished() const;
 
   void setSerialCommand(const SerialCommand & command);
   void setAutoaimCommand(const AutoaimCommand & command);
@@ -48,6 +55,8 @@ private:
   void autoaimCallback(const AutoaimToDecision::SharedPtr msg);
   void publishOutputs();
   void publishGoalPose();
+  void initializeBehaviorTree(const std::string & xml_path, double tick_rate_hz);
+  void tickBehaviorTree();
   rcl_interfaces::msg::SetParametersResult parametersCallback(
     const std::vector<rclcpp::Parameter> & parameters);
 
@@ -56,6 +65,7 @@ private:
   RefereeState referee_state_;
   AutoaimState autoaim_state_;
   LocalizationState localization_state_;
+  MatchLifecycle match_lifecycle_;
 
   SerialCommand serial_command_;
   AutoaimCommand autoaim_command_;
@@ -70,7 +80,11 @@ private:
   rclcpp::Publisher<DecisionToAutoaim>::SharedPtr autoaim_command_pub_;
 
   rclcpp::TimerBase::SharedPtr publish_timer_;
+  rclcpp::TimerBase::SharedPtr behavior_tree_timer_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_;
+
+  BT::BehaviorTreeFactory behavior_tree_factory_;
+  std::unique_ptr<BT::Tree> behavior_tree_;
 };
 
 }  // namespace decision_process

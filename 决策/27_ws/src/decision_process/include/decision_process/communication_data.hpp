@@ -25,6 +25,7 @@ struct RefereeState
   uint16_t base_hp{0};
   std::array<uint16_t, kEnemyCount> enemy_hp{};
   std::array<float, kRadarValueCount> radar_data{};
+  bool enemy_hp_valid{false};
   bool received{false};
 };
 

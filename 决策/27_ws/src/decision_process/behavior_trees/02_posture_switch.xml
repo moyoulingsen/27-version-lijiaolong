@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <ReactiveFallback name="PostureSwitchDemo">
+      <SubTree ID="PostureManager" requested_posture="3" cooldown_sec="5.0"
+               applied_posture="{applied_posture}"/>
+      <AlwaysSuccess name="NotInActiveGame"/>
+    </ReactiveFallback>
+  </BehaviorTree>
+
+  <BehaviorTree ID="PostureManager">
+    <ReactiveSequence name="PostureManagerSequence">
+      <GameRunning/>
+      <ApplyPosture requested_posture="{requested_posture}"
+                    cooldown_sec="{cooldown_sec}"
+                    applied_posture="{applied_posture}"/>
+    </ReactiveSequence>
+  </BehaviorTree>
+
+  <TreeNodesModel>
+    <SubTree ID="PostureManager">
+      <input_port name="requested_posture" default="3">请求姿态</input_port>
+      <input_port name="cooldown_sec" default="5.0">切换冷却时间</input_port>
+      <output_port name="applied_posture" default="{applied_posture}">实际姿态</output_port>
+    </SubTree>
+    <Condition ID="GameRunning" editable="true"/>
+    <Action ID="ApplyPosture" editable="true">
+      <input_port name="requested_posture" default="3">1进攻、2防御、3移动</input_port>
+      <input_port name="cooldown_sec" default="5.0">姿态切换冷却秒数</input_port>
+      <output_port name="applied_posture">实际应用的姿态</output_port>
+    </Action>
+  </TreeNodesModel>
+</root>

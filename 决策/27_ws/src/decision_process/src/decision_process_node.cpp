@@ -3,10 +3,15 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <exception>
 #include <functional>
 #include <iomanip>
 #include <sstream>
 #include <type_traits>
+
+#include "ament_index_cpp/get_package_share_directory.hpp"
+
+#include "decision_process/behavior_tree_nodes.hpp"
 
 namespace
 {
@@ -57,6 +62,24 @@ DecisionProcessNode::DecisionProcessNode()
 : Node("decision_process")
 {
   const double publish_rate_hz = declare_parameter<double>("publish_rate_hz", 20.0);
+  const bool behavior_tree_enabled = declare_parameter<bool>("behavior_tree_enabled", true);
+  const double behavior_tree_tick_rate_hz =
+    declare_parameter<double>("behavior_tree_tick_rate_hz", 20.0);
+
+  std::string default_tree_path;
+  try {
+    default_tree_path =
+      ament_index_cpp::get_package_share_directory("decision_process") +
+      "/behavior_trees/01_return_home.xml";
+  } catch (const std::exception & error) {
+    RCLCPP_WARN(
+      get_logger(), "Unable to resolve default behavior tree path: %s", error.what());
+  }
+  std::string behavior_tree_xml =
+    declare_parameter<std::string>("behavior_tree_xml", default_tree_path);
+  if (behavior_tree_xml.empty()) {
+    behavior_tree_xml = default_tree_path;
+  }
   navigation_command_.enabled = declare_parameter<bool>("publish_goal", false);
   navigation_command_.x = declare_parameter<double>("goal_x", 0.0);
   navigation_command_.y = declare_parameter<double>("goal_y", 0.0);
@@ -110,6 +133,10 @@ DecisionProcessNode::DecisionProcessNode()
     std::chrono::duration_cast<std::chrono::milliseconds>(period),
     std::bind(&DecisionProcessNode::publishOutputs, this));
 
+  if (behavior_tree_enabled) {
+    initializeBehaviorTree(behavior_tree_xml, behavior_tree_tick_rate_hz);
+  }
+
   RCLCPP_INFO(get_logger(), "Decision communication node started at %.1f Hz", safe_rate_hz);
   RCLCPP_INFO(
     get_logger(), "Goal publishing is %s",
@@ -162,7 +189,9 @@ void DecisionProcessNode::serialReceiveCallback(const ReceiveData::SharedPtr msg
     referee_state_.base_hp = msg->hp_base;
     copyVectorToArray(msg->hp_enemy, referee_state_.enemy_hp);
     copyVectorToArray(msg->radar_data, referee_state_.radar_data);
+    referee_state_.enemy_hp_valid = msg->hp_enemy.size() == kEnemyCount;
     referee_state_.received = true;
+    match_lifecycle_.update(msg->game_period);
   }
 
   if (msg->hp_enemy.size() != kEnemyCount) {
@@ -306,6 +335,36 @@ LocalizationState DecisionProcessNode::getLocalizationState() const
   return localization_state_;
 }
 
+SerialCommand DecisionProcessNode::getSerialCommand() const
+{
+  std::lock_guard<std::mutex> lock(output_mutex_);
+  return serial_command_;
+}
+
+AutoaimCommand DecisionProcessNode::getAutoaimCommand() const
+{
+  std::lock_guard<std::mutex> lock(output_mutex_);
+  return autoaim_command_;
+}
+
+NavigationCommand DecisionProcessNode::getNavigationCommand() const
+{
+  std::lock_guard<std::mutex> lock(output_mutex_);
+  return navigation_command_;
+}
+
+bool DecisionProcessNode::hasGameStarted() const
+{
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  return match_lifecycle_.hasStarted();
+}
+
+bool DecisionProcessNode::isGameFinished() const
+{
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  return referee_state_.received && match_lifecycle_.hasFinished();
+}
+
 void DecisionProcessNode::setSerialCommand(const SerialCommand & command)
 {
   std::lock_guard<std::mutex> lock(output_mutex_);
@@ -322,6 +381,50 @@ void DecisionProcessNode::setNavigationCommand(const NavigationCommand & command
 {
   std::lock_guard<std::mutex> lock(output_mutex_);
   navigation_command_ = command;
+}
+
+void DecisionProcessNode::initializeBehaviorTree(
+  const std::string & xml_path, double tick_rate_hz)
+{
+  if (xml_path.empty()) {
+    RCLCPP_ERROR(get_logger(), "Behavior tree XML path is empty");
+    return;
+  }
+
+  try {
+    registerDecisionNodes(behavior_tree_factory_, *this);
+    behavior_tree_ = std::make_unique<BT::Tree>(
+      behavior_tree_factory_.createTreeFromFile(xml_path));
+  } catch (const std::exception & error) {
+    RCLCPP_ERROR(
+      get_logger(), "Failed to load behavior tree [%s]: %s",
+      xml_path.c_str(), error.what());
+    behavior_tree_.reset();
+    return;
+  }
+
+  const double safe_rate_hz = std::max(tick_rate_hz, 1.0);
+  const auto period = std::chrono::duration<double>(1.0 / safe_rate_hz);
+  behavior_tree_timer_ = create_wall_timer(
+    std::chrono::duration_cast<std::chrono::milliseconds>(period),
+    std::bind(&DecisionProcessNode::tickBehaviorTree, this));
+  RCLCPP_INFO(
+    get_logger(), "Behavior tree loaded from %s at %.1f Hz",
+    xml_path.c_str(), safe_rate_hz);
+}
+
+void DecisionProcessNode::tickBehaviorTree()
+{
+  if (!behavior_tree_) {
+    return;
+  }
+  try {
+    behavior_tree_->tickOnce();
+  } catch (const std::exception & error) {
+    RCLCPP_ERROR_THROTTLE(
+      get_logger(), *get_clock(), 2000,
+      "Behavior tree tick failed: %s", error.what());
+  }
 }
 
 rcl_interfaces::msg::SetParametersResult DecisionProcessNode::parametersCallback(
