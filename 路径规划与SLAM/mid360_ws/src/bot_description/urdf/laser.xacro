@@ -1,0 +1,56 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="laser">
+
+  <!-- Conventional rotating 3D laser used alongside the Livox MID360. -->
+  <xacro:macro name="laser"
+    params="name:=laser parent:=base_link topic:=/laser_points update_rate:=15.0 *origin">
+    <link name="${name}_link">
+      <visual name="${name}_visual">
+        <geometry><cylinder radius="0.045" length="0.08"/></geometry>
+        <material name="laser_gray"><color rgba="0.25 0.25 0.25 1.0"/></material>
+      </visual>
+      <!-- Sensor housings are visual only, so their own geometry cannot pollute scans. -->
+    </link>
+
+    <joint name="${name}_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="${name}_link"/>
+      <xacro:insert_block name="origin"/>
+    </joint>
+
+    <gazebo reference="${name}_link">
+      <sensor type="ray" name="${name}_sensor">
+        <always_on>true</always_on>
+        <visualize>false</visualize>
+        <update_rate>${update_rate}</update_rate>
+        <ray>
+          <scan>
+            <horizontal>
+              <samples>720</samples>
+              <resolution>1</resolution>
+              <min_angle>-3.14159265359</min_angle>
+              <max_angle>3.14159265359</max_angle>
+            </horizontal>
+            <vertical>
+              <samples>16</samples>
+              <resolution>1</resolution>
+              <min_angle>-0.261799</min_angle>
+              <max_angle>0.261799</max_angle>
+            </vertical>
+          </scan>
+          <range>
+            <min>0.10</min>
+            <max>100.0</max>
+            <resolution>0.01</resolution>
+          </range>
+          <noise><type>gaussian</type><mean>0.0</mean><stddev>0.01</stddev></noise>
+        </ray>
+        <plugin name="${name}_gazebo_ros_ray_sensor" filename="libgazebo_ros_ray_sensor.so">
+          <ros><remapping>~/out:=${topic}</remapping></ros>
+          <output_type>sensor_msgs/PointCloud2</output_type>
+          <frame_name>${name}_link</frame_name>
+        </plugin>
+      </sensor>
+    </gazebo>
+  </xacro:macro>
+</robot>

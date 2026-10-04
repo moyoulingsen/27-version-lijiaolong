@@ -1,0 +1,51 @@
+# ROS 2 / colcon 编译产物（匹配仓库中任意工作空间）
+**/build/
+**/install/
+**/log/
+**/.colcon/
+**/COLCON_IGNORE
+**/compile_commands.json
+
+# 本次交付不包含旧的 26_task_ws；保留磁盘文件，但不纳入 Git
+/路径规划与SLAM/定位导航参考资料/26_task_ws/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# C/C++
+*.o
+*.so
+*.a
+*.out
+*.d
+
+# IDE / 编辑器
+.vscode/
+.idea/
+*.swp
+*~
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 日志/缓存
+*.log
+.cache/
+ccache/
+*.bag
+*.bag.active
+*.db3
+*.sqlite3
+.ros/
+
+# Docker / 本地环境
+.env
+.env.*
+docker-compose.override.yml
