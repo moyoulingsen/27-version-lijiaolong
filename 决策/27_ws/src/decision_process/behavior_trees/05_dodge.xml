@@ -1,17 +1,5 @@
 <?xml version="1.0"?>
-<root BTCPP_format="4" main_tree_to_execute="MainTree">
-  <BehaviorTree ID="MainTree">
-    <ReactiveFallback name="DodgePriority">
-      <SubTree ID="DodgeBehavior" quiet_period_sec="2.0" step="0.8"
-               tolerance="0.15" min_x="0.2" max_x="27.8"
-               min_y="0.2" max_y="14.8" frame_id="map"
-               posture_cooldown_sec="5.0"
-               applied_posture="{applied_posture}"/>
-      <NavigateToPose name="NormalBehaviorDemo" x="5.0" y="5.0" z="1.0"
-                      yaw="0.0" frame_id="map" tolerance="0.15"/>
-    </ReactiveFallback>
-  </BehaviorTree>
-
+<root BTCPP_format="4">
   <BehaviorTree ID="DodgeBehavior">
     <Sequence name="DodgeSequence">
       <GameRunning/>

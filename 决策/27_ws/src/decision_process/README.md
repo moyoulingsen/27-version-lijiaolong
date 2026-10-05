@@ -4,6 +4,10 @@
 
 当前已经独立完成前 5 个任务：归位、姿态切换、打前哨、无弹量行为和躲避行为。每个任务都有单独的 Groot2 XML、逻辑说明和测试。
 
+五个任务 XML 只定义各自的标准子树，不在任务文件中放置
+`AlwaysSuccess` 占位节点。上层组合树是
+`behavior_trees/decision_master.xml`，按“归位、打前哨、无弹量、躲避、姿态切换”的优先级调度这五个子树；后续综合任务应继续添加到上层树，而不是修改某个任务子树的根节点。
+
 ## 话题
 
 ### 订阅
@@ -35,6 +39,8 @@
 | 03 打前哨 | `behavior_trees/03_attack_outpost.xml` | `docs/behavior_trees/03_attack_outpost.md` |
 | 04 无弹量行为 | `behavior_trees/04_no_ammo.xml` | `docs/behavior_trees/04_no_ammo.md` |
 | 05 躲避行为 | `behavior_trees/05_dodge.xml` | `docs/behavior_trees/05_dodge.md` |
+
+上层五任务树：`behavior_trees/decision_master.xml`。它通过 `<include>` 引入上述五个文件，主树只负责优先级调度。
 
 归位触发方式不是简单判断 `time==0`，而是记录比赛曾经进入阶段 2，随后检测到退出阶段 2，避免赛前误触发。
 

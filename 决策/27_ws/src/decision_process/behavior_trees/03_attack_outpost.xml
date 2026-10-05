@@ -1,18 +1,5 @@
 <?xml version="1.0"?>
-<root BTCPP_format="4" main_tree_to_execute="MainTree">
-  <BehaviorTree ID="MainTree">
-    <ReactiveFallback name="OpeningOutpostPriority">
-      <ReactiveSequence name="OutpostDestroyedRelease">
-        <EnemyOutpostDestroyed/>
-        <AlwaysSuccess name="OtherBehaviorsPlaceholder"/>
-      </ReactiveSequence>
-      <SubTree ID="AttackOutpost" attack_x="16.0" attack_y="11.0"
-               attack_z="1.0" attack_yaw="0.0" frame_id="map"
-               tolerance="0.20" posture_cooldown_sec="5.0"
-               target="6" applied_posture="{applied_posture}"/>
-    </ReactiveFallback>
-  </BehaviorTree>
-
+<root BTCPP_format="4">
   <BehaviorTree ID="AttackOutpost">
     <ReactiveSequence name="AttackOutpostSequence">
       <GameRunning/>
