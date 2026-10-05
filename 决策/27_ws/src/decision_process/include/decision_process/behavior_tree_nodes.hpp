@@ -1,12 +1,15 @@
 #ifndef DECISION_PROCESS__BEHAVIOR_TREE_NODES_HPP_
 #define DECISION_PROCESS__BEHAVIOR_TREE_NODES_HPP_
 
+#include <cstddef>
+#include <cstdint>
 #include <string>
 
 #include "behaviortree_cpp/action_node.h"
 #include "behaviortree_cpp/bt_factory.h"
 #include "behaviortree_cpp/condition_node.h"
 
+#include "decision_process/communication_data.hpp"
 #include "decision_process/posture_logic.hpp"
 
 namespace decision_process
@@ -105,6 +108,45 @@ private:
   DecisionProcessNode & decision_node_;
 };
 
+class NoEnemyVisibleCondition : public BT::ConditionNode
+{
+public:
+  NoEnemyVisibleCondition(
+    const std::string & name, const BT::NodeConfig & config,
+    DecisionProcessNode & decision_node);
+  static BT::PortsList providedPorts();
+  BT::NodeStatus tick() override;
+
+private:
+  DecisionProcessNode & decision_node_;
+};
+
+class RecentDamageCondition : public BT::ConditionNode
+{
+public:
+  RecentDamageCondition(
+    const std::string & name, const BT::NodeConfig & config,
+    DecisionProcessNode & decision_node);
+  static BT::PortsList providedPorts();
+  BT::NodeStatus tick() override;
+
+private:
+  DecisionProcessNode & decision_node_;
+};
+
+class NavigationGoalReachedCondition : public BT::ConditionNode
+{
+public:
+  NavigationGoalReachedCondition(
+    const std::string & name, const BT::NodeConfig & config,
+    DecisionProcessNode & decision_node);
+  static BT::PortsList providedPorts();
+  BT::NodeStatus tick() override;
+
+private:
+  DecisionProcessNode & decision_node_;
+};
+
 class SetPostureAction : public BT::SyncActionNode
 {
 public:
@@ -131,7 +173,7 @@ public:
 
 private:
   BT::NodeStatus evaluateGoal();
-  void disableNavigation();
+  void disableNavigation(bool reached);
 
   DecisionProcessNode & decision_node_;
   double goal_x_{0.0};
@@ -199,7 +241,7 @@ public:
 private:
   BT::NodeStatus updatePickup();
   void publishSupplyGoal();
-  void disableNavigation();
+  void disableNavigation(bool reached);
 
   DecisionProcessNode & decision_node_;
   double supply_x_{2.0};
@@ -208,6 +250,37 @@ private:
   double tolerance_{0.15};
   std::string frame_id_{"map"};
   bool reached_supply_{false};
+};
+
+class EvadeUntilSafeAction : public BT::StatefulActionNode
+{
+public:
+  EvadeUntilSafeAction(
+    const std::string & name, const BT::NodeConfig & config,
+    DecisionProcessNode & decision_node);
+  static BT::PortsList providedPorts();
+  BT::NodeStatus onStart() override;
+  BT::NodeStatus onRunning() override;
+  void onHalted() override;
+
+private:
+  BT::NodeStatus updateEvasion();
+  bool publishNextGoal(const LocalizationState & localization);
+  void disableNavigation();
+
+  DecisionProcessNode & decision_node_;
+  double quiet_period_seconds_{2.0};
+  double step_{0.8};
+  double tolerance_{0.15};
+  double min_x_{0.2};
+  double max_x_{27.8};
+  double min_y_{0.2};
+  double max_y_{14.8};
+  std::string frame_id_{"map"};
+  std::size_t direction_index_{0U};
+  double goal_x_{0.0};
+  double goal_y_{0.0};
+  bool goal_active_{false};
 };
 
 void registerDecisionNodes(

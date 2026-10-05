@@ -1,0 +1,75 @@
+<?xml version="1.0"?>
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <ReactiveFallback name="DodgePriority">
+      <SubTree ID="DodgeBehavior" quiet_period_sec="2.0" step="0.8"
+               tolerance="0.15" min_x="0.2" max_x="27.8"
+               min_y="0.2" max_y="14.8" frame_id="map"
+               posture_cooldown_sec="5.0"
+               applied_posture="{applied_posture}"/>
+      <NavigateToPose name="NormalBehaviorDemo" x="5.0" y="5.0" z="1.0"
+                      yaw="0.0" frame_id="map" tolerance="0.15"/>
+    </ReactiveFallback>
+  </BehaviorTree>
+
+  <BehaviorTree ID="DodgeBehavior">
+    <Sequence name="DodgeSequence">
+      <GameRunning/>
+      <NoEnemyVisible/>
+      <RecentDamage quiet_period_sec="{quiet_period_sec}"/>
+      <NavigationGoalReached/>
+      <SetCombatIdle/>
+      <ApplyPosture requested_posture="3"
+                    cooldown_sec="{posture_cooldown_sec}"
+                    applied_posture="{applied_posture}"/>
+      <EvadeUntilSafe quiet_period_sec="{quiet_period_sec}" step="{step}"
+                      tolerance="{tolerance}" min_x="{min_x}" max_x="{max_x}"
+                      min_y="{min_y}" max_y="{max_y}" frame_id="{frame_id}"/>
+    </Sequence>
+  </BehaviorTree>
+
+  <TreeNodesModel>
+    <SubTree ID="DodgeBehavior">
+      <input_port name="quiet_period_sec" default="2.0">最后一次受伤后的躲避保持时间</input_port>
+      <input_port name="step" default="0.8">单次躲避移动距离</input_port>
+      <input_port name="tolerance" default="0.15">躲避目标到达容差</input_port>
+      <input_port name="min_x" default="0.2">躲避区域最小x</input_port>
+      <input_port name="max_x" default="27.8">躲避区域最大x</input_port>
+      <input_port name="min_y" default="0.2">躲避区域最小y</input_port>
+      <input_port name="max_y" default="14.8">躲避区域最大y</input_port>
+      <input_port name="frame_id" default="map">导航参考坐标系</input_port>
+      <input_port name="posture_cooldown_sec" default="5.0">姿态切换冷却</input_port>
+      <output_port name="applied_posture" default="{applied_posture}">实际姿态</output_port>
+    </SubTree>
+    <Condition ID="GameRunning" editable="true"/>
+    <Condition ID="NoEnemyVisible" editable="true"/>
+    <Condition ID="RecentDamage" editable="true">
+      <input_port name="quiet_period_sec" default="2.0">停止受伤后的保持时间</input_port>
+    </Condition>
+    <Condition ID="NavigationGoalReached" editable="true"/>
+    <Action ID="SetCombatIdle" editable="true"/>
+    <Action ID="ApplyPosture" editable="true">
+      <input_port name="requested_posture" default="3">躲避使用移动姿态</input_port>
+      <input_port name="cooldown_sec" default="5.0">姿态切换冷却秒数</input_port>
+      <output_port name="applied_posture">实际应用姿态</output_port>
+    </Action>
+    <Action ID="EvadeUntilSafe" editable="true">
+      <input_port name="quiet_period_sec" default="2.0">最后一次受伤后的躲避保持时间</input_port>
+      <input_port name="step" default="0.8">单次躲避移动距离</input_port>
+      <input_port name="tolerance" default="0.15">躲避目标到达容差</input_port>
+      <input_port name="min_x" default="0.2">允许目标最小x</input_port>
+      <input_port name="max_x" default="27.8">允许目标最大x</input_port>
+      <input_port name="min_y" default="0.2">允许目标最小y</input_port>
+      <input_port name="max_y" default="14.8">允许目标最大y</input_port>
+      <input_port name="frame_id" default="map">导航参考坐标系</input_port>
+    </Action>
+    <Action ID="NavigateToPose" editable="true">
+      <input_port name="x">目标地图x坐标</input_port>
+      <input_port name="y">目标地图y坐标</input_port>
+      <input_port name="z" default="1.0">导航目标z坐标</input_port>
+      <input_port name="yaw" default="0.0">目标朝向角</input_port>
+      <input_port name="frame_id" default="map">目标参考坐标系</input_port>
+      <input_port name="tolerance" default="0.15">平面到达容差</input_port>
+    </Action>
+  </TreeNodesModel>
+</root>

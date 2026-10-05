@@ -16,6 +16,12 @@
 namespace
 {
 
+double steadyNowSeconds()
+{
+  return std::chrono::duration<double>(
+    std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 template<typename SourceType, typename TargetType, std::size_t Size>
 void copyVectorToArray(
   const std::vector<SourceType> & source,
@@ -81,6 +87,8 @@ DecisionProcessNode::DecisionProcessNode()
     behavior_tree_xml = default_tree_path;
   }
   navigation_command_.enabled = declare_parameter<bool>("publish_goal", false);
+  navigation_command_.has_goal = navigation_command_.enabled;
+  navigation_command_.reached = false;
   navigation_command_.x = declare_parameter<double>("goal_x", 0.0);
   navigation_command_.y = declare_parameter<double>("goal_y", 0.0);
   navigation_command_.yaw = declare_parameter<double>("goal_yaw", 0.0);
@@ -194,6 +202,7 @@ void DecisionProcessNode::serialReceiveCallback(const ReceiveData::SharedPtr msg
     referee_state_.received = true;
     match_lifecycle_.update(msg->game_period);
     ammo_reserve_tracker_.update(msg->game_period, msg->time);
+    damage_tracker_.update(msg->hp_sentry, steadyNowSeconds());
     if (ammo_pickup_waiting_ && previous_ammo == 0U && msg->ammo > 0U) {
       ammo_reserve_tracker_.confirmPickup();
       ammo_pickup_waiting_ = false;
@@ -377,6 +386,12 @@ uint16_t DecisionProcessNode::getPendingAmmo() const
   return ammo_reserve_tracker_.pendingAmmo();
 }
 
+bool DecisionProcessNode::hasRecentDamage(double quiet_period_seconds) const
+{
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  return damage_tracker_.recentlyDamaged(steadyNowSeconds(), quiet_period_seconds);
+}
+
 void DecisionProcessNode::setSerialCommand(const SerialCommand & command)
 {
   std::lock_guard<std::mutex> lock(output_mutex_);
@@ -463,6 +478,10 @@ rcl_interfaces::msg::SetParametersResult DecisionProcessNode::parametersCallback
 
     if (name == "publish_goal") {
       navigation_command_.enabled = parameter.as_bool();
+      if (navigation_command_.enabled) {
+        navigation_command_.has_goal = true;
+        navigation_command_.reached = false;
+      }
     } else if (name == "goal_frame_id") {
       if (parameter.as_string().empty()) {
         result.successful = false;

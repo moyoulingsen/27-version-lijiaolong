@@ -71,6 +71,8 @@ struct AutoaimCommand
 struct NavigationCommand
 {
   bool enabled{false};
+  bool has_goal{false};
+  bool reached{false};
   std::string frame_id{"map"};
   double x{0.0};
   double y{0.0};
