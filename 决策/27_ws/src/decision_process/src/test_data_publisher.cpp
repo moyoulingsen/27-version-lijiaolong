@@ -19,6 +19,7 @@ public:
   {
     simulate_return_home_ = declare_parameter<bool>("simulate_return_home", false);
     simulate_attack_outpost_ = declare_parameter<bool>("simulate_attack_outpost", false);
+    simulate_no_ammo_ = declare_parameter<bool>("simulate_no_ammo", false);
     simulation_start_ = std::chrono::steady_clock::now();
     const auto sensor_qos = rclcpp::SensorDataQoS();
     const auto reliable_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable();
@@ -42,7 +43,13 @@ private:
     odometry.child_frame_id = "base_link";
     const double elapsed = std::chrono::duration<double>(
       std::chrono::steady_clock::now() - simulation_start_).count();
-    if (simulate_attack_outpost_ && elapsed >= 1.0) {
+    if (simulate_no_ammo_ && elapsed >= 4.0) {
+      odometry.pose.pose.position.x = 2.0;
+      odometry.pose.pose.position.y = 1.0;
+    } else if (simulate_no_ammo_ && elapsed >= 1.0) {
+      odometry.pose.pose.position.x = 4.971;
+      odometry.pose.pose.position.y = 7.5;
+    } else if (simulate_attack_outpost_ && elapsed >= 1.0) {
       odometry.pose.pose.position.x = 16.0;
       odometry.pose.pose.position.y = 11.0;
     } else {
@@ -66,6 +73,9 @@ private:
         referee.game_period = 0;
         referee.time = 0;
       }
+    } else if (simulate_no_ammo_) {
+      referee.game_period = 2;
+      referee.time = elapsed < 2.0 ? 420U : 359U;
     } else {
       referee.game_period = 2;
       referee.time = 400;
@@ -73,7 +83,10 @@ private:
     referee.hp_sentry = 400;
     referee.defence_buff = 60;
     referee.color = 0;
-    referee.ammo = 200;
+    referee.ammo = simulate_no_ammo_ && elapsed < 6.0 ? 0U : 200U;
+    if (simulate_no_ammo_ && elapsed >= 6.0) {
+      referee.ammo = 100U;
+    }
     referee.hp_outpost = 1000;
     referee.hp_base = 5000;
     const uint16_t enemy_outpost_hp =
@@ -104,6 +117,7 @@ private:
   rclcpp::TimerBase::SharedPtr timer_;
   bool simulate_return_home_{false};
   bool simulate_attack_outpost_{false};
+  bool simulate_no_ammo_{false};
   std::chrono::steady_clock::time_point simulation_start_;
 };
 

@@ -179,6 +179,7 @@ void DecisionProcessNode::serialReceiveCallback(const ReceiveData::SharedPtr msg
 {
   {
     std::lock_guard<std::mutex> lock(data_mutex_);
+    const uint16_t previous_ammo = referee_state_.ammo;
     referee_state_.game_period = msg->game_period;
     referee_state_.remaining_time = msg->time;
     referee_state_.sentry_hp = msg->hp_sentry;
@@ -192,6 +193,11 @@ void DecisionProcessNode::serialReceiveCallback(const ReceiveData::SharedPtr msg
     referee_state_.enemy_hp_valid = msg->hp_enemy.size() == kEnemyCount;
     referee_state_.received = true;
     match_lifecycle_.update(msg->game_period);
+    ammo_reserve_tracker_.update(msg->game_period, msg->time);
+    if (ammo_pickup_waiting_ && previous_ammo == 0U && msg->ammo > 0U) {
+      ammo_reserve_tracker_.confirmPickup();
+      ammo_pickup_waiting_ = false;
+    }
   }
 
   if (msg->hp_enemy.size() != kEnemyCount) {
@@ -365,6 +371,12 @@ bool DecisionProcessNode::isGameFinished() const
   return referee_state_.received && match_lifecycle_.hasFinished();
 }
 
+uint16_t DecisionProcessNode::getPendingAmmo() const
+{
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  return ammo_reserve_tracker_.pendingAmmo();
+}
+
 void DecisionProcessNode::setSerialCommand(const SerialCommand & command)
 {
   std::lock_guard<std::mutex> lock(output_mutex_);
@@ -381,6 +393,18 @@ void DecisionProcessNode::setNavigationCommand(const NavigationCommand & command
 {
   std::lock_guard<std::mutex> lock(output_mutex_);
   navigation_command_ = command;
+}
+
+void DecisionProcessNode::beginAmmoPickupWait()
+{
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  ammo_pickup_waiting_ = true;
+}
+
+void DecisionProcessNode::cancelAmmoPickupWait()
+{
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  ammo_pickup_waiting_ = false;
 }
 
 void DecisionProcessNode::initializeBehaviorTree(

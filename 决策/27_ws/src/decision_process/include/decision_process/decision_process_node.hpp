@@ -14,6 +14,7 @@
 #include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "rclcpp/rclcpp.hpp"
 
+#include "decision_process/ammo_reserve_logic.hpp"
 #include "decision_process/communication_data.hpp"
 #include "decision_process/msg/autoaim_to_decision.hpp"
 #include "decision_process/msg/decision_to_autoaim.hpp"
@@ -37,10 +38,13 @@ public:
   NavigationCommand getNavigationCommand() const;
   bool hasGameStarted() const;
   bool isGameFinished() const;
+  uint16_t getPendingAmmo() const;
 
   void setSerialCommand(const SerialCommand & command);
   void setAutoaimCommand(const AutoaimCommand & command);
   void setNavigationCommand(const NavigationCommand & command);
+  void beginAmmoPickupWait();
+  void cancelAmmoPickupWait();
 
 private:
   using ReceiveData = decision_process::msg::ReceiveData;
@@ -66,6 +70,8 @@ private:
   AutoaimState autoaim_state_;
   LocalizationState localization_state_;
   MatchLifecycle match_lifecycle_;
+  AmmoReserveTracker ammo_reserve_tracker_;
+  bool ammo_pickup_waiting_{false};
 
   SerialCommand serial_command_;
   AutoaimCommand autoaim_command_;

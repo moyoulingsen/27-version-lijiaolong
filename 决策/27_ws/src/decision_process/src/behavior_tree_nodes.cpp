@@ -88,6 +88,39 @@ BT::NodeStatus EnemyOutpostDestroyedCondition::tick()
          BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
+OutOfAmmoCondition::OutOfAmmoCondition(
+  const std::string & name, const BT::NodeConfig & config,
+  DecisionProcessNode & decision_node)
+: BT::ConditionNode(name, config), decision_node_(decision_node) {}
+
+BT::PortsList OutOfAmmoCondition::providedPorts() {return {};}
+
+BT::NodeStatus OutOfAmmoCondition::tick()
+{
+  const RefereeState state = decision_node_.getRefereeState();
+  return state.received && state.game_period == 2U &&
+         state.sentry_hp > 0U && state.ammo == 0U ?
+         BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
+PendingAmmoAvailableCondition::PendingAmmoAvailableCondition(
+  const std::string & name, const BT::NodeConfig & config,
+  DecisionProcessNode & decision_node)
+: BT::ConditionNode(name, config), decision_node_(decision_node) {}
+
+BT::PortsList PendingAmmoAvailableCondition::providedPorts()
+{
+  return {BT::OutputPort<int>("pending_ammo", "当前估算待领弹量")};
+}
+
+BT::NodeStatus PendingAmmoAvailableCondition::tick()
+{
+  const uint16_t pending_ammo = decision_node_.getPendingAmmo();
+  setOutput("pending_ammo", static_cast<int>(pending_ammo));
+  return pending_ammo > 0U ?
+         BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
 SetPostureAction::SetPostureAction(
   const std::string & name, const BT::NodeConfig & config,
   DecisionProcessNode & decision_node)
@@ -307,6 +340,125 @@ void EngageOutpostAction::clearCommand()
   decision_node_.setSerialCommand(serial_command);
 }
 
+SetCombatIdleAction::SetCombatIdleAction(
+  const std::string & name, const BT::NodeConfig & config,
+  DecisionProcessNode & decision_node)
+: BT::SyncActionNode(name, config), decision_node_(decision_node) {}
+
+BT::PortsList SetCombatIdleAction::providedPorts() {return {};}
+
+BT::NodeStatus SetCombatIdleAction::tick()
+{
+  SerialCommand serial_command = decision_node_.getSerialCommand();
+  serial_command.shoot_mode = 0U;
+  serial_command.tripod_mode = 1U;
+  decision_node_.setSerialCommand(serial_command);
+
+  AutoaimCommand autoaim_command = decision_node_.getAutoaimCommand();
+  autoaim_command.target = 0U;
+  decision_node_.setAutoaimCommand(autoaim_command);
+  return BT::NodeStatus::SUCCESS;
+}
+
+CollectPendingAmmoAction::CollectPendingAmmoAction(
+  const std::string & name, const BT::NodeConfig & config,
+  DecisionProcessNode & decision_node)
+: BT::StatefulActionNode(name, config), decision_node_(decision_node) {}
+
+BT::PortsList CollectPendingAmmoAction::providedPorts()
+{
+  return {
+    BT::InputPort<double>("x", 2.0, "补给点x坐标"),
+    BT::InputPort<double>("y", 1.0, "补给点y坐标"),
+    BT::InputPort<double>("z", 1.0, "导航目标z坐标"),
+    BT::InputPort<double>("yaw", 0.0, "补给点目标朝向"),
+    BT::InputPort<std::string>("frame_id", "map", "导航参考坐标系"),
+    BT::InputPort<double>("tolerance", 0.15, "补给点到达容差")};
+}
+
+BT::NodeStatus CollectPendingAmmoAction::onStart()
+{
+  const auto x = getInput<double>("x");
+  const auto y = getInput<double>("y");
+  const auto z = getInput<double>("z");
+  const auto yaw = getInput<double>("yaw");
+  const auto frame_id = getInput<std::string>("frame_id");
+  const auto tolerance = getInput<double>("tolerance");
+  if (!x || !y || !z || !yaw || !frame_id || !tolerance ||
+    !std::isfinite(x.value()) || !std::isfinite(y.value()) ||
+    !std::isfinite(yaw.value()) || tolerance.value() <= 0.0 ||
+    frame_id.value().empty() || std::abs(z.value() - 1.0) > 1e-6)
+  {
+    RCLCPP_ERROR(decision_node_.get_logger(), "CollectPendingAmmo received invalid ports");
+    return BT::NodeStatus::FAILURE;
+  }
+
+  supply_x_ = x.value();
+  supply_y_ = y.value();
+  supply_yaw_ = yaw.value();
+  frame_id_ = frame_id.value();
+  tolerance_ = tolerance.value();
+  reached_supply_ = false;
+  decision_node_.cancelAmmoPickupWait();
+  publishSupplyGoal();
+  return updatePickup();
+}
+
+BT::NodeStatus CollectPendingAmmoAction::onRunning() {return updatePickup();}
+
+void CollectPendingAmmoAction::onHalted()
+{
+  decision_node_.cancelAmmoPickupWait();
+  disableNavigation();
+}
+
+BT::NodeStatus CollectPendingAmmoAction::updatePickup()
+{
+  const RefereeState referee = decision_node_.getRefereeState();
+  if (referee.received && referee.ammo > 0U) {
+    decision_node_.cancelAmmoPickupWait();
+    disableNavigation();
+    return BT::NodeStatus::SUCCESS;
+  }
+
+  const LocalizationState localization = decision_node_.getLocalizationState();
+  if (localization.received && goalReached(
+      localization.x, localization.y, supply_x_, supply_y_, tolerance_))
+  {
+    if (!reached_supply_) {
+      reached_supply_ = true;
+      decision_node_.beginAmmoPickupWait();
+      disableNavigation();
+    }
+    return BT::NodeStatus::RUNNING;
+  }
+
+  if (reached_supply_) {
+    reached_supply_ = false;
+    decision_node_.cancelAmmoPickupWait();
+    publishSupplyGoal();
+  }
+  return BT::NodeStatus::RUNNING;
+}
+
+void CollectPendingAmmoAction::publishSupplyGoal()
+{
+  NavigationCommand command;
+  command.enabled = true;
+  command.frame_id = frame_id_;
+  command.x = supply_x_;
+  command.y = supply_y_;
+  command.yaw = supply_yaw_;
+  decision_node_.setNavigationCommand(command);
+}
+
+void CollectPendingAmmoAction::disableNavigation()
+{
+  NavigationCommand command = decision_node_.getNavigationCommand();
+  command.enabled = false;
+  decision_node_.setNavigationCommand(command);
+}
+
 void registerDecisionNodes(
   BT::BehaviorTreeFactory & factory, DecisionProcessNode & decision_node)
 {
@@ -335,6 +487,16 @@ void registerDecisionNodes(
     [&decision_node](const std::string & name, const BT::NodeConfig & config) {
       return std::make_unique<EnemyOutpostDestroyedCondition>(name, config, decision_node);
     });
+  factory.registerBuilder<OutOfAmmoCondition>(
+    "OutOfAmmo",
+    [&decision_node](const std::string & name, const BT::NodeConfig & config) {
+      return std::make_unique<OutOfAmmoCondition>(name, config, decision_node);
+    });
+  factory.registerBuilder<PendingAmmoAvailableCondition>(
+    "PendingAmmoAvailable",
+    [&decision_node](const std::string & name, const BT::NodeConfig & config) {
+      return std::make_unique<PendingAmmoAvailableCondition>(name, config, decision_node);
+    });
   factory.registerBuilder<SetPostureAction>(
     "SetPosture",
     [&decision_node](const std::string & name, const BT::NodeConfig & config) {
@@ -354,6 +516,16 @@ void registerDecisionNodes(
     "EngageOutpost",
     [&decision_node](const std::string & name, const BT::NodeConfig & config) {
       return std::make_unique<EngageOutpostAction>(name, config, decision_node);
+    });
+  factory.registerBuilder<SetCombatIdleAction>(
+    "SetCombatIdle",
+    [&decision_node](const std::string & name, const BT::NodeConfig & config) {
+      return std::make_unique<SetCombatIdleAction>(name, config, decision_node);
+    });
+  factory.registerBuilder<CollectPendingAmmoAction>(
+    "CollectPendingAmmo",
+    [&decision_node](const std::string & name, const BT::NodeConfig & config) {
+      return std::make_unique<CollectPendingAmmoAction>(name, config, decision_node);
     });
 }
 
