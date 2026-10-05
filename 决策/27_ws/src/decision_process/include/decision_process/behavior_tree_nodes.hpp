@@ -79,6 +79,32 @@ private:
   DecisionProcessNode & decision_node_;
 };
 
+class OutOfAmmoCondition : public BT::ConditionNode
+{
+public:
+  OutOfAmmoCondition(
+    const std::string & name, const BT::NodeConfig & config,
+    DecisionProcessNode & decision_node);
+  static BT::PortsList providedPorts();
+  BT::NodeStatus tick() override;
+
+private:
+  DecisionProcessNode & decision_node_;
+};
+
+class PendingAmmoAvailableCondition : public BT::ConditionNode
+{
+public:
+  PendingAmmoAvailableCondition(
+    const std::string & name, const BT::NodeConfig & config,
+    DecisionProcessNode & decision_node);
+  static BT::PortsList providedPorts();
+  BT::NodeStatus tick() override;
+
+private:
+  DecisionProcessNode & decision_node_;
+};
+
 class SetPostureAction : public BT::SyncActionNode
 {
 public:
@@ -144,6 +170,44 @@ private:
 
   DecisionProcessNode & decision_node_;
   uint8_t target_{6U};
+};
+
+class SetCombatIdleAction : public BT::SyncActionNode
+{
+public:
+  SetCombatIdleAction(
+    const std::string & name, const BT::NodeConfig & config,
+    DecisionProcessNode & decision_node);
+  static BT::PortsList providedPorts();
+  BT::NodeStatus tick() override;
+
+private:
+  DecisionProcessNode & decision_node_;
+};
+
+class CollectPendingAmmoAction : public BT::StatefulActionNode
+{
+public:
+  CollectPendingAmmoAction(
+    const std::string & name, const BT::NodeConfig & config,
+    DecisionProcessNode & decision_node);
+  static BT::PortsList providedPorts();
+  BT::NodeStatus onStart() override;
+  BT::NodeStatus onRunning() override;
+  void onHalted() override;
+
+private:
+  BT::NodeStatus updatePickup();
+  void publishSupplyGoal();
+  void disableNavigation();
+
+  DecisionProcessNode & decision_node_;
+  double supply_x_{2.0};
+  double supply_y_{1.0};
+  double supply_yaw_{0.0};
+  double tolerance_{0.15};
+  std::string frame_id_{"map"};
+  bool reached_supply_{false};
 };
 
 void registerDecisionNodes(

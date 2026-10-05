@@ -100,6 +100,11 @@ if(BUILD_TESTING)
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
   )
+  ament_add_gtest(test_ammo_reserve_logic test/test_ammo_reserve_logic.cpp)
+  target_include_directories(test_ammo_reserve_logic PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
 endif()
 
 ament_export_dependencies(rosidl_default_runtime)
