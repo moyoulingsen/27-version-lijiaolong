@@ -1,0 +1,90 @@
+<?xml version="1.0"?>
+<sdf version="1.10">
+  <world name="rm_arena">
+    <physics name="step" type="ignored">
+      <max_step_size>0.002</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+    <gravity>0 0 -9.8</gravity>
+    <scene>
+      <ambient>0.55 0.55 0.55 1</ambient>
+      <background>0.16 0.18 0.20 1</background>
+      <shadows>true</shadows>
+      <grid>false</grid>
+    </scene>
+
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
+    <light name="sun" type="directional">
+      <pose>14 7.5 18 0 0 0</pose>
+      <cast_shadows>true</cast_shadows>
+      <intensity>1.0</intensity>
+      <direction>-0.4 0.2 -0.9</direction>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+    </light>
+
+    <model name="field_28x15">
+      <static>true</static>
+      <link name="field">
+        <pose>14 7.5 -0.05 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>28 15 0.10</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>28 15 0.10</size></box></geometry>
+          <material>
+            <ambient>0.42 0.45 0.44 1</ambient>
+            <diffuse>0.48 0.51 0.50 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="boundary_walls">
+      <static>true</static>
+      <link name="walls">
+        <collision name="south"><pose>14 -0.10 0.25 0 0 0</pose><geometry><box><size>28.4 0.2 0.5</size></box></geometry></collision>
+        <collision name="north"><pose>14 15.10 0.25 0 0 0</pose><geometry><box><size>28.4 0.2 0.5</size></box></geometry></collision>
+        <collision name="west"><pose>-0.10 7.5 0.25 0 0 0</pose><geometry><box><size>0.2 15 0.5</size></box></geometry></collision>
+        <collision name="east"><pose>28.10 7.5 0.25 0 0 0</pose><geometry><box><size>0.2 15 0.5</size></box></geometry></collision>
+        <visual name="south_v"><pose>14 -0.10 0.25 0 0 0</pose><geometry><box><size>28.4 0.2 0.5</size></box></geometry><material><diffuse>0.08 0.08 0.08 1</diffuse></material></visual>
+        <visual name="north_v"><pose>14 15.10 0.25 0 0 0</pose><geometry><box><size>28.4 0.2 0.5</size></box></geometry><material><diffuse>0.08 0.08 0.08 1</diffuse></material></visual>
+        <visual name="west_v"><pose>-0.10 7.5 0.25 0 0 0</pose><geometry><box><size>0.2 15 0.5</size></box></geometry><material><diffuse>0.08 0.08 0.08 1</diffuse></material></visual>
+        <visual name="east_v"><pose>28.10 7.5 0.25 0 0 0</pose><geometry><box><size>0.2 15 0.5</size></box></geometry><material><diffuse>0.08 0.08 0.08 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <!-- Building HP comes from game_id 1778631047459. Dataset xyz is zero,
+         so the four cylinders use mirrored field positions. -->
+    <model name="red_base_hp5000">
+      <static>true</static><pose>1.0 7.5 0.60 0 0 0</pose>
+      <link name="body"><collision name="collision"><geometry><cylinder><radius>0.72</radius><length>1.2</length></cylinder></geometry></collision><visual name="visual"><geometry><cylinder><radius>0.72</radius><length>1.2</length></cylinder></geometry><material><diffuse>0.80 0.06 0.06 1</diffuse><ambient>0.45 0.03 0.03 1</ambient></material></visual></link>
+    </model>
+    <model name="red_outpost_hp1000">
+      <static>true</static><pose>8.0 7.5 0.48 0 0 0</pose>
+      <link name="body"><collision name="collision"><geometry><cylinder><radius>0.52</radius><length>0.96</length></cylinder></geometry></collision><visual name="visual"><geometry><cylinder><radius>0.52</radius><length>0.96</length></cylinder></geometry><material><diffuse>0.95 0.18 0.12 1</diffuse></material></visual></link>
+    </model>
+    <model name="blue_outpost_hp1000">
+      <static>true</static><pose>20.0 7.5 0.48 0 0 0</pose>
+      <link name="body"><collision name="collision"><geometry><cylinder><radius>0.52</radius><length>0.96</length></cylinder></geometry></collision><visual name="visual"><geometry><cylinder><radius>0.52</radius><length>0.96</length></cylinder></geometry><material><diffuse>0.06 0.28 0.90 1</diffuse></material></visual></link>
+    </model>
+    <model name="blue_base_hp5000">
+      <static>true</static><pose>27.0 7.5 0.60 0 0 0</pose>
+      <link name="body"><collision name="collision"><geometry><cylinder><radius>0.72</radius><length>1.2</length></cylinder></geometry></collision><visual name="visual"><geometry><cylinder><radius>0.72</radius><length>1.2</length></cylinder></geometry><material><diffuse>0.04 0.18 0.75 1</diffuse><ambient>0.02 0.07 0.35 1</ambient></material></visual></link>
+    </model>
+
+    <!-- Static blue robots: opening snapshot from the same SQLite game. -->
+    <model name="enemy_1_hero_101"><static>true</static><pose>26.931 6.945 0.24 0 0 3.14159</pose><link name="body"><collision name="collision"><geometry><box><size>0.65 0.50 0.48</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.65 0.50 0.48</size></box></geometry><material><diffuse>0.08 0.32 0.95 1</diffuse></material></visual></link></model>
+    <model name="enemy_2_engineer_102"><static>true</static><pose>25.796 8.755 0.24 0 0 3.14159</pose><link name="body"><collision name="collision"><geometry><box><size>0.65 0.50 0.48</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.65 0.50 0.48</size></box></geometry><material><diffuse>0.08 0.32 0.95 1</diffuse></material></visual></link></model>
+    <model name="enemy_3_infantry_103"><static>true</static><pose>24.961 9.131 0.24 0 0 3.14159</pose><link name="body"><collision name="collision"><geometry><box><size>0.65 0.50 0.48</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.65 0.50 0.48</size></box></geometry><material><diffuse>0.08 0.32 0.95 1</diffuse></material></visual></link></model>
+    <model name="enemy_4_infantry_104"><static>true</static><pose>24.616 8.549 0.24 0 0 3.14159</pose><link name="body"><collision name="collision"><geometry><box><size>0.65 0.50 0.48</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.65 0.50 0.48</size></box></geometry><material><diffuse>0.08 0.32 0.95 1</diffuse></material></visual></link></model>
+    <model name="enemy_5_aerial_106"><static>true</static><pose>26.658 2.094 0.38 0 0 3.14159</pose><link name="body"><collision name="collision"><geometry><box><size>0.65 0.50 0.48</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.65 0.50 0.48</size></box></geometry><material><diffuse>0.08 0.32 0.95 1</diffuse></material></visual></link></model>
+    <model name="enemy_8_sentry_107"><static>true</static><pose>25.186 6.675 0.24 0 0 3.14159</pose><link name="body"><collision name="collision"><geometry><box><size>0.65 0.50 0.48</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.65 0.50 0.48</size></box></geometry><material><diffuse>0.08 0.32 0.95 1</diffuse></material></visual></link></model>
+  </world>
+</sdf>

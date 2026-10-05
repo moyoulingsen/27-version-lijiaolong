@@ -1,0 +1,20 @@
+source_database: ../data/rmuc_2026_region_dataset.sqlite
+game_id: 1778631047459
+match: "【南部赛区】第1场"
+round: 1
+red_school: "华南农业大学"
+blue_school: "重庆理工大学"
+snapshot_second: 1.0
+building_position_note: "SQLite 中基地和前哨站 xyz 均为 0，仿真使用 28x15 场地镜像位置。"
+buildings:
+  red_base: {position: [1.0, 7.5], hp: 5000}
+  red_outpost: {position: [8.0, 7.5], dataset_hp: 1500, interface_hp: 1000}
+  blue_outpost: {position: [20.0, 7.5], dataset_hp: 1500, interface_hp: 1000}
+  blue_base: {position: [27.0, 7.5], hp: 5000}
+blue_robots:
+  - {target: 1, robot_id: 101, type: "英雄", position: [26.931, 6.945], hp: 200}
+  - {target: 2, robot_id: 102, type: "工程", position: [25.796, 8.755], hp: 250}
+  - {target: 3, robot_id: 103, type: "步兵3", position: [24.961, 9.131], hp: 200}
+  - {target: 4, robot_id: 104, type: "步兵4", position: [24.616, 8.549], hp: 200}
+  - {target: 5, robot_id: 106, type: "空中", position: [26.658, 2.094], hp: 100}
+  - {target: 8, robot_id: 107, type: "哨兵", position: [25.186, 6.675], hp: 400}

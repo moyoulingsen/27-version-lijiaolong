@@ -1,0 +1,130 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="sentry">
+  <xacro:property name="wheel_radius" value="0.10"/>
+  <xacro:property name="wheel_width" value="0.055"/>
+  <xacro:property name="wheel_y" value="0.255"/>
+
+  <link name="base_footprint"/>
+
+  <joint name="base_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 0.19"/>
+  </joint>
+
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0 0 0"/>
+      <mass value="18.0"/>
+      <inertia ixx="0.50" ixy="0" ixz="0" iyy="0.75" iyz="0" izz="0.90"/>
+    </inertial>
+    <visual>
+      <geometry><box size="0.65 0.46 0.26"/></geometry>
+      <material name="red"><color rgba="0.78 0.06 0.06 1"/></material>
+    </visual>
+    <collision>
+      <geometry><box size="0.65 0.46 0.26"/></geometry>
+    </collision>
+  </link>
+
+  <xacro:macro name="wheel" params="side sign">
+    <link name="${side}_wheel_link">
+      <inertial>
+        <mass value="0.8"/>
+        <inertia ixx="0.004" ixy="0" ixz="0" iyy="0.004" iyz="0" izz="0.002"/>
+      </inertial>
+      <visual>
+        <origin rpy="1.570796 0 0"/>
+        <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
+        <material name="wheel"><color rgba="0.05 0.05 0.05 1"/></material>
+      </visual>
+      <collision>
+        <origin rpy="1.570796 0 0"/>
+        <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
+      </collision>
+    </link>
+    <joint name="${side}_wheel_joint" type="continuous">
+      <parent link="base_link"/>
+      <child link="${side}_wheel_link"/>
+      <origin xyz="0 ${sign * wheel_y} -0.09"/>
+      <axis xyz="0 1 0"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:wheel side="left" sign="1"/>
+  <xacro:wheel side="right" sign="-1"/>
+
+  <link name="rear_caster_link">
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+    <visual><geometry><sphere radius="0.045"/></geometry></visual>
+    <collision><geometry><sphere radius="0.045"/></geometry></collision>
+  </link>
+  <joint name="rear_caster_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="rear_caster_link"/>
+    <origin xyz="-0.25 0 -0.145"/>
+  </joint>
+
+  <link name="laser_link">
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+    <visual>
+      <geometry><cylinder radius="0.055" length="0.06"/></geometry>
+      <material name="sensor"><color rgba="0.08 0.08 0.08 1"/></material>
+    </visual>
+  </link>
+  <joint name="laser_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="laser_link"/>
+    <origin xyz="0 0 0.20"/>
+  </joint>
+
+  <gazebo reference="base_link"><material>Gazebo/Red</material></gazebo>
+  <gazebo reference="left_wheel_link"><material>Gazebo/Black</material></gazebo>
+  <gazebo reference="right_wheel_link"><material>Gazebo/Black</material></gazebo>
+  <gazebo reference="laser_link">
+    <sensor name="lidar" type="gpu_lidar">
+      <topic>/scan</topic>
+      <gz_frame_id>laser_link</gz_frame_id>
+      <update_rate>12</update_rate>
+      <always_on>true</always_on>
+      <visualize>true</visualize>
+      <lidar>
+        <scan>
+          <horizontal>
+            <samples>720</samples>
+            <resolution>1</resolution>
+            <min_angle>-3.1415926</min_angle>
+            <max_angle>3.1415926</max_angle>
+          </horizontal>
+        </scan>
+        <range><min>0.12</min><max>20.0</max><resolution>0.01</resolution></range>
+      </lidar>
+    </sensor>
+  </gazebo>
+
+  <gazebo>
+    <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
+      <left_joint>left_wheel_joint</left_joint>
+      <right_joint>right_wheel_joint</right_joint>
+      <wheel_separation>${2.0 * wheel_y}</wheel_separation>
+      <wheel_radius>${wheel_radius}</wheel_radius>
+      <topic>/model/sentry/cmd_vel</topic>
+      <odom_topic>/model/sentry/odometry</odom_topic>
+      <tf_topic>/model/sentry/tf</tf_topic>
+      <frame_id>odom</frame_id>
+      <child_frame_id>base_footprint</child_frame_id>
+      <odom_publish_frequency>30</odom_publish_frequency>
+      <max_linear_acceleration>2.0</max_linear_acceleration>
+      <max_angular_acceleration>4.0</max_angular_acceleration>
+    </plugin>
+    <plugin filename="gz-sim-joint-state-publisher-system" name="gz::sim::systems::JointStatePublisher">
+      <topic>/world/rm_arena/model/sentry/joint_state</topic>
+    </plugin>
+  </gazebo>
+</robot>
