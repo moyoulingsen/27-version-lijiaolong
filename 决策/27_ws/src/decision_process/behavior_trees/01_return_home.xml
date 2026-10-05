@@ -3,7 +3,6 @@
   <BehaviorTree ID="ReturnHome">
     <ReactiveSequence name="ReturnHomeSequence">
       <GameFinished/>
-      <SentryAlive/>
       <SetPosture posture="3"/>
       <NavigateToPose x="{home_x}" y="{home_y}" z="{home_z}"
                       yaw="{home_yaw}" frame_id="{frame_id}"
@@ -21,7 +20,6 @@
       <input_port name="tolerance" default="0.15">到达判定容差</input_port>
     </SubTree>
     <Condition ID="GameFinished" editable="true"/>
-    <Condition ID="SentryAlive" editable="true"/>
     <Action ID="SetPosture" editable="true">
       <input_port name="posture" default="3">1进攻、2防御、3移动</input_port>
     </Action>
