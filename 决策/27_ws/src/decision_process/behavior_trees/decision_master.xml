@@ -16,7 +16,7 @@
 
   <BehaviorTree ID="MainTree">
     <ReactiveFallback name="FiveTaskPriority">
-      <!-- 最高优先级：比赛退出阶段 2 后，存活的哨兵返回启动点。 -->
+      <!-- 最高优先级：比赛退出阶段 2 后，无论剩余血量都返回启动点。 -->
       <SubTree ID="ReturnHome"
                home_x="4.971" home_y="7.5" home_z="1.0"
                home_yaw="0.0" frame_id="map" tolerance="0.15"/>
