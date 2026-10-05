@@ -2,10 +2,10 @@ decision_process:
   ros__parameters:
     publish_rate_hz: 20.0
 
-    # 当前启用第 1 个行为树子树：比赛结束归位。
+    # 当前启用前五个任务的上层综合树。
     behavior_tree_enabled: true
     behavior_tree_tick_rate_hz: 20.0
-    # 留空时使用安装目录中的 behavior_trees/01_return_home.xml。
+    # 留空时使用安装目录中的 behavior_trees/decision_master.xml。
     behavior_tree_xml: ""
 
     # 默认不发送导航目标，防止上电后误移动。

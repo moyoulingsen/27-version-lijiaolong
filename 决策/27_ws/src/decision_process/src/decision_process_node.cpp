@@ -76,7 +76,7 @@ DecisionProcessNode::DecisionProcessNode()
   try {
     default_tree_path =
       ament_index_cpp::get_package_share_directory("decision_process") +
-      "/behavior_trees/01_return_home.xml";
+      "/behavior_trees/decision_master.xml";
   } catch (const std::exception & error) {
     RCLCPP_WARN(
       get_logger(), "Unable to resolve default behavior tree path: %s", error.what());

@@ -1,13 +1,5 @@
 <?xml version="1.0"?>
-<root BTCPP_format="4" main_tree_to_execute="MainTree">
-  <BehaviorTree ID="MainTree">
-    <ReactiveFallback name="MainDecision">
-      <SubTree ID="ReturnHome" home_x="4.971" home_y="7.5" home_z="1.0"
-               home_yaw="0.0" frame_id="map" tolerance="0.15"/>
-      <AlwaysSuccess name="OtherBehaviorsPlaceholder"/>
-    </ReactiveFallback>
-  </BehaviorTree>
-
+<root BTCPP_format="4">
   <BehaviorTree ID="ReturnHome">
     <ReactiveSequence name="ReturnHomeSequence">
       <GameFinished/>
