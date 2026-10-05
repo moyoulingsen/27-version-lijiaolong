@@ -2,7 +2,7 @@
 
 这个功能包提供 ROS 2 通信层，并开始按任务逐个接入 BehaviorTree.CPP 子树。
 
-当前已经独立完成前 4 个任务：归位、姿态切换、打前哨和无弹量行为。每个任务都有单独的 Groot2 XML、逻辑说明和测试。
+当前已经独立完成前 5 个任务：归位、姿态切换、打前哨、无弹量行为和躲避行为。每个任务都有单独的 Groot2 XML、逻辑说明和测试。
 
 ## 话题
 
@@ -34,6 +34,7 @@
 | 02 姿态切换 | `behavior_trees/02_posture_switch.xml` | `docs/behavior_trees/02_posture_switch.md` |
 | 03 打前哨 | `behavior_trees/03_attack_outpost.xml` | `docs/behavior_trees/03_attack_outpost.md` |
 | 04 无弹量行为 | `behavior_trees/04_no_ammo.xml` | `docs/behavior_trees/04_no_ammo.md` |
+| 05 躲避行为 | `behavior_trees/05_dodge.xml` | `docs/behavior_trees/05_dodge.md` |
 
 归位触发方式不是简单判断 `time==0`，而是记录比赛曾经进入阶段 2，随后检测到退出阶段 2，避免赛前误触发。
 
@@ -102,5 +103,6 @@ ros2 topic echo /goal_pose
 - `test_data_publisher` 只用于没有真实裁判系统、自矄和定位节点时的联调。
 - 传入 `simulate_return_home:=true` 可模拟比赛结束归位；传入 `simulate_attack_outpost:=true` 可模拟导航、搜索、射击和前哨摧毁流程。
 - 传入 `simulate_no_ammo:=true` 可模拟无待领弹量站桩、每分钟弹量累计、前往补给点和领取成功。
+- 传入 `simulate_dodge:=true` 可模拟正常到点、视野外受伤、连续躲避以及恢复正常行为。
 - `output_monitor` 用来确认三个输出话题的消息确实已发布。
 - 后续写决策逻辑时，可以更新 `serial_command_`、`autoaim_command_`和导航目标参数，不需要重写 ROS 2 通信接口。

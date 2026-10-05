@@ -16,6 +16,7 @@
 
 #include "decision_process/ammo_reserve_logic.hpp"
 #include "decision_process/communication_data.hpp"
+#include "decision_process/dodge_logic.hpp"
 #include "decision_process/msg/autoaim_to_decision.hpp"
 #include "decision_process/msg/decision_to_autoaim.hpp"
 #include "decision_process/msg/desicion_send_data.hpp"
@@ -39,6 +40,7 @@ public:
   bool hasGameStarted() const;
   bool isGameFinished() const;
   uint16_t getPendingAmmo() const;
+  bool hasRecentDamage(double quiet_period_seconds) const;
 
   void setSerialCommand(const SerialCommand & command);
   void setAutoaimCommand(const AutoaimCommand & command);
@@ -71,6 +73,7 @@ private:
   LocalizationState localization_state_;
   MatchLifecycle match_lifecycle_;
   AmmoReserveTracker ammo_reserve_tracker_;
+  DamageTracker damage_tracker_;
   bool ammo_pickup_waiting_{false};
 
   SerialCommand serial_command_;

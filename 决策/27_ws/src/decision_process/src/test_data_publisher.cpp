@@ -20,6 +20,7 @@ public:
     simulate_return_home_ = declare_parameter<bool>("simulate_return_home", false);
     simulate_attack_outpost_ = declare_parameter<bool>("simulate_attack_outpost", false);
     simulate_no_ammo_ = declare_parameter<bool>("simulate_no_ammo", false);
+    simulate_dodge_ = declare_parameter<bool>("simulate_dodge", false);
     simulation_start_ = std::chrono::steady_clock::now();
     const auto sensor_qos = rclcpp::SensorDataQoS();
     const auto reliable_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable();
@@ -43,7 +44,16 @@ private:
     odometry.child_frame_id = "base_link";
     const double elapsed = std::chrono::duration<double>(
       std::chrono::steady_clock::now() - simulation_start_).count();
-    if (simulate_no_ammo_ && elapsed >= 4.0) {
+    if (simulate_dodge_ && elapsed >= 4.0) {
+      odometry.pose.pose.position.x = 5.8;
+      odometry.pose.pose.position.y = 5.8;
+    } else if (simulate_dodge_ && elapsed >= 3.0) {
+      odometry.pose.pose.position.x = 5.0;
+      odometry.pose.pose.position.y = 5.8;
+    } else if (simulate_dodge_ && elapsed >= 1.0) {
+      odometry.pose.pose.position.x = 5.0;
+      odometry.pose.pose.position.y = 5.0;
+    } else if (simulate_no_ammo_ && elapsed >= 4.0) {
       odometry.pose.pose.position.x = 2.0;
       odometry.pose.pose.position.y = 1.0;
     } else if (simulate_no_ammo_ && elapsed >= 1.0) {
@@ -80,7 +90,7 @@ private:
       referee.game_period = 2;
       referee.time = 400;
     }
-    referee.hp_sentry = 400;
+    referee.hp_sentry = simulate_dodge_ && elapsed >= 2.0 ? 350U : 400U;
     referee.defence_buff = 60;
     referee.color = 0;
     referee.ammo = simulate_no_ammo_ && elapsed < 6.0 ? 0U : 200U;
@@ -99,10 +109,16 @@ private:
 
     decision_process::msg::AutoaimToDecision autoaim;
     autoaim.target = {1, 1, 1, 1, 1, 1, 1, 1, 1};
+    if (simulate_dodge_) {
+      autoaim.target.assign(9U, 0U);
+    }
     if (simulate_attack_outpost_) {
       autoaim.target[6] = elapsed >= 2.0 && elapsed < 3.0 ? 1U : 0U;
     }
     autoaim.target_distance = {1.0, 2.1, 2.2, 2.3, 2.4, 2.5, 6.0, 7.0, 2.8};
+    if (simulate_dodge_) {
+      autoaim.target_distance.assign(9U, 0.0);
+    }
     if (simulate_attack_outpost_) {
       autoaim.target_distance[6] = autoaim.target[6] != 0U ? 4.0 : 0.0;
     }
@@ -118,6 +134,7 @@ private:
   bool simulate_return_home_{false};
   bool simulate_attack_outpost_{false};
   bool simulate_no_ammo_{false};
+  bool simulate_dodge_{false};
   std::chrono::steady_clock::time_point simulation_start_;
 };
 

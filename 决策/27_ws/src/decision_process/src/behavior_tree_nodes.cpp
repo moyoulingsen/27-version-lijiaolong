@@ -10,6 +10,7 @@
 
 #include "decision_process/attack_outpost_logic.hpp"
 #include "decision_process/decision_process_node.hpp"
+#include "decision_process/dodge_logic.hpp"
 #include "decision_process/return_home_logic.hpp"
 
 namespace decision_process
@@ -121,6 +122,55 @@ BT::NodeStatus PendingAmmoAvailableCondition::tick()
          BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
+NoEnemyVisibleCondition::NoEnemyVisibleCondition(
+  const std::string & name, const BT::NodeConfig & config,
+  DecisionProcessNode & decision_node)
+: BT::ConditionNode(name, config), decision_node_(decision_node) {}
+
+BT::PortsList NoEnemyVisibleCondition::providedPorts() {return {};}
+
+BT::NodeStatus NoEnemyVisibleCondition::tick()
+{
+  return noVisibleEnemy(decision_node_.getAutoaimState()) ?
+         BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
+RecentDamageCondition::RecentDamageCondition(
+  const std::string & name, const BT::NodeConfig & config,
+  DecisionProcessNode & decision_node)
+: BT::ConditionNode(name, config), decision_node_(decision_node) {}
+
+BT::PortsList RecentDamageCondition::providedPorts()
+{
+  return {BT::InputPort<double>("quiet_period_sec", 2.0, "停止受伤后的保持时间")};
+}
+
+BT::NodeStatus RecentDamageCondition::tick()
+{
+  const auto quiet_period = getInput<double>("quiet_period_sec");
+  if (!quiet_period || quiet_period.value() < 0.0 ||
+    !std::isfinite(quiet_period.value()))
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+  return decision_node_.hasRecentDamage(quiet_period.value()) ?
+         BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
+NavigationGoalReachedCondition::NavigationGoalReachedCondition(
+  const std::string & name, const BT::NodeConfig & config,
+  DecisionProcessNode & decision_node)
+: BT::ConditionNode(name, config), decision_node_(decision_node) {}
+
+BT::PortsList NavigationGoalReachedCondition::providedPorts() {return {};}
+
+BT::NodeStatus NavigationGoalReachedCondition::tick()
+{
+  const NavigationCommand command = decision_node_.getNavigationCommand();
+  return command.has_goal && command.reached ?
+         BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
 SetPostureAction::SetPostureAction(
   const std::string & name, const BT::NodeConfig & config,
   DecisionProcessNode & decision_node)
@@ -182,6 +232,8 @@ BT::NodeStatus NavigateToPoseAction::onStart()
   tolerance_ = tolerance.value();
   NavigationCommand command;
   command.enabled = true;
+  command.has_goal = true;
+  command.reached = false;
   command.frame_id = frame_id.value();
   command.x = goal_x_;
   command.y = goal_y_;
@@ -192,7 +244,7 @@ BT::NodeStatus NavigateToPoseAction::onStart()
 
 BT::NodeStatus NavigateToPoseAction::onRunning() {return evaluateGoal();}
 
-void NavigateToPoseAction::onHalted() {disableNavigation();}
+void NavigateToPoseAction::onHalted() {disableNavigation(false);}
 
 BT::NodeStatus NavigateToPoseAction::evaluateGoal()
 {
@@ -201,16 +253,17 @@ BT::NodeStatus NavigateToPoseAction::evaluateGoal()
     return BT::NodeStatus::RUNNING;
   }
   if (goalReached(state.x, state.y, goal_x_, goal_y_, tolerance_)) {
-    disableNavigation();
+    disableNavigation(true);
     return BT::NodeStatus::SUCCESS;
   }
   return BT::NodeStatus::RUNNING;
 }
 
-void NavigateToPoseAction::disableNavigation()
+void NavigateToPoseAction::disableNavigation(bool reached)
 {
   NavigationCommand command = decision_node_.getNavigationCommand();
   command.enabled = false;
+  command.reached = reached;
   decision_node_.setNavigationCommand(command);
 }
 
@@ -409,7 +462,7 @@ BT::NodeStatus CollectPendingAmmoAction::onRunning() {return updatePickup();}
 void CollectPendingAmmoAction::onHalted()
 {
   decision_node_.cancelAmmoPickupWait();
-  disableNavigation();
+  disableNavigation(reached_supply_);
 }
 
 BT::NodeStatus CollectPendingAmmoAction::updatePickup()
@@ -417,7 +470,7 @@ BT::NodeStatus CollectPendingAmmoAction::updatePickup()
   const RefereeState referee = decision_node_.getRefereeState();
   if (referee.received && referee.ammo > 0U) {
     decision_node_.cancelAmmoPickupWait();
-    disableNavigation();
+    disableNavigation(reached_supply_);
     return BT::NodeStatus::SUCCESS;
   }
 
@@ -428,7 +481,7 @@ BT::NodeStatus CollectPendingAmmoAction::updatePickup()
     if (!reached_supply_) {
       reached_supply_ = true;
       decision_node_.beginAmmoPickupWait();
-      disableNavigation();
+      disableNavigation(true);
     }
     return BT::NodeStatus::RUNNING;
   }
@@ -445,6 +498,8 @@ void CollectPendingAmmoAction::publishSupplyGoal()
 {
   NavigationCommand command;
   command.enabled = true;
+  command.has_goal = true;
+  command.reached = false;
   command.frame_id = frame_id_;
   command.x = supply_x_;
   command.y = supply_y_;
@@ -452,11 +507,139 @@ void CollectPendingAmmoAction::publishSupplyGoal()
   decision_node_.setNavigationCommand(command);
 }
 
-void CollectPendingAmmoAction::disableNavigation()
+void CollectPendingAmmoAction::disableNavigation(bool reached)
 {
   NavigationCommand command = decision_node_.getNavigationCommand();
   command.enabled = false;
+  command.reached = reached;
   decision_node_.setNavigationCommand(command);
+}
+
+EvadeUntilSafeAction::EvadeUntilSafeAction(
+  const std::string & name, const BT::NodeConfig & config,
+  DecisionProcessNode & decision_node)
+: BT::StatefulActionNode(name, config), decision_node_(decision_node) {}
+
+BT::PortsList EvadeUntilSafeAction::providedPorts()
+{
+  return {
+    BT::InputPort<double>("quiet_period_sec", 2.0, "最后一次受伤后的躲避保持时间"),
+    BT::InputPort<double>("step", 0.8, "单次躲避移动距离"),
+    BT::InputPort<double>("tolerance", 0.15, "躲避目标到达容差"),
+    BT::InputPort<double>("min_x", 0.2, "允许目标最小x"),
+    BT::InputPort<double>("max_x", 27.8, "允许目标最大x"),
+    BT::InputPort<double>("min_y", 0.2, "允许目标最小y"),
+    BT::InputPort<double>("max_y", 14.8, "允许目标最大y"),
+    BT::InputPort<std::string>("frame_id", "map", "导航参考坐标系")};
+}
+
+BT::NodeStatus EvadeUntilSafeAction::onStart()
+{
+  const auto quiet_period = getInput<double>("quiet_period_sec");
+  const auto step = getInput<double>("step");
+  const auto tolerance = getInput<double>("tolerance");
+  const auto min_x = getInput<double>("min_x");
+  const auto max_x = getInput<double>("max_x");
+  const auto min_y = getInput<double>("min_y");
+  const auto max_y = getInput<double>("max_y");
+  const auto frame_id = getInput<std::string>("frame_id");
+  if (!quiet_period || !step || !tolerance || !min_x || !max_x ||
+    !min_y || !max_y || !frame_id ||
+    !std::isfinite(quiet_period.value()) || !std::isfinite(step.value()) ||
+    !std::isfinite(tolerance.value()) || !std::isfinite(min_x.value()) ||
+    !std::isfinite(max_x.value()) || !std::isfinite(min_y.value()) ||
+    !std::isfinite(max_y.value()) || quiet_period.value() < 0.0 ||
+    step.value() <= 0.0 || tolerance.value() <= 0.0 ||
+    min_x.value() >= max_x.value() || min_y.value() >= max_y.value() ||
+    frame_id.value().empty())
+  {
+    RCLCPP_ERROR(decision_node_.get_logger(), "EvadeUntilSafe received invalid ports");
+    return BT::NodeStatus::FAILURE;
+  }
+
+  quiet_period_seconds_ = quiet_period.value();
+  step_ = step.value();
+  tolerance_ = tolerance.value();
+  min_x_ = min_x.value();
+  max_x_ = max_x.value();
+  min_y_ = min_y.value();
+  max_y_ = max_y.value();
+  frame_id_ = frame_id.value();
+  goal_active_ = false;
+  return updateEvasion();
+}
+
+BT::NodeStatus EvadeUntilSafeAction::onRunning() {return updateEvasion();}
+
+void EvadeUntilSafeAction::onHalted() {disableNavigation();}
+
+BT::NodeStatus EvadeUntilSafeAction::updateEvasion()
+{
+  const RefereeState referee = decision_node_.getRefereeState();
+  const AutoaimState autoaim = decision_node_.getAutoaimState();
+  const bool should_continue =
+    referee.received && referee.game_period == 2U && referee.sentry_hp > 0U &&
+    noVisibleEnemy(autoaim) &&
+    decision_node_.hasRecentDamage(quiet_period_seconds_);
+  if (!should_continue) {
+    disableNavigation();
+    return BT::NodeStatus::FAILURE;
+  }
+
+  const LocalizationState localization = decision_node_.getLocalizationState();
+  if (!localization.received) {
+    return BT::NodeStatus::RUNNING;
+  }
+
+  if (!goal_active_ || goalReached(
+      localization.x, localization.y, goal_x_, goal_y_, tolerance_))
+  {
+    if (!publishNextGoal(localization)) {
+      RCLCPP_ERROR_THROTTLE(
+        decision_node_.get_logger(), *decision_node_.get_clock(), 2000,
+        "Unable to find a valid evasion goal inside map bounds");
+      disableNavigation();
+      return BT::NodeStatus::FAILURE;
+    }
+  }
+  return BT::NodeStatus::RUNNING;
+}
+
+bool EvadeUntilSafeAction::publishNextGoal(const LocalizationState & localization)
+{
+  for (std::size_t attempt = 0U; attempt < 4U; ++attempt) {
+    const EvasionGoal candidate = makeEvasionGoal(
+      localization.x, localization.y, step_, direction_index_,
+      min_x_, max_x_, min_y_, max_y_);
+    ++direction_index_;
+    if (!candidate.valid) {
+      continue;
+    }
+
+    goal_x_ = candidate.x;
+    goal_y_ = candidate.y;
+    goal_active_ = true;
+    NavigationCommand command;
+    command.enabled = true;
+    command.has_goal = true;
+    command.reached = false;
+    command.frame_id = frame_id_;
+    command.x = goal_x_;
+    command.y = goal_y_;
+    command.yaw = localization.yaw;
+    decision_node_.setNavigationCommand(command);
+    return true;
+  }
+  return false;
+}
+
+void EvadeUntilSafeAction::disableNavigation()
+{
+  NavigationCommand command = decision_node_.getNavigationCommand();
+  command.enabled = false;
+  command.reached = false;
+  decision_node_.setNavigationCommand(command);
+  goal_active_ = false;
 }
 
 void registerDecisionNodes(
@@ -497,6 +680,21 @@ void registerDecisionNodes(
     [&decision_node](const std::string & name, const BT::NodeConfig & config) {
       return std::make_unique<PendingAmmoAvailableCondition>(name, config, decision_node);
     });
+  factory.registerBuilder<NoEnemyVisibleCondition>(
+    "NoEnemyVisible",
+    [&decision_node](const std::string & name, const BT::NodeConfig & config) {
+      return std::make_unique<NoEnemyVisibleCondition>(name, config, decision_node);
+    });
+  factory.registerBuilder<RecentDamageCondition>(
+    "RecentDamage",
+    [&decision_node](const std::string & name, const BT::NodeConfig & config) {
+      return std::make_unique<RecentDamageCondition>(name, config, decision_node);
+    });
+  factory.registerBuilder<NavigationGoalReachedCondition>(
+    "NavigationGoalReached",
+    [&decision_node](const std::string & name, const BT::NodeConfig & config) {
+      return std::make_unique<NavigationGoalReachedCondition>(name, config, decision_node);
+    });
   factory.registerBuilder<SetPostureAction>(
     "SetPosture",
     [&decision_node](const std::string & name, const BT::NodeConfig & config) {
@@ -526,6 +724,11 @@ void registerDecisionNodes(
     "CollectPendingAmmo",
     [&decision_node](const std::string & name, const BT::NodeConfig & config) {
       return std::make_unique<CollectPendingAmmoAction>(name, config, decision_node);
+    });
+  factory.registerBuilder<EvadeUntilSafeAction>(
+    "EvadeUntilSafe",
+    [&decision_node](const std::string & name, const BT::NodeConfig & config) {
+      return std::make_unique<EvadeUntilSafeAction>(name, config, decision_node);
     });
 }
 
