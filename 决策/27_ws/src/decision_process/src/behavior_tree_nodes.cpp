@@ -244,7 +244,19 @@ BT::NodeStatus NavigateToPoseAction::onStart()
 
 BT::NodeStatus NavigateToPoseAction::onRunning() {return evaluateGoal();}
 
-void NavigateToPoseAction::onHalted() {disableNavigation(false);}
+void NavigateToPoseAction::onHalted()
+{
+  // A reactive control node may start a new navigation action before halting
+  // this one. Do not clear the replacement command while cleaning up the old
+  // goal.
+  const NavigationCommand command = decision_node_.getNavigationCommand();
+  if (command.enabled &&
+    std::abs(command.x - goal_x_) <= 1e-9 &&
+    std::abs(command.y - goal_y_) <= 1e-9)
+  {
+    disableNavigation(false);
+  }
+}
 
 BT::NodeStatus NavigateToPoseAction::evaluateGoal()
 {
