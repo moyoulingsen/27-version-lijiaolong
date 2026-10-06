@@ -4,12 +4,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "behaviortree_cpp/action_node.h"
 #include "behaviortree_cpp/bt_factory.h"
 #include "behaviortree_cpp/condition_node.h"
 
 #include "decision_process/communication_data.hpp"
+#include "decision_process/patrol_logic.hpp"
 #include "decision_process/posture_logic.hpp"
 
 namespace decision_process
@@ -281,6 +283,107 @@ private:
   double goal_x_{0.0};
   double goal_y_{0.0};
   bool goal_active_{false};
+};
+
+class PatrolRouteAction : public BT::StatefulActionNode
+{
+public:
+  PatrolRouteAction(
+    const std::string & name, const BT::NodeConfig & config,
+    DecisionProcessNode & decision_node);
+  static BT::PortsList providedPorts();
+  BT::NodeStatus onStart() override;
+  BT::NodeStatus onRunning() override;
+  void onHalted() override;
+
+private:
+  BT::NodeStatus updatePatrol();
+  void publishCurrentGoal();
+  void disableNavigation();
+
+  DecisionProcessNode & decision_node_;
+  std::vector<PatrolPoint> points_;
+  std::size_t point_index_{0U};
+  bool forward_{true};
+  double yaw_{0.0};
+  double tolerance_{0.15};
+  std::string frame_id_{"map"};
+  bool goal_active_{false};
+};
+
+class UpdateSpinModeAction : public BT::SyncActionNode
+{
+public:
+  UpdateSpinModeAction(
+    const std::string & name, const BT::NodeConfig & config,
+    DecisionProcessNode & decision_node);
+  static BT::PortsList providedPorts();
+  BT::NodeStatus tick() override;
+
+private:
+  DecisionProcessNode & decision_node_;
+};
+
+class UpdateGimbalModeAction : public BT::SyncActionNode
+{
+public:
+  UpdateGimbalModeAction(
+    const std::string & name, const BT::NodeConfig & config,
+    DecisionProcessNode & decision_node);
+  static BT::PortsList providedPorts();
+  BT::NodeStatus tick() override;
+
+private:
+  DecisionProcessNode & decision_node_;
+};
+
+class KeepRunningAction : public BT::StatefulActionNode
+{
+public:
+  KeepRunningAction(const std::string & name, const BT::NodeConfig & config);
+  static BT::PortsList providedPorts();
+  BT::NodeStatus onStart() override;
+  BT::NodeStatus onRunning() override;
+  void onHalted() override;
+};
+
+class LowHealthCondition : public BT::ConditionNode
+{
+public:
+  LowHealthCondition(
+    const std::string & name, const BT::NodeConfig & config,
+    DecisionProcessNode & decision_node);
+  static BT::PortsList providedPorts();
+  BT::NodeStatus tick() override;
+
+private:
+  DecisionProcessNode & decision_node_;
+};
+
+class RecoverAtSupplyAction : public BT::StatefulActionNode
+{
+public:
+  RecoverAtSupplyAction(
+    const std::string & name, const BT::NodeConfig & config,
+    DecisionProcessNode & decision_node);
+  static BT::PortsList providedPorts();
+  BT::NodeStatus onStart() override;
+  BT::NodeStatus onRunning() override;
+  void onHalted() override;
+
+private:
+  BT::NodeStatus updateRecovery();
+  void publishSupplyGoal();
+  void disableNavigation(bool reached);
+
+  DecisionProcessNode & decision_node_;
+  double supply_x_{2.0};
+  double supply_y_{1.0};
+  double supply_yaw_{0.0};
+  double tolerance_{0.15};
+  int health_threshold_{200};
+  std::string frame_id_{"map"};
+  bool waiting_at_supply_{false};
 };
 
 void registerDecisionNodes(

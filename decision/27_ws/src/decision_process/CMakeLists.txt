@@ -106,6 +106,36 @@ add_executable(dodge_input_publisher
 ament_target_dependencies(dodge_input_publisher nav_msgs rclcpp)
 target_link_libraries(dodge_input_publisher "${cpp_typesupport_target}")
 
+add_executable(patrol_input_publisher
+  "test/2.data layer/06_patrol/patrol_input_publisher.cpp"
+)
+ament_target_dependencies(patrol_input_publisher nav_msgs rclcpp)
+target_link_libraries(patrol_input_publisher "${cpp_typesupport_target}")
+
+add_executable(spin_control_input_publisher
+  "test/2.data layer/07_spin_control/spin_control_input_publisher.cpp"
+)
+ament_target_dependencies(spin_control_input_publisher nav_msgs rclcpp)
+target_link_libraries(spin_control_input_publisher "${cpp_typesupport_target}")
+
+add_executable(gimbal_control_input_publisher
+  "test/2.data layer/08_gimbal_control/gimbal_control_input_publisher.cpp"
+)
+ament_target_dependencies(gimbal_control_input_publisher nav_msgs rclcpp)
+target_link_libraries(gimbal_control_input_publisher "${cpp_typesupport_target}")
+
+add_executable(low_health_recovery_input_publisher
+  "test/2.data layer/09_low_health_recovery/low_health_recovery_input_publisher.cpp"
+)
+ament_target_dependencies(low_health_recovery_input_publisher nav_msgs rclcpp)
+target_link_libraries(low_health_recovery_input_publisher "${cpp_typesupport_target}")
+
+add_executable(health_threshold_parameter_input_publisher
+  "test/2.data layer/10_health_threshold_parameter/health_threshold_parameter_input_publisher.cpp"
+)
+ament_target_dependencies(health_threshold_parameter_input_publisher nav_msgs rclcpp)
+target_link_libraries(health_threshold_parameter_input_publisher "${cpp_typesupport_target}")
+
 install(TARGETS
   decision_process_node
   test_data_publisher
@@ -116,6 +146,11 @@ install(TARGETS
   attack_outpost_input_publisher
   no_ammo_input_publisher
   dodge_input_publisher
+  patrol_input_publisher
+  spin_control_input_publisher
+  gimbal_control_input_publisher
+  low_health_recovery_input_publisher
+  health_threshold_parameter_input_publisher
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -126,6 +161,11 @@ install(FILES
   "test/2.data layer/03_attack_outpost/test_attack_outpost_message_flow.launch.py"
   "test/2.data layer/04_no_ammo/test_no_ammo_message_flow.launch.py"
   "test/2.data layer/05_dodge/test_dodge_message_flow.launch.py"
+  "test/2.data layer/06_patrol/test_patrol_message_flow.launch.py"
+  "test/2.data layer/07_spin_control/test_spin_control_message_flow.launch.py"
+  "test/2.data layer/08_gimbal_control/test_gimbal_control_message_flow.launch.py"
+  "test/2.data layer/09_low_health_recovery/test_low_health_recovery_message_flow.launch.py"
+  "test/2.data layer/10_health_threshold_parameter/test_health_threshold_parameter_message_flow.launch.py"
   DESTINATION share/${PROJECT_NAME}/launch
 )
 
@@ -180,6 +220,46 @@ if(BUILD_TESTING)
     "test/1.logical layer/test_dodge_logic.cpp"
   )
   target_include_directories(test_dodge_logic PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+  ament_add_gtest(
+    test_patrol_logic
+    "test/1.logical layer/test_patrol_logic.cpp"
+  )
+  target_include_directories(test_patrol_logic PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+  ament_add_gtest(
+    test_spin_control_logic
+    "test/1.logical layer/test_spin_control_logic.cpp"
+  )
+  target_include_directories(test_spin_control_logic PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+  ament_add_gtest(
+    test_gimbal_control_logic
+    "test/1.logical layer/test_gimbal_control_logic.cpp"
+  )
+  target_include_directories(test_gimbal_control_logic PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+  ament_add_gtest(
+    test_health_recovery_logic
+    "test/1.logical layer/test_health_recovery_logic.cpp"
+  )
+  target_include_directories(test_health_recovery_logic PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+  ament_add_gtest(
+    test_health_threshold_parameter
+    "test/1.logical layer/test_health_threshold_parameter.cpp"
+  )
+  target_include_directories(test_health_threshold_parameter PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
   )

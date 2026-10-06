@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="SpinController">
+    <UpdateSpinMode enabled_mode="{enabled_mode}"/>
+  </BehaviorTree>
+  <TreeNodesModel>
+    <SubTree ID="SpinController">
+      <input_port name="enabled_mode" default="1">己方前哨被摧毁后的小陀螺档位</input_port>
+    </SubTree>
+    <Action ID="UpdateSpinMode" editable="true">
+      <input_port name="enabled_mode" default="1">1低速、2中速、3高速</input_port>
+    </Action>
+  </TreeNodesModel>
+</root>

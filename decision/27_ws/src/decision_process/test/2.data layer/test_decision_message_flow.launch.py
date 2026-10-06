@@ -20,18 +20,29 @@ SCENARIOS = {
     "no_ammo": ("no_ammo", "no_ammo_input_publisher", 3),
     "5": ("dodge", "dodge_input_publisher", 1),
     "dodge": ("dodge", "dodge_input_publisher", 1),
+    "6": ("patrol", "patrol_input_publisher", 3),
+    "patrol": ("patrol", "patrol_input_publisher", 3),
+    "7": ("spin_control", "spin_control_input_publisher", 3),
+    "spin_control": ("spin_control", "spin_control_input_publisher", 3),
+    "8": ("gimbal_control", "gimbal_control_input_publisher", 1),
+    "gimbal_control": ("gimbal_control", "gimbal_control_input_publisher", 1),
+    "9": ("low_health_recovery", "low_health_recovery_input_publisher", 3),
+    "low_health_recovery": ("low_health_recovery", "low_health_recovery_input_publisher", 3),
+    "10": ("health_threshold_parameter", "health_threshold_parameter_input_publisher", 3),
+    "health_threshold_parameter": ("health_threshold_parameter", "health_threshold_parameter_input_publisher", 3),
 }
 
 
 def build_scenario(context):
     requested = LaunchConfiguration("scenario").perform(context).strip().lower()
     if requested not in SCENARIOS:
-        valid = ", ".join(["1..5", "return_home", "posture", "attack_outpost", "no_ammo", "dodge"])
+        valid = ", ".join(["1..10", "return_home", "posture", "attack_outpost", "no_ammo", "dodge", "patrol", "spin_control", "gimbal_control", "low_health_recovery", "health_threshold_parameter"])
         raise RuntimeError(f"未知消息测试场景 '{requested}'，可用值：{valid}")
 
     scenario_name, input_executable, default_posture = SCENARIOS[requested]
     package_share = get_package_share_directory("decision_process")
-    production_tree = os.path.join(package_share, "behavior_trees", "decision_master.xml")
+    tree_name = "10_health_threshold_parameter.xml" if scenario_name == "health_threshold_parameter" else "decision_master.xml"
+    production_tree = os.path.join(package_share, "behavior_trees", tree_name)
 
     decision_node = Node(
         package="decision_process", executable="decision_process",
