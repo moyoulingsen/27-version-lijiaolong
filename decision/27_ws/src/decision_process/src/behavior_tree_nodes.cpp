@@ -10,6 +10,9 @@
 
 #include "decision_process/attack_outpost_logic.hpp"
 #include "decision_process/decision_process_node.hpp"
+#include "decision_process/gimbal_control_logic.hpp"
+#include "decision_process/health_recovery_logic.hpp"
+#include "decision_process/spin_control_logic.hpp"
 #include "decision_process/dodge_logic.hpp"
 #include "decision_process/return_home_logic.hpp"
 
@@ -654,6 +657,305 @@ void EvadeUntilSafeAction::disableNavigation()
   goal_active_ = false;
 }
 
+PatrolRouteAction::PatrolRouteAction(
+  const std::string & name, const BT::NodeConfig & config,
+  DecisionProcessNode & decision_node)
+: BT::StatefulActionNode(name, config), decision_node_(decision_node) {}
+
+BT::PortsList PatrolRouteAction::providedPorts()
+{
+  return {
+    BT::InputPort<std::string>("points", "巡逻点，格式 x,y;x,y"),
+    BT::InputPort<double>("z", 1.0, "导航目标z坐标"),
+    BT::InputPort<double>("yaw", 0.0, "巡逻目标朝向"),
+    BT::InputPort<std::string>("frame_id", "map", "导航参考坐标系"),
+    BT::InputPort<double>("tolerance", 0.15, "巡逻点到达容差"),
+    BT::InputPort<double>("min_x", 0.0, "允许点位最小x"),
+    BT::InputPort<double>("max_x", 28.0, "允许点位最大x"),
+    BT::InputPort<double>("min_y", 0.0, "允许点位最小y"),
+    BT::InputPort<double>("max_y", 15.0, "允许点位最大y")};
+}
+
+BT::NodeStatus PatrolRouteAction::onStart()
+{
+  const auto points = getInput<std::string>("points");
+  const auto z = getInput<double>("z");
+  const auto yaw = getInput<double>("yaw");
+  const auto frame_id = getInput<std::string>("frame_id");
+  const auto tolerance = getInput<double>("tolerance");
+  const auto min_x = getInput<double>("min_x");
+  const auto max_x = getInput<double>("max_x");
+  const auto min_y = getInput<double>("min_y");
+  const auto max_y = getInput<double>("max_y");
+  if (!points || !z || !yaw || !frame_id || !tolerance ||
+    !min_x || !max_x || !min_y || !max_y ||
+    !parsePatrolPoints(points.value(), points_) ||
+    !std::isfinite(yaw.value()) || !std::isfinite(tolerance.value()) ||
+    !std::isfinite(min_x.value()) || !std::isfinite(max_x.value()) ||
+    !std::isfinite(min_y.value()) || !std::isfinite(max_y.value()) ||
+    std::abs(z.value() - 1.0) > 1e-6 || frame_id.value().empty() ||
+    tolerance.value() <= 0.0 || min_x.value() >= max_x.value() ||
+    min_y.value() >= max_y.value())
+  {
+    RCLCPP_ERROR(decision_node_.get_logger(), "PatrolRoute received invalid ports");
+    return BT::NodeStatus::FAILURE;
+  }
+  for (const PatrolPoint & point : points_) {
+    if (point.x < min_x.value() || point.x > max_x.value() ||
+      point.y < min_y.value() || point.y > max_y.value())
+    {
+      RCLCPP_ERROR(decision_node_.get_logger(), "PatrolRoute point is outside map bounds");
+      return BT::NodeStatus::FAILURE;
+    }
+  }
+
+  point_index_ = 0U;
+  forward_ = true;
+  yaw_ = yaw.value();
+  frame_id_ = frame_id.value();
+  tolerance_ = tolerance.value();
+  goal_active_ = false;
+  publishCurrentGoal();
+  return updatePatrol();
+}
+
+BT::NodeStatus PatrolRouteAction::onRunning() {return updatePatrol();}
+
+void PatrolRouteAction::onHalted() {disableNavigation();}
+
+BT::NodeStatus PatrolRouteAction::updatePatrol()
+{
+  const LocalizationState localization = decision_node_.getLocalizationState();
+  if (!localization.received) {
+    return BT::NodeStatus::RUNNING;
+  }
+  const PatrolPoint & current = points_[point_index_];
+  if (goalReached(localization.x, localization.y, current.x, current.y, tolerance_)) {
+    const PatrolStep next = advancePatrolStep(point_index_, forward_, points_.size());
+    point_index_ = next.index;
+    forward_ = next.forward;
+    publishCurrentGoal();
+  }
+  return BT::NodeStatus::RUNNING;
+}
+
+void PatrolRouteAction::publishCurrentGoal()
+{
+  const PatrolPoint & point = points_[point_index_];
+  NavigationCommand command;
+  command.enabled = true;
+  command.has_goal = true;
+  command.reached = false;
+  command.frame_id = frame_id_;
+  command.x = point.x;
+  command.y = point.y;
+  command.yaw = yaw_;
+  decision_node_.setNavigationCommand(command);
+  goal_active_ = true;
+}
+
+void PatrolRouteAction::disableNavigation()
+{
+  if (!goal_active_ || points_.empty()) {
+    return;
+  }
+  const NavigationCommand command = decision_node_.getNavigationCommand();
+  const PatrolPoint & point = points_[point_index_];
+  if (command.enabled && std::abs(command.x - point.x) <= 1e-9 &&
+    std::abs(command.y - point.y) <= 1e-9)
+  {
+    NavigationCommand disabled = command;
+    disabled.enabled = false;
+    disabled.reached = false;
+    decision_node_.setNavigationCommand(disabled);
+  }
+  goal_active_ = false;
+}
+
+UpdateSpinModeAction::UpdateSpinModeAction(
+  const std::string & name, const BT::NodeConfig & config,
+  DecisionProcessNode & decision_node)
+: BT::SyncActionNode(name, config), decision_node_(decision_node) {}
+
+BT::PortsList UpdateSpinModeAction::providedPorts()
+{
+  return {BT::InputPort<int>("enabled_mode", 1, "前哨被摧毁后的旋转档位1至3")};
+}
+
+BT::NodeStatus UpdateSpinModeAction::tick()
+{
+  const auto enabled_mode = getInput<int>("enabled_mode");
+  if (!enabled_mode) {
+    return BT::NodeStatus::FAILURE;
+  }
+  const RefereeState referee = decision_node_.getRefereeState();
+  const SpinControlDecision decision = decideSpinMode(
+    referee.received, referee.game_period, referee.sentry_hp,
+    referee.outpost_hp, enabled_mode.value());
+  if (!decision.valid) {
+    RCLCPP_ERROR(decision_node_.get_logger(), "UpdateSpinMode enabled_mode must be 1..3");
+    return BT::NodeStatus::FAILURE;
+  }
+  SerialCommand command = decision_node_.getSerialCommand();
+  command.spin_mode = decision.spin_mode;
+  decision_node_.setSerialCommand(command);
+  return BT::NodeStatus::SUCCESS;
+}
+
+UpdateGimbalModeAction::UpdateGimbalModeAction(
+  const std::string & name, const BT::NodeConfig & config,
+  DecisionProcessNode & decision_node)
+: BT::SyncActionNode(name, config), decision_node_(decision_node) {}
+
+BT::PortsList UpdateGimbalModeAction::providedPorts() {return {};}
+
+BT::NodeStatus UpdateGimbalModeAction::tick()
+{
+  const SerialCommand serial = decision_node_.getSerialCommand();
+  const AutoaimCommand autoaim = decision_node_.getAutoaimCommand();
+  SerialCommand updated = serial;
+  updated.tripod_mode = decideTripodMode(serial.shoot_mode, autoaim.target);
+  decision_node_.setSerialCommand(updated);
+  return BT::NodeStatus::SUCCESS;
+}
+
+KeepRunningAction::KeepRunningAction(
+  const std::string & name, const BT::NodeConfig & config)
+: BT::StatefulActionNode(name, config) {}
+
+BT::PortsList KeepRunningAction::providedPorts() {return {};}
+BT::NodeStatus KeepRunningAction::onStart() {return BT::NodeStatus::RUNNING;}
+BT::NodeStatus KeepRunningAction::onRunning() {return BT::NodeStatus::RUNNING;}
+void KeepRunningAction::onHalted() {}
+
+LowHealthCondition::LowHealthCondition(
+  const std::string & name, const BT::NodeConfig & config,
+  DecisionProcessNode & decision_node)
+: BT::ConditionNode(name, config), decision_node_(decision_node) {}
+
+BT::PortsList LowHealthCondition::providedPorts()
+{
+  return {BT::InputPort<int>("health_threshold", 200, "触发回血的血量阈值")};
+}
+
+BT::NodeStatus LowHealthCondition::tick()
+{
+  const RefereeState referee = decision_node_.getRefereeState();
+  const auto threshold = getInput<int>("health_threshold");
+  if (!threshold || !validRecoveryThreshold(threshold.value())) {
+    RCLCPP_ERROR(decision_node_.get_logger(), "LowHealth health_threshold must be 1..400");
+    return BT::NodeStatus::FAILURE;
+  }
+  return needsHealthRecovery(
+    referee.received, referee.game_period, referee.sentry_hp, threshold.value()) ?
+         BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
+RecoverAtSupplyAction::RecoverAtSupplyAction(
+  const std::string & name, const BT::NodeConfig & config,
+  DecisionProcessNode & decision_node)
+: BT::StatefulActionNode(name, config), decision_node_(decision_node) {}
+
+BT::PortsList RecoverAtSupplyAction::providedPorts()
+{
+  return {
+    BT::InputPort<double>("x", 2.0, "补给点x坐标"),
+    BT::InputPort<double>("y", 1.0, "补给点y坐标"),
+    BT::InputPort<double>("z", 1.0, "导航目标z坐标"),
+    BT::InputPort<double>("yaw", 0.0, "补给点目标朝向"),
+    BT::InputPort<std::string>("frame_id", "map", "导航参考坐标系"),
+    BT::InputPort<double>("tolerance", 0.15, "补给点到达容差"),
+    BT::InputPort<int>("health_threshold", 200, "结束回血行为的血量阈值")};
+}
+
+BT::NodeStatus RecoverAtSupplyAction::onStart()
+{
+  const auto x = getInput<double>("x");
+  const auto y = getInput<double>("y");
+  const auto z = getInput<double>("z");
+  const auto yaw = getInput<double>("yaw");
+  const auto frame_id = getInput<std::string>("frame_id");
+  const auto tolerance = getInput<double>("tolerance");
+  const auto threshold = getInput<int>("health_threshold");
+  if (!x || !y || !z || !yaw || !frame_id || !tolerance || !threshold ||
+    !std::isfinite(x.value()) || !std::isfinite(y.value()) ||
+    !std::isfinite(yaw.value()) || std::abs(z.value() - 1.0) > 1e-6 ||
+    frame_id.value().empty() || tolerance.value() <= 0.0 ||
+    !validRecoveryThreshold(threshold.value()))
+  {
+    RCLCPP_ERROR(decision_node_.get_logger(), "RecoverAtSupply received invalid ports");
+    return BT::NodeStatus::FAILURE;
+  }
+  supply_x_ = x.value();
+  supply_y_ = y.value();
+  supply_yaw_ = yaw.value();
+  frame_id_ = frame_id.value();
+  tolerance_ = tolerance.value();
+  health_threshold_ = threshold.value();
+  waiting_at_supply_ = false;
+  publishSupplyGoal();
+  return updateRecovery();
+}
+
+BT::NodeStatus RecoverAtSupplyAction::onRunning() {return updateRecovery();}
+
+void RecoverAtSupplyAction::onHalted() {disableNavigation(waiting_at_supply_);}
+
+BT::NodeStatus RecoverAtSupplyAction::updateRecovery()
+{
+  const RefereeState referee = decision_node_.getRefereeState();
+  if (!needsHealthRecovery(
+      referee.received, referee.game_period, referee.sentry_hp, health_threshold_))
+  {
+    disableNavigation(waiting_at_supply_);
+    return BT::NodeStatus::SUCCESS;
+  }
+  const LocalizationState localization = decision_node_.getLocalizationState();
+  if (!localization.received) {
+    return BT::NodeStatus::RUNNING;
+  }
+  if (goalReached(
+      localization.x, localization.y, supply_x_, supply_y_, tolerance_))
+  {
+    if (!waiting_at_supply_) {
+      waiting_at_supply_ = true;
+      disableNavigation(true);
+    }
+    return BT::NodeStatus::RUNNING;
+  }
+  if (waiting_at_supply_) {
+    waiting_at_supply_ = false;
+    publishSupplyGoal();
+  }
+  return BT::NodeStatus::RUNNING;
+}
+
+void RecoverAtSupplyAction::publishSupplyGoal()
+{
+  NavigationCommand command;
+  command.enabled = true;
+  command.has_goal = true;
+  command.reached = false;
+  command.frame_id = frame_id_;
+  command.x = supply_x_;
+  command.y = supply_y_;
+  command.yaw = supply_yaw_;
+  decision_node_.setNavigationCommand(command);
+}
+
+void RecoverAtSupplyAction::disableNavigation(bool reached)
+{
+  const NavigationCommand current = decision_node_.getNavigationCommand();
+  if (std::abs(current.x - supply_x_) <= 1e-9 &&
+    std::abs(current.y - supply_y_) <= 1e-9)
+  {
+    NavigationCommand command = current;
+    command.enabled = false;
+    command.reached = reached;
+    decision_node_.setNavigationCommand(command);
+  }
+}
+
 void registerDecisionNodes(
   BT::BehaviorTreeFactory & factory, DecisionProcessNode & decision_node)
 {
@@ -741,6 +1043,32 @@ void registerDecisionNodes(
     "EvadeUntilSafe",
     [&decision_node](const std::string & name, const BT::NodeConfig & config) {
       return std::make_unique<EvadeUntilSafeAction>(name, config, decision_node);
+    });
+  factory.registerBuilder<PatrolRouteAction>(
+    "PatrolRoute",
+    [&decision_node](const std::string & name, const BT::NodeConfig & config) {
+      return std::make_unique<PatrolRouteAction>(name, config, decision_node);
+    });
+  factory.registerBuilder<UpdateSpinModeAction>(
+    "UpdateSpinMode",
+    [&decision_node](const std::string & name, const BT::NodeConfig & config) {
+      return std::make_unique<UpdateSpinModeAction>(name, config, decision_node);
+    });
+  factory.registerBuilder<UpdateGimbalModeAction>(
+    "UpdateGimbalMode",
+    [&decision_node](const std::string & name, const BT::NodeConfig & config) {
+      return std::make_unique<UpdateGimbalModeAction>(name, config, decision_node);
+    });
+  factory.registerNodeType<KeepRunningAction>("KeepRunning");
+  factory.registerBuilder<LowHealthCondition>(
+    "LowHealth",
+    [&decision_node](const std::string & name, const BT::NodeConfig & config) {
+      return std::make_unique<LowHealthCondition>(name, config, decision_node);
+    });
+  factory.registerBuilder<RecoverAtSupplyAction>(
+    "RecoverAtSupply",
+    [&decision_node](const std::string & name, const BT::NodeConfig & config) {
+      return std::make_unique<RecoverAtSupplyAction>(name, config, decision_node);
     });
 }
 
