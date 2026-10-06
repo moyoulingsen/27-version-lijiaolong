@@ -8,9 +8,9 @@
 #include "decision_process/msg/desicion_send_data.hpp"
 
 /*
-- 节点职责：只订阅并原样打印决策节点输出，不发布输入。
-- 不保存预期结果，不比较坐标，不判断通过或失败。
-- 每收到一帧就打印一帧，用于观察约 0.1 秒周期的真实输出消息流。
+- 五个消息端测试共用的输出监视器。
+- 只订阅并原样打印决策输出，不保存预期值，不判断通过或失败。
+- 每收到一帧就打印一帧，用于检查约 0.1 秒周期的真实消息流。
  */
 class DecisionOutputStreamMonitor : public rclcpp::Node
 {
@@ -54,11 +54,10 @@ public:
           get_logger(),
           "TX /decision_to_autoaim color=%u target=%u yaw=%.3f",
           static_cast<unsigned int>(msg->color),
-          static_cast<unsigned int>(msg->target),
-          msg->decide_yaw);
+          static_cast<unsigned int>(msg->target), msg->decide_yaw);
       });
 
-    RCLCPP_INFO(get_logger(), "输出监视器已启动：原样打印所有决策输出，不做自动判断");
+    RCLCPP_INFO(get_logger(), "输出监视器已启动：原样打印所有决策输出");
   }
 
 private:

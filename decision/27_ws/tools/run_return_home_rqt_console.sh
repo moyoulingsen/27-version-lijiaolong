@@ -24,9 +24,9 @@ if [[ -n "${CONDA_PREFIX:-}" ]]; then
   echo "[环境隔离] 已忽略 Conda Python，ROS 工具使用系统 Python。"
 fi
 
-# 必须与 run_return_home_message_flow.sh 使用相同的 ROS 域。
-export ROS_DOMAIN_ID="${RETURN_HOME_ROS_DOMAIN_ID:-27}"
-export ROS_AUTOMATIC_DISCOVERY_RANGE="${RETURN_HOME_DISCOVERY_RANGE:-LOCALHOST}"
+# 必须与消息端一键启动脚本使用相同的 ROS 域。
+export ROS_DOMAIN_ID="${DECISION_MESSAGE_FLOW_ROS_DOMAIN_ID:-${RETURN_HOME_ROS_DOMAIN_ID:-27}}"
+export ROS_AUTOMATIC_DISCOVERY_RANGE="${DECISION_MESSAGE_FLOW_DISCOVERY_RANGE:-${RETURN_HOME_DISCOVERY_RANGE:-LOCALHOST}}"
 
 source /opt/ros/jazzy/setup.bash
 
@@ -43,8 +43,8 @@ echo "[测试隔离] ROS_DOMAIN_ID=${ROS_DOMAIN_ID}"
 echo "[测试隔离] ROS_AUTOMATIC_DISCOVERY_RANGE=${ROS_AUTOMATIC_DISCOVERY_RANGE}"
 echo "[观察工具] 只接收本机当前测试域中的 ROS 数据。"
 
-BAG_ROOT="${WORKSPACE_ROOT}/log/return_home_bags"
-BAG_OUTPUT="${BAG_ROOT}/return_home_run_$(date +%Y%m%d_%H%M%S)"
+BAG_ROOT="${WORKSPACE_ROOT}/log/decision_message_flow_bags"
+BAG_OUTPUT="${BAG_ROOT}/message_flow_run_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "${BAG_ROOT}"
 
 PIDS=()
@@ -111,6 +111,6 @@ else
 fi
 
 echo
-echo "[观察工具] 全部就绪。请在另一个终端运行返航消息流脚本。"
+echo "[观察工具] 全部就绪。请在另一个终端运行任一消息端测试脚本。"
 echo "[观察工具] 检查结束后在本终端按 Ctrl+C，rosbag 会正常收尾。"
 wait

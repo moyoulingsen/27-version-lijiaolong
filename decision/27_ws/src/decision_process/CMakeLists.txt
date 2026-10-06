@@ -65,7 +65,7 @@ ament_target_dependencies(output_monitor
 target_link_libraries(output_monitor "${cpp_typesupport_target}")
 
 add_executable(return_home_input_publisher
-  "test/2.data layer/return_home_input_publisher.cpp"
+  "test/2.data layer/01_return_home/return_home_input_publisher.cpp"
 )
 ament_target_dependencies(return_home_input_publisher
   nav_msgs
@@ -74,7 +74,7 @@ ament_target_dependencies(return_home_input_publisher
 target_link_libraries(return_home_input_publisher "${cpp_typesupport_target}")
 
 add_executable(decision_output_stream_monitor
-  "test/2.data layer/decision_output_stream_monitor.cpp"
+  "test/2.data layer/common/decision_output_stream_monitor.cpp"
 )
 ament_target_dependencies(decision_output_stream_monitor
   geometry_msgs
@@ -82,17 +82,50 @@ ament_target_dependencies(decision_output_stream_monitor
 )
 target_link_libraries(decision_output_stream_monitor "${cpp_typesupport_target}")
 
+add_executable(posture_input_publisher
+  "test/2.data layer/02_posture/posture_input_publisher.cpp"
+)
+ament_target_dependencies(posture_input_publisher nav_msgs rclcpp)
+target_link_libraries(posture_input_publisher "${cpp_typesupport_target}")
+
+add_executable(attack_outpost_input_publisher
+  "test/2.data layer/03_attack_outpost/attack_outpost_input_publisher.cpp"
+)
+ament_target_dependencies(attack_outpost_input_publisher nav_msgs rclcpp)
+target_link_libraries(attack_outpost_input_publisher "${cpp_typesupport_target}")
+
+add_executable(no_ammo_input_publisher
+  "test/2.data layer/04_no_ammo/no_ammo_input_publisher.cpp"
+)
+ament_target_dependencies(no_ammo_input_publisher nav_msgs rclcpp)
+target_link_libraries(no_ammo_input_publisher "${cpp_typesupport_target}")
+
+add_executable(dodge_input_publisher
+  "test/2.data layer/05_dodge/dodge_input_publisher.cpp"
+)
+ament_target_dependencies(dodge_input_publisher nav_msgs rclcpp)
+target_link_libraries(dodge_input_publisher "${cpp_typesupport_target}")
+
 install(TARGETS
   decision_process_node
   test_data_publisher
   output_monitor
   return_home_input_publisher
   decision_output_stream_monitor
+  posture_input_publisher
+  attack_outpost_input_publisher
+  no_ammo_input_publisher
+  dodge_input_publisher
   DESTINATION lib/${PROJECT_NAME}
 )
 
 install(FILES
-  "test/2.data layer/test_return_home_message_flow.launch.py"
+  "test/2.data layer/test_decision_message_flow.launch.py"
+  "test/2.data layer/01_return_home/test_return_home_message_flow.launch.py"
+  "test/2.data layer/02_posture/test_posture_message_flow.launch.py"
+  "test/2.data layer/03_attack_outpost/test_attack_outpost_message_flow.launch.py"
+  "test/2.data layer/04_no_ammo/test_no_ammo_message_flow.launch.py"
+  "test/2.data layer/05_dodge/test_dodge_message_flow.launch.py"
   DESTINATION share/${PROJECT_NAME}/launch
 )
 
