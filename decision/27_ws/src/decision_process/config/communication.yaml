@@ -2,7 +2,7 @@ decision_process:
   ros__parameters:
     publish_rate_hz: 20.0
 
-    # 当前启用任务1至10的上层综合树。
+    # 当前启用任务1至9的上层综合树。
     behavior_tree_enabled: true
     behavior_tree_tick_rate_hz: 20.0
     # 留空时使用安装目录中的 behavior_trees/decision_master.xml。

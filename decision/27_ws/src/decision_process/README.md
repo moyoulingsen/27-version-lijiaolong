@@ -2,11 +2,11 @@
 
 这个功能包提供 ROS 2 通信层，并开始按任务逐个接入 BehaviorTree.CPP 子树。
 
-当前已经独立完成前 5 个任务：归位、姿态切换、打前哨、无弹量行为和躲避行为。每个任务都有单独的 Groot2 XML、逻辑说明和测试。
+当前已经实现 9 个编号任务。姿态切换是多个任务共用的执行能力，不再作为独立任务编号或独立子树。
 
-五个任务 XML 只定义各自的标准子树，不在任务文件中放置
+各任务 XML 只定义各自的标准子树，不在任务文件中放置
 `AlwaysSuccess` 占位节点。上层组合树是
-`behavior_trees/decision_master.xml`，按“归位、打前哨、无弹量、躲避、姿态切换”的优先级调度这五个子树；后续综合任务应继续添加到上层树，而不是修改某个任务子树的根节点。
+`behavior_trees/decision_master.xml` 负责生产行为的组合、优先级调度和辅助控制；姿态由各行为按需调用共享节点，不再单独占用调度分支。
 
 ## 话题
 
@@ -35,12 +35,16 @@
 | 子树 | XML | 说明文档 |
 | --- | --- | --- |
 | 01 归位 | `behavior_trees/01_return_home.xml` | `docs/behavior_trees/01_return_home.md` |
-| 02 姿态切换 | `behavior_trees/02_posture_switch.xml` | `docs/behavior_trees/02_posture_switch.md` |
-| 03 打前哨 | `behavior_trees/03_attack_outpost.xml` | `docs/behavior_trees/03_attack_outpost.md` |
-| 04 无弹量行为 | `behavior_trees/04_no_ammo.xml` | `docs/behavior_trees/04_no_ammo.md` |
-| 05 躲避行为 | `behavior_trees/05_dodge.xml` | `docs/behavior_trees/05_dodge.md` |
+| 02 打前哨 | `behavior_trees/02_attack_outpost.xml` | `docs/behavior_trees/02_attack_outpost.md` |
+| 03 无弹量行为 | `behavior_trees/03_no_ammo.xml` | `docs/behavior_trees/03_no_ammo.md` |
+| 04 躲避行为 | `behavior_trees/04_dodge.xml` | `docs/behavior_trees/04_dodge.md` |
+| 05 巡逻行为 | `behavior_trees/05_patrol.xml` | `docs/behavior_trees/05_patrol.md` |
+| 06 小陀螺控制 | `behavior_trees/06_spin_control.xml` | `docs/behavior_trees/06_spin_control.md` |
+| 07 云台控制 | `behavior_trees/07_gimbal_control.xml` | `docs/behavior_trees/07_gimbal_control.md` |
+| 08 固定阈值回血 | `behavior_trees/08_low_health_recovery.xml` | `docs/behavior_trees/08_low_health_recovery.md` |
+| 09 XML 血量阈值参数 | `behavior_trees/09_health_threshold_parameter.xml` | `docs/behavior_trees/09_health_threshold_parameter.md` |
 
-上层五任务树：`behavior_trees/decision_master.xml`。它通过 `<include>` 引入上述五个文件，主树只负责优先级调度。
+上层综合树为 `behavior_trees/decision_master.xml`。其中 09 是验证 XML 参数可配置性的专用树，不参与生产主树调度。
 
 归位触发方式不是简单判断 `time==0`，而是记录比赛曾经进入阶段 2，随后检测到退出阶段 2，避免赛前误触发。
 

@@ -12,23 +12,21 @@ from launch_ros.actions import Node
 SCENARIOS = {
     "1": ("return_home", "return_home_input_publisher", 3),
     "return_home": ("return_home", "return_home_input_publisher", 3),
-    "2": ("posture", "posture_input_publisher", 1),
-    "posture": ("posture", "posture_input_publisher", 1),
-    "3": ("attack_outpost", "attack_outpost_input_publisher", 3),
+    "2": ("attack_outpost", "attack_outpost_input_publisher", 3),
     "attack_outpost": ("attack_outpost", "attack_outpost_input_publisher", 3),
-    "4": ("no_ammo", "no_ammo_input_publisher", 3),
+    "3": ("no_ammo", "no_ammo_input_publisher", 3),
     "no_ammo": ("no_ammo", "no_ammo_input_publisher", 3),
-    "5": ("dodge", "dodge_input_publisher", 1),
+    "4": ("dodge", "dodge_input_publisher", 1),
     "dodge": ("dodge", "dodge_input_publisher", 1),
-    "6": ("patrol", "patrol_input_publisher", 3),
+    "5": ("patrol", "patrol_input_publisher", 3),
     "patrol": ("patrol", "patrol_input_publisher", 3),
-    "7": ("spin_control", "spin_control_input_publisher", 3),
+    "6": ("spin_control", "spin_control_input_publisher", 3),
     "spin_control": ("spin_control", "spin_control_input_publisher", 3),
-    "8": ("gimbal_control", "gimbal_control_input_publisher", 1),
+    "7": ("gimbal_control", "gimbal_control_input_publisher", 1),
     "gimbal_control": ("gimbal_control", "gimbal_control_input_publisher", 1),
-    "9": ("low_health_recovery", "low_health_recovery_input_publisher", 3),
+    "8": ("low_health_recovery", "low_health_recovery_input_publisher", 3),
     "low_health_recovery": ("low_health_recovery", "low_health_recovery_input_publisher", 3),
-    "10": ("health_threshold_parameter", "health_threshold_parameter_input_publisher", 3),
+    "9": ("health_threshold_parameter", "health_threshold_parameter_input_publisher", 3),
     "health_threshold_parameter": ("health_threshold_parameter", "health_threshold_parameter_input_publisher", 3),
 }
 
@@ -36,12 +34,12 @@ SCENARIOS = {
 def build_scenario(context):
     requested = LaunchConfiguration("scenario").perform(context).strip().lower()
     if requested not in SCENARIOS:
-        valid = ", ".join(["1..10", "return_home", "posture", "attack_outpost", "no_ammo", "dodge", "patrol", "spin_control", "gimbal_control", "low_health_recovery", "health_threshold_parameter"])
+        valid = ", ".join(["1..9", "return_home", "attack_outpost", "no_ammo", "dodge", "patrol", "spin_control", "gimbal_control", "low_health_recovery", "health_threshold_parameter"])
         raise RuntimeError(f"未知消息测试场景 '{requested}'，可用值：{valid}")
 
     scenario_name, input_executable, default_posture = SCENARIOS[requested]
     package_share = get_package_share_directory("decision_process")
-    tree_name = "10_health_threshold_parameter.xml" if scenario_name == "health_threshold_parameter" else "decision_master.xml"
+    tree_name = "09_health_threshold_parameter.xml" if scenario_name == "health_threshold_parameter" else "decision_master.xml"
     production_tree = os.path.join(package_share, "behavior_trees", tree_name)
 
     decision_node = Node(

@@ -82,56 +82,50 @@ ament_target_dependencies(decision_output_stream_monitor
 )
 target_link_libraries(decision_output_stream_monitor "${cpp_typesupport_target}")
 
-add_executable(posture_input_publisher
-  "test/2.data layer/02_posture/posture_input_publisher.cpp"
-)
-ament_target_dependencies(posture_input_publisher nav_msgs rclcpp)
-target_link_libraries(posture_input_publisher "${cpp_typesupport_target}")
-
 add_executable(attack_outpost_input_publisher
-  "test/2.data layer/03_attack_outpost/attack_outpost_input_publisher.cpp"
+  "test/2.data layer/02_attack_outpost/attack_outpost_input_publisher.cpp"
 )
 ament_target_dependencies(attack_outpost_input_publisher nav_msgs rclcpp)
 target_link_libraries(attack_outpost_input_publisher "${cpp_typesupport_target}")
 
 add_executable(no_ammo_input_publisher
-  "test/2.data layer/04_no_ammo/no_ammo_input_publisher.cpp"
+  "test/2.data layer/03_no_ammo/no_ammo_input_publisher.cpp"
 )
 ament_target_dependencies(no_ammo_input_publisher nav_msgs rclcpp)
 target_link_libraries(no_ammo_input_publisher "${cpp_typesupport_target}")
 
 add_executable(dodge_input_publisher
-  "test/2.data layer/05_dodge/dodge_input_publisher.cpp"
+  "test/2.data layer/04_dodge/dodge_input_publisher.cpp"
 )
 ament_target_dependencies(dodge_input_publisher nav_msgs rclcpp)
 target_link_libraries(dodge_input_publisher "${cpp_typesupport_target}")
 
 add_executable(patrol_input_publisher
-  "test/2.data layer/06_patrol/patrol_input_publisher.cpp"
+  "test/2.data layer/05_patrol/patrol_input_publisher.cpp"
 )
 ament_target_dependencies(patrol_input_publisher nav_msgs rclcpp)
 target_link_libraries(patrol_input_publisher "${cpp_typesupport_target}")
 
 add_executable(spin_control_input_publisher
-  "test/2.data layer/07_spin_control/spin_control_input_publisher.cpp"
+  "test/2.data layer/06_spin_control/spin_control_input_publisher.cpp"
 )
 ament_target_dependencies(spin_control_input_publisher nav_msgs rclcpp)
 target_link_libraries(spin_control_input_publisher "${cpp_typesupport_target}")
 
 add_executable(gimbal_control_input_publisher
-  "test/2.data layer/08_gimbal_control/gimbal_control_input_publisher.cpp"
+  "test/2.data layer/07_gimbal_control/gimbal_control_input_publisher.cpp"
 )
 ament_target_dependencies(gimbal_control_input_publisher nav_msgs rclcpp)
 target_link_libraries(gimbal_control_input_publisher "${cpp_typesupport_target}")
 
 add_executable(low_health_recovery_input_publisher
-  "test/2.data layer/09_low_health_recovery/low_health_recovery_input_publisher.cpp"
+  "test/2.data layer/08_low_health_recovery/low_health_recovery_input_publisher.cpp"
 )
 ament_target_dependencies(low_health_recovery_input_publisher nav_msgs rclcpp)
 target_link_libraries(low_health_recovery_input_publisher "${cpp_typesupport_target}")
 
 add_executable(health_threshold_parameter_input_publisher
-  "test/2.data layer/10_health_threshold_parameter/health_threshold_parameter_input_publisher.cpp"
+  "test/2.data layer/09_health_threshold_parameter/health_threshold_parameter_input_publisher.cpp"
 )
 ament_target_dependencies(health_threshold_parameter_input_publisher nav_msgs rclcpp)
 target_link_libraries(health_threshold_parameter_input_publisher "${cpp_typesupport_target}")
@@ -142,7 +136,6 @@ install(TARGETS
   output_monitor
   return_home_input_publisher
   decision_output_stream_monitor
-  posture_input_publisher
   attack_outpost_input_publisher
   no_ammo_input_publisher
   dodge_input_publisher
@@ -157,15 +150,14 @@ install(TARGETS
 install(FILES
   "test/2.data layer/test_decision_message_flow.launch.py"
   "test/2.data layer/01_return_home/test_return_home_message_flow.launch.py"
-  "test/2.data layer/02_posture/test_posture_message_flow.launch.py"
-  "test/2.data layer/03_attack_outpost/test_attack_outpost_message_flow.launch.py"
-  "test/2.data layer/04_no_ammo/test_no_ammo_message_flow.launch.py"
-  "test/2.data layer/05_dodge/test_dodge_message_flow.launch.py"
-  "test/2.data layer/06_patrol/test_patrol_message_flow.launch.py"
-  "test/2.data layer/07_spin_control/test_spin_control_message_flow.launch.py"
-  "test/2.data layer/08_gimbal_control/test_gimbal_control_message_flow.launch.py"
-  "test/2.data layer/09_low_health_recovery/test_low_health_recovery_message_flow.launch.py"
-  "test/2.data layer/10_health_threshold_parameter/test_health_threshold_parameter_message_flow.launch.py"
+  "test/2.data layer/02_attack_outpost/test_attack_outpost_message_flow.launch.py"
+  "test/2.data layer/03_no_ammo/test_no_ammo_message_flow.launch.py"
+  "test/2.data layer/04_dodge/test_dodge_message_flow.launch.py"
+  "test/2.data layer/05_patrol/test_patrol_message_flow.launch.py"
+  "test/2.data layer/06_spin_control/test_spin_control_message_flow.launch.py"
+  "test/2.data layer/07_gimbal_control/test_gimbal_control_message_flow.launch.py"
+  "test/2.data layer/08_low_health_recovery/test_low_health_recovery_message_flow.launch.py"
+  "test/2.data layer/09_health_threshold_parameter/test_health_threshold_parameter_message_flow.launch.py"
   DESTINATION share/${PROJECT_NAME}/launch
 )
 

@@ -37,7 +37,7 @@ for package in nav2_controller nav2_navfn_planner; do
   fi
 done
 
-scenarios=(return_home posture attack_outpost no_ammo dodge)
+scenarios=(return_home attack_outpost no_ammo dodge)
 passed=0
 
 for scenario in "${scenarios[@]}"; do

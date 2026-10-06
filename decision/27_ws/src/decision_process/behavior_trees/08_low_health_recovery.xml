@@ -1,0 +1,50 @@
+<?xml version="1.0"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="LowHealthRecovery">
+    <ReactiveSequence name="LowHealthRecoverySequence">
+      <GameRunning/>
+      <SentryAlive/>
+      <LowHealth health_threshold="{health_threshold}"/>
+      <SetCombatIdle/>
+      <ApplyPosture requested_posture="3" cooldown_sec="{posture_cooldown_sec}"
+                    applied_posture="{applied_posture}"/>
+      <RecoverAtSupply x="{supply_x}" y="{supply_y}" z="{goal_z}"
+                       yaw="{goal_yaw}" frame_id="{frame_id}"
+                       tolerance="{tolerance}"
+                       health_threshold="{health_threshold}"/>
+    </ReactiveSequence>
+  </BehaviorTree>
+  <TreeNodesModel>
+    <SubTree ID="LowHealthRecovery">
+      <input_port name="supply_x" default="2.0">补给点x坐标</input_port>
+      <input_port name="supply_y" default="1.0">补给点y坐标</input_port>
+      <input_port name="goal_z" default="1.0">导航目标z坐标</input_port>
+      <input_port name="goal_yaw" default="0.0">目标朝向</input_port>
+      <input_port name="frame_id" default="map">导航参考坐标系</input_port>
+      <input_port name="tolerance" default="0.15">补给点到达容差</input_port>
+      <input_port name="posture_cooldown_sec" default="5.0">姿态切换冷却</input_port>
+      <input_port name="health_threshold" default="200">触发回血的血量阈值</input_port>
+      <output_port name="applied_posture" default="{applied_posture}">实际姿态</output_port>
+    </SubTree>
+    <Condition ID="GameRunning" editable="true"/>
+    <Condition ID="SentryAlive" editable="true"/>
+    <Condition ID="LowHealth" editable="true">
+      <input_port name="health_threshold" default="200">1至400</input_port>
+    </Condition>
+    <Action ID="SetCombatIdle" editable="true"/>
+    <Action ID="ApplyPosture" editable="true">
+      <input_port name="requested_posture" default="3">1进攻、2防御、3移动</input_port>
+      <input_port name="cooldown_sec" default="5.0">姿态切换冷却秒数</input_port>
+      <output_port name="applied_posture">实际应用的姿态</output_port>
+    </Action>
+    <Action ID="RecoverAtSupply" editable="true">
+      <input_port name="x" default="2.0">补给点x坐标</input_port>
+      <input_port name="y" default="1.0">补给点y坐标</input_port>
+      <input_port name="z" default="1.0">目标z坐标</input_port>
+      <input_port name="yaw" default="0.0">目标朝向</input_port>
+      <input_port name="frame_id" default="map">导航参考坐标系</input_port>
+      <input_port name="tolerance" default="0.15">到达容差</input_port>
+      <input_port name="health_threshold" default="200">结束回血等待的阈值</input_port>
+    </Action>
+  </TreeNodesModel>
+</root>

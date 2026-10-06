@@ -37,7 +37,6 @@ from arena_data import load_snapshot  # noqa: E402
 
 STARTS = {
     "return_home": (14.0, 4.0, 0.0),
-    "posture": (4.971, 7.5, 0.0),
     "attack_outpost": (4.971, 7.5, 0.0),
     "no_ammo": (10.0, 4.0, 0.0),
     "dodge": (4.0, 5.0, 0.0),
@@ -268,9 +267,6 @@ class ScenarioDriver(Node):
         if self.scenario == "return_home":
             if elapsed >= 10.0 and planar_distance(self.position, (4.971, 7.5)) <= 0.18:
                 self._pass("game ended and sentry returned to (4.971, 7.5)")
-        elif self.scenario == "posture":
-            if self.serial_command is not None and self.serial_command.posture == 3:
-                self._pass("running-game posture output is movement posture 3")
         elif self.scenario == "attack_outpost":
             if planar_distance(self.position, (16.0, 11.0)) <= 0.22:
                 self._attack_reached = True
@@ -298,7 +294,7 @@ class ScenarioDriver(Node):
             if self._evade_goal_seen and self._evade_motion_seen and self._recovery_goal_seen:
                 self._pass("unseen damage caused movement, then normal goal resumed after quiet period")
 
-        timeout = 80.0 if self.scenario != "posture" else 20.0
+        timeout = 80.0
         if elapsed >= timeout and self.result_state == "RUNNING":
             self._fail("scenario timed out before all required evidence was observed")
 

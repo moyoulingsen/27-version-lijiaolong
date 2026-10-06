@@ -62,7 +62,7 @@ public:
      * - 期望结果：无待领弹药时关闭射击并前往站桩点；产生待领弹药后前往补给点；
      *   收到 ammo 增加反馈后结束领弹动作。
      * - 前置条件：综合主树中攻击前哨任务优先级更高，执行本场景前必须确保
-     *   hp_enemy[5] 为 0，或单独加载 04_no_ammo.xml，否则主树仍会执行攻击前哨任务。
+     *   hp_enemy[5] 为 0，或单独加载 03_no_ammo.xml，否则主树仍会执行攻击前哨任务。
      */
     simulate_no_ammo_ = declare_parameter<bool>("simulate_no_ammo", false);
 

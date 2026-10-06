@@ -20,14 +20,12 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 SCENARIO_TREE = {
     "return_home": "01_return_home.xml",
-    "posture": "02_posture_switch.xml",
-    "attack_outpost": "03_attack_outpost.xml",
-    "no_ammo": "04_no_ammo.xml",
-    "dodge": "05_dodge.xml",
+    "attack_outpost": "02_attack_outpost.xml",
+    "no_ammo": "03_no_ammo.xml",
+    "dodge": "04_dodge.xml",
 }
 SCENARIO_START = {
     "return_home": (14.0, 4.0, 0.0),
-    "posture": (4.971, 7.5, 0.0),
     "attack_outpost": (4.971, 7.5, 0.0),
     "no_ammo": (10.0, 4.0, 0.0),
     "dodge": (4.0, 5.0, 0.0),
@@ -133,7 +131,7 @@ def _launch_setup(context):
                     decision_share / "behavior_trees" / SCENARIO_TREE[scenario]
                 ),
                 "publish_goal": False,
-                "default_posture": 1 if scenario == "posture" else 3,
+                "default_posture": 3,
                 "default_tripod_mode": 1,
                 "default_shoot_mode": 0,
             },

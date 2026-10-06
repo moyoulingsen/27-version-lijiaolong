@@ -5,12 +5,12 @@
 set -eo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-echo "========== 消息端任务 1～10 总测试开始 =========="
-for scenario in return_home posture attack_outpost no_ammo dodge patrol spin_control gimbal_control low_health_recovery health_threshold_parameter; do
+echo "========== 消息端任务 1～9 总测试开始 =========="
+for scenario in return_home attack_outpost no_ammo dodge patrol spin_control gimbal_control low_health_recovery health_threshold_parameter; do
   echo
   echo "---------- 启动 ${scenario} ----------"
   bash "${SCRIPT_DIR}/run_decision_message_flow.sh" "${scenario}"
   export DECISION_MESSAGE_FLOW_SKIP_BUILD=1
 done
 echo
-echo "========== 消息端任务 1～10 总测试完成 =========="
+echo "========== 消息端任务 1～9 总测试完成 =========="

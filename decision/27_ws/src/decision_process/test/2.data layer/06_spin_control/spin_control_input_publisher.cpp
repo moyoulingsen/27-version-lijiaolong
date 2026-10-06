@@ -1,0 +1,66 @@
+#include <chrono>
+#include <functional>
+#include <memory>
+
+#include "nav_msgs/msg/odometry.hpp"
+#include "rclcpp/rclcpp.hpp"
+#include "decision_process/msg/autoaim_to_decision.hpp"
+#include "decision_process/msg/receive_data.hpp"
+
+using namespace std::chrono_literals;
+
+class SpinControlInputPublisher : public rclcpp::Node
+{
+public:
+  SpinControlInputPublisher()
+  : Node("spin_control_input_publisher"), start_(std::chrono::steady_clock::now())
+  {
+    const auto sensor_qos = rclcpp::SensorDataQoS();
+    const auto reliable_qos = rclcpp::QoS(10).reliable();
+    odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("/state_estimation", sensor_qos);
+    referee_pub_ = create_publisher<decision_process::msg::ReceiveData>("/serial_receive_data", reliable_qos);
+    autoaim_pub_ = create_publisher<decision_process::msg::AutoaimToDecision>("/autoaim_to_decision", sensor_qos);
+    timer_ = create_wall_timer(100ms, std::bind(&SpinControlInputPublisher::publishFrame, this));
+    RCLCPP_INFO(get_logger(), "任务6小陀螺：己方前哨血量从1000切换为0");
+  }
+
+private:
+  void publishFrame()
+  {
+    const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_).count();
+    nav_msgs::msg::Odometry odom;
+    odom.header.stamp = now(); odom.header.frame_id = "map";
+    odom.pose.pose.position.x = 4.0; odom.pose.pose.position.y = 4.0;
+    odom.pose.pose.orientation.w = 1.0;
+
+    decision_process::msg::ReceiveData referee;
+    referee.game_period = 2U; referee.time = 350U; referee.hp_sentry = 400U;
+    referee.color = 0U; referee.ammo = 200U;
+    referee.hp_outpost = t < 2.0 ? 1000U : 0U; referee.hp_base = 5000U;
+    referee.hp_enemy = {250U, 200U, 200U, 200U, 200U, 0U, 5000U, 400U};
+    referee.radar_data.assign(12U, 0.0F);
+
+    decision_process::msg::AutoaimToDecision autoaim;
+    autoaim.target.assign(9U, 0U); autoaim.target_distance.assign(9U, 0.0);
+    autoaim.target_polar_r.assign(9U, 0.0); autoaim.target_polar_angle.assign(9U, 0.0);
+
+    odom_pub_->publish(odom); referee_pub_->publish(referee); autoaim_pub_->publish(autoaim);
+    RCLCPP_INFO(get_logger(), "INPUT task=7 t=%.1f own_outpost_hp=%u expected_spin=%u",
+      t, static_cast<unsigned int>(referee.hp_outpost), t < 2.0 ? 0U : 1U);
+    if (t >= 4.0) {timer_->cancel(); rclcpp::shutdown();}
+  }
+
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
+  rclcpp::Publisher<decision_process::msg::ReceiveData>::SharedPtr referee_pub_;
+  rclcpp::Publisher<decision_process::msg::AutoaimToDecision>::SharedPtr autoaim_pub_;
+  rclcpp::TimerBase::SharedPtr timer_;
+  std::chrono::steady_clock::time_point start_;
+};
+
+int main(int argc, char * argv[])
+{
+  rclcpp::init(argc, argv);
+  rclcpp::spin(std::make_shared<SpinControlInputPublisher>());
+  rclcpp::shutdown();
+  return 0;
+}

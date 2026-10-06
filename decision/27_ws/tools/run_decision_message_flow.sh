@@ -1,23 +1,22 @@
 #!/usr/bin/env bash
 
 # 通用消息端测试入口。负责环境隔离、英文路径构建和场景启动。
-# 用法：bash run_decision_message_flow.sh <1..10|场景名称>
+# 用法：bash run_decision_message_flow.sh <1..9|场景名称>
 set -eo pipefail
 
 SCENARIO="${1:-}"
 case "${SCENARIO}" in
   1|return_home) SCENARIO_NAME="return_home"; TASK_LABEL="任务1 归位" ;;
-  2|posture) SCENARIO_NAME="posture"; TASK_LABEL="任务2 姿态" ;;
-  3|attack_outpost) SCENARIO_NAME="attack_outpost"; TASK_LABEL="任务3 打前哨" ;;
-  4|no_ammo) SCENARIO_NAME="no_ammo"; TASK_LABEL="任务4 无弹补给" ;;
-  5|dodge) SCENARIO_NAME="dodge"; TASK_LABEL="任务5 躲避" ;;
-  6|patrol) SCENARIO_NAME="patrol"; TASK_LABEL="任务6 巡逻" ;;
-  7|spin_control) SCENARIO_NAME="spin_control"; TASK_LABEL="任务7 小陀螺" ;;
-  8|gimbal_control) SCENARIO_NAME="gimbal_control"; TASK_LABEL="任务8 云台" ;;
-  9|low_health_recovery) SCENARIO_NAME="low_health_recovery"; TASK_LABEL="任务9 回血" ;;
-  10|health_threshold_parameter) SCENARIO_NAME="health_threshold_parameter"; TASK_LABEL="任务10 XML血量阈值" ;;
+  2|attack_outpost) SCENARIO_NAME="attack_outpost"; TASK_LABEL="任务2 打前哨" ;;
+  3|no_ammo) SCENARIO_NAME="no_ammo"; TASK_LABEL="任务3 无弹补给" ;;
+  4|dodge) SCENARIO_NAME="dodge"; TASK_LABEL="任务4 躲避" ;;
+  5|patrol) SCENARIO_NAME="patrol"; TASK_LABEL="任务5 巡逻" ;;
+  6|spin_control) SCENARIO_NAME="spin_control"; TASK_LABEL="任务6 小陀螺" ;;
+  7|gimbal_control) SCENARIO_NAME="gimbal_control"; TASK_LABEL="任务7 云台" ;;
+  8|low_health_recovery) SCENARIO_NAME="low_health_recovery"; TASK_LABEL="任务8 回血" ;;
+  9|health_threshold_parameter) SCENARIO_NAME="health_threshold_parameter"; TASK_LABEL="任务9 XML血量阈值" ;;
   *)
-    echo "用法：bash $0 <1|2|3|4|5|6|7|8|9|10|return_home|posture|attack_outpost|no_ammo|dodge|patrol|spin_control|gimbal_control|low_health_recovery|health_threshold_parameter>" >&2
+    echo "用法：bash $0 <1|2|3|4|5|6|7|8|9|return_home|attack_outpost|no_ammo|dodge|patrol|spin_control|gimbal_control|low_health_recovery|health_threshold_parameter>" >&2
     exit 2
     ;;
 esac

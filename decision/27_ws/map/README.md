@@ -57,10 +57,9 @@ ros2 launch rm_decision_sim simulation.launch.py scenario:=attack_outpost
 | 值 | XML | 自动验证点 |
 | --- | --- | --- |
 | `return_home` | `01_return_home.xml` | 比赛退出进行阶段后回到 `(4.971,7.5)` |
-| `posture` | `02_posture_switch.xml` | 进行阶段输出移动姿态 `3` |
-| `attack_outpost` | `03_attack_outpost.xml` | Nav2 到 `(16,11)`，选择 6 号、射击、前哨站归零 |
-| `no_ammo` | `04_no_ammo.xml` | 产生待领弹量后到 `(2,1)` 领取 100 发 |
-| `dodge` | `05_dodge.xml` | 视野外受伤后移动，安全期后恢复普通目标 |
+| `attack_outpost` | `02_attack_outpost.xml` | Nav2 到 `(16,11)`，选择 6 号、射击、前哨站归零 |
+| `no_ammo` | `03_no_ammo.xml` | 产生待领弹量后到 `(2,1)` 领取 100 发 |
+| `dodge` | `04_dodge.xml` | 视野外受伤后移动，安全期后恢复普通目标 |
 
 运行时可查看机读状态：
 
@@ -74,10 +73,10 @@ ros2 topic echo /simulation/status
 ros2 launch rm_decision_sim gazebo_only.launch.py
 ```
 
-## 批量验证 5 棵树
+## 批量验证 4 棵树
 
 ```bash
 bash map/validate_all.sh
 ```
 
-脚本使用无界面 Gazebo，每个场景最长 100 秒，最后输出 `Result: 5/5 scenarios passed`。失败时会保留 `/tmp/rm_<scenario>.*.log` 便于定位。
+脚本使用无界面 Gazebo，每个场景最长 100 秒，最后输出 `Result: 4/4 scenarios passed`。失败时会保留 `/tmp/rm_<scenario>.*.log` 便于定位。

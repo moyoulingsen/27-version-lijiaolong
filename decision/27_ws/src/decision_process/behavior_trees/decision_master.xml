@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <!--
-  任务1至10的上层综合树。
+  任务1至9的上层综合树。
 
   下面引入的文件定义各自的标准子树，可以在 Groot2 中独立查看；
   本文件只负责系统层面的组合和优先级调度。
@@ -9,18 +9,17 @@
 -->
 <root BTCPP_format="4" main_tree_to_execute="MainTree">
   <include path="01_return_home.xml"/>
-  <include path="02_posture_switch.xml"/>
-  <include path="03_attack_outpost.xml"/>
-  <include path="04_no_ammo.xml"/>
-  <include path="05_dodge.xml"/>
-  <include path="06_patrol.xml"/>
-  <include path="07_spin_control.xml"/>
-  <include path="08_gimbal_control.xml"/>
-  <include path="09_low_health_recovery.xml"/>
+  <include path="02_attack_outpost.xml"/>
+  <include path="03_no_ammo.xml"/>
+  <include path="04_dodge.xml"/>
+  <include path="05_patrol.xml"/>
+  <include path="06_spin_control.xml"/>
+  <include path="07_gimbal_control.xml"/>
+  <include path="08_low_health_recovery.xml"/>
 
   <BehaviorTree ID="MainTree">
     <Parallel name="BehaviorAndAuxControllers" success_count="1" failure_count="2">
-      <ReactiveFallback name="TenTaskPriority">
+      <ReactiveFallback name="NineTaskPriority">
       <!-- 最高优先级：比赛退出阶段 2 后，无论剩余血量都返回启动点。 -->
       <SubTree ID="ReturnHome"
                home_x="4.971" home_y="7.5" home_z="1.0"
@@ -67,12 +66,6 @@
                posture_cooldown_sec="5.0"
                applied_posture="{applied_posture}"/>
 
-      <!-- 比赛进行阶段内的最低优先级行为：应用请求的或默认的姿态。
-           比赛不在阶段 2 时该子树主动失败，使上层树能够反映未激活状态，
-           而不是使用无条件成功伪造任务完成。 -->
-      <SubTree ID="PostureManager"
-               requested_posture="3" cooldown_sec="5.0"
-               applied_posture="{applied_posture}"/>
       </ReactiveFallback>
       <ReactiveSequence name="AuxiliaryControllers">
         <SubTree ID="SpinController" enabled_mode="1"/>

@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <include path="05_patrol.xml"/>
+  <include path="08_low_health_recovery.xml"/>
+  <BehaviorTree ID="MainTree">
+    <ReactiveFallback name="ConfigurableHealthThresholdTest">
+      <SubTree ID="LowHealthRecovery"
+               supply_x="2.0" supply_y="1.0"
+               goal_z="1.0" goal_yaw="0.0" frame_id="map"
+               tolerance="0.15" posture_cooldown_sec="5.0"
+               health_threshold="260"
+               applied_posture="{applied_posture}"/>
+      <SubTree ID="PatrolBehavior"
+               points="5.0,5.0;9.0,5.0"
+               goal_z="1.0" goal_yaw="0.0" frame_id="map"
+               tolerance="0.15"
+               min_x="0.0" max_x="28.0" min_y="0.0" max_y="15.0"
+               posture_cooldown_sec="5.0"
+               applied_posture="{applied_posture}"/>
+    </ReactiveFallback>
+  </BehaviorTree>
+</root>
