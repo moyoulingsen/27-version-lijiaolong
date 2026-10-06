@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 
+# 使用独立 ROS 域，避免接收同一网络中其他仿真系统的节点和 /rosout 日志。
+# 如需使用其他域，可在调用脚本前显式设置 ROS_DOMAIN_ID 覆盖默认值。
+export ROS_DOMAIN_ID="${RETURN_HOME_ROS_DOMAIN_ID:-27}"
+export ROS_AUTOMATIC_DISCOVERY_RANGE="${RETURN_HOME_DISCOVERY_RANGE:-LOCALHOST}"
+
+echo "[测试隔离] ROS_DOMAIN_ID=${ROS_DOMAIN_ID}"
+echo "[测试隔离] ROS_AUTOMATIC_DISCOVERY_RANGE=${ROS_AUTOMATIC_DISCOVERY_RANGE}"
+
 set -eo pipefail
 
 SOURCE_WORKSPACE="/home/lijiaolong/桌面/27-version-lijiaolong/decision/27_ws"
