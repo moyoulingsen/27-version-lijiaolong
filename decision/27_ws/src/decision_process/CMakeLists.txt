@@ -64,11 +64,36 @@ ament_target_dependencies(output_monitor
 )
 target_link_libraries(output_monitor "${cpp_typesupport_target}")
 
+add_executable(return_home_input_publisher
+  "test/2.data layer/return_home_input_publisher.cpp"
+)
+ament_target_dependencies(return_home_input_publisher
+  nav_msgs
+  rclcpp
+)
+target_link_libraries(return_home_input_publisher "${cpp_typesupport_target}")
+
+add_executable(decision_output_stream_monitor
+  "test/2.data layer/decision_output_stream_monitor.cpp"
+)
+ament_target_dependencies(decision_output_stream_monitor
+  geometry_msgs
+  rclcpp
+)
+target_link_libraries(decision_output_stream_monitor "${cpp_typesupport_target}")
+
 install(TARGETS
   decision_process_node
   test_data_publisher
   output_monitor
+  return_home_input_publisher
+  decision_output_stream_monitor
   DESTINATION lib/${PROJECT_NAME}
+)
+
+install(FILES
+  "test/2.data layer/test_return_home_message_flow.launch.py"
+  DESTINATION share/${PROJECT_NAME}/launch
 )
 
 install(DIRECTORY
@@ -85,27 +110,42 @@ install(DIRECTORY include/
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(test_return_home_logic test/test_return_home_logic.cpp)
+  ament_add_gtest(
+    test_return_home_logic
+    "test/1.logical layer/test_return_home_logic.cpp"
+  )
   target_include_directories(test_return_home_logic PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
   )
-  ament_add_gtest(test_posture_logic test/test_posture_logic.cpp)
+  ament_add_gtest(
+    test_posture_logic
+    "test/1.logical layer/test_posture_logic.cpp"
+  )
   target_include_directories(test_posture_logic PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
   )
-  ament_add_gtest(test_attack_outpost_logic test/test_attack_outpost_logic.cpp)
+  ament_add_gtest(
+    test_attack_outpost_logic
+    "test/1.logical layer/test_attack_outpost_logic.cpp"
+  )
   target_include_directories(test_attack_outpost_logic PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
   )
-  ament_add_gtest(test_ammo_reserve_logic test/test_ammo_reserve_logic.cpp)
+  ament_add_gtest(
+    test_ammo_reserve_logic
+    "test/1.logical layer/test_ammo_reserve_logic.cpp"
+  )
   target_include_directories(test_ammo_reserve_logic PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
   )
-  ament_add_gtest(test_dodge_logic test/test_dodge_logic.cpp)
+  ament_add_gtest(
+    test_dodge_logic
+    "test/1.logical layer/test_dodge_logic.cpp"
+  )
   target_include_directories(test_dodge_logic PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>

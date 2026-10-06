@@ -7,6 +7,16 @@
 namespace decision_process
 {
 
+/*
+- 测试对象：EnemyOutpostAlive、EnemyOutpostDestroyed 条件节点和 EngageOutpost 动作节点。
+- 检验内容：前哨站血量数据有效性与存活状态判定；
+- 敌方装甲颜色选择；
+- 目标不可见时的扫描策略；
+- 锁定目标且有弹药时的射击策略；
+- 无弹药、距离非法或队伍颜色非法时的安全处理。
+ */
+
+// 验证只有收到有效敌方血量数据后，才能判定前哨站存活或被摧毁。
 TEST(AttackOutpostLogic, RequiresValidEnemyHpBeforeCompletion)
 {
   EXPECT_EQ(
@@ -23,6 +33,7 @@ TEST(AttackOutpostLogic, RequiresValidEnemyHpBeforeCompletion)
     EnemyOutpostStatus::kDestroyed);
 }
 
+// 验证根据己方颜色选择相反的敌方装甲颜色，并拒绝非法队伍颜色。
 TEST(AttackOutpostLogic, SelectsOppositeArmorColor)
 {
   uint8_t color = 99U;
@@ -33,6 +44,7 @@ TEST(AttackOutpostLogic, SelectsOppositeArmorColor)
   EXPECT_FALSE(enemyArmorColor(2U, color));
 }
 
+// 验证前哨站不可见时进入扫描状态，而不会直接开火。
 TEST(AttackOutpostLogic, ScansWhenOutpostIsNotVisible)
 {
   const auto decision = decideOutpostEngagement(0U, 200U, true, 0U, 0.0);
@@ -43,6 +55,7 @@ TEST(AttackOutpostLogic, ScansWhenOutpostIsNotVisible)
   EXPECT_EQ(decision.shoot_mode, 0U);
 }
 
+// 验证仅在有效锁定前哨站且弹药充足时允许射击。
 TEST(AttackOutpostLogic, ShootsOnlyWithValidLockAndAmmo)
 {
   auto decision = decideOutpostEngagement(1U, 20U, true, 1U, 4.5);
@@ -56,6 +69,7 @@ TEST(AttackOutpostLogic, ShootsOnlyWithValidLockAndAmmo)
   EXPECT_EQ(decision.shoot_mode, 0U);
 }
 
+// 验证距离或队伍颜色非法时，动作节点采用安全输出或拒绝决策。
 TEST(AttackOutpostLogic, RejectsInvalidDistanceAndTeamColor)
 {
   auto decision = decideOutpostEngagement(
