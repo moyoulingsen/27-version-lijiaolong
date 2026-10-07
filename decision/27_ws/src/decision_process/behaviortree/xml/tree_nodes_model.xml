@@ -1,0 +1,170 @@
+<?xml version="1.0"?>
+<root BTCPP_format="4">
+  <!-- Generated from the providedPorts() declarations in the decision nodes. -->
+  <TreeNodesModel>
+    <Action ID="AdvancePatrolPoint">
+      <input_port name="index" type="int" default="0"/>
+      <input_port name="point_count" type="int"/>
+      <output_port name="next_index" type="int"/>
+    </Action>
+    <Action ID="AimAndFire">
+      <input_port name="target_id" type="std::string"/>
+      <input_port name="target_visible" type="bool" default="false"/>
+      <input_port name="gimbal_aligned" type="bool" default="false"/>
+      <input_port name="damage_confirmed" type="bool" default="false"/>
+      <input_port name="target_destroyed" type="bool" default="false"/>
+      <input_port name="target_lost_seconds" type="double" default="0.0"/>
+      <input_port name="lost_timeout_seconds" type="double" default="5.0"/>
+      <output_port name="posture_command" type="int"/>
+      <output_port name="gyro_mode_command" type="double"/>
+      <output_port name="gimbal_enabled_command" type="bool"/>
+      <output_port name="gimbal_rotate_command" type="bool"/>
+      <output_port name="target_lock_command" type="bool"/>
+      <output_port name="fire_command" type="bool"/>
+    </Action>
+    <Condition ID="AmmoIncreased">
+      <input_port name="ammo_count" type="int" default="0"/>
+      <input_port name="ammo_before" type="int" default="0"/>
+    </Condition>
+    <Action ID="BuildAttackTargetList">
+      <input_port name="targets" type="std::string"/>
+      <input_port name="persistent_targets" type="std::string"/>
+      <output_port name="attack_targets" type="std::string"/>
+      <output_port name="target_count" type="int"/>
+      <output_port name="visible_target_count" type="int"/>
+      <output_port name="in_range_count" type="int"/>
+      <output_port name="has_in_range" type="bool"/>
+      <output_port name="all_out_of_range" type="bool"/>
+    </Action>
+    <Action ID="ConfigureAggressivePatrol">
+      <input_port name="posture" type="int" default="2"/>
+      <input_port name="gyro_mode" type="double" default="2.2"/>
+      <input_port name="gimbal_enabled" type="bool" default="true"/>
+      <output_port name="posture_command" type="int"/>
+      <output_port name="gyro_mode_command" type="double"/>
+      <output_port name="gimbal_enabled_command" type="bool"/>
+    </Action>
+    <Action ID="ConfigureAttack">
+      <input_port name="posture" type="int" default="1"/>
+      <input_port name="gyro_mode" type="double" default="2.3"/>
+      <input_port name="gimbal_enabled" type="bool" default="false"/>
+      <output_port name="posture_command" type="int"/>
+      <output_port name="gyro_mode_command" type="double"/>
+      <output_port name="gimbal_enabled_command" type="bool"/>
+    </Action>
+    <Action ID="ConfigureConservativePatrol">
+      <input_port name="posture" type="int" default="2"/>
+      <input_port name="gyro_mode" type="double" default="2.4"/>
+      <input_port name="gimbal_enabled" type="bool" default="false"/>
+      <output_port name="posture_command" type="int"/>
+      <output_port name="gyro_mode_command" type="double"/>
+      <output_port name="gimbal_enabled_command" type="bool"/>
+    </Action>
+    <Action ID="DisableGoal">
+      <output_port name="goal_enabled" type="bool"/>
+    </Action>
+    <Action ID="DrivePursuit">
+      <input_port name="target_id" type="std::string"/>
+      <input_port name="target_in_range" type="bool" default="false"/>
+      <input_port name="in_range_seconds" type="double" default="0.0"/>
+      <input_port name="pursuit_elapsed_seconds" type="double" default="0.0"/>
+      <input_port name="range_hold_seconds" type="double" default="2.0"/>
+      <input_port name="pursuit_timeout_seconds" type="double" default="5.0"/>
+      <output_port name="posture_command" type="int"/>
+      <output_port name="gyro_mode_command" type="double"/>
+      <output_port name="gimbal_enabled_command" type="bool"/>
+      <output_port name="pursuit_enabled_command" type="bool"/>
+      <output_port name="pursuit_target_id" type="std::string"/>
+    </Action>
+    <Condition ID="EvadeEligible">
+      <input_port name="visible_enemy_count" type="int" default="0"/>
+      <input_port name="health_decreased" type="bool" default="false"/>
+      <input_port name="at_target" type="bool" default="false"/>
+      <input_port name="no_damage_seconds" type="double" default="0.0"/>
+      <input_port name="recovery_seconds" type="double" default="5.0"/>
+    </Condition>
+    <Condition ID="HasAmmo">
+      <input_port name="ammo_count" type="int" default="0"/>
+    </Condition>
+    <Condition ID="HasAttackTargets">
+      <input_port name="target_count" type="int" default="0"/>
+    </Condition>
+    <Condition ID="HasInRangeTarget">
+      <input_port name="in_range_count" type="int" default="0"/>
+    </Condition>
+    <Condition ID="HasPickupAmmo">
+      <input_port name="pickup_ammo_count" type="int" default="0"/>
+    </Condition>
+    <Condition ID="MatchFinished">
+      <input_port name="game_period" type="int" default="0"/>
+      <input_port name="time" type="int" default="0"/>
+    </Condition>
+    <Condition ID="PositionReached">
+      <input_port name="current_x" type="double" default="0.0"/>
+      <input_port name="current_y" type="double" default="0.0"/>
+      <input_port name="target_x" type="double" default="0.0"/>
+      <input_port name="target_y" type="double" default="0.0"/>
+      <input_port name="tolerance" type="double" default="0.25"/>
+      <input_port name="localization_valid" type="bool" default="false"/>
+    </Condition>
+    <Condition ID="PursuitEligible">
+      <input_port name="attack_targets" type="std::string"/>
+      <input_port name="own_count" type="int" default="0"/>
+      <input_port name="enemy_count" type="int" default="0"/>
+      <input_port name="own_health" type="double" default="0.0"/>
+      <input_port name="enemy_health" type="double" default="0.0"/>
+      <input_port name="health_advantage" type="double" default="200.0"/>
+      <input_port name="weak_enemy_health" type="double" default="30.0"/>
+    </Condition>
+    <Action ID="RememberAmmo">
+      <input_port name="ammo_count" type="int" default="0"/>
+      <output_port name="ammo_before" type="int"/>
+    </Action>
+    <Action ID="RememberPosition">
+      <input_port name="current_x" type="double" default="0.0"/>
+      <input_port name="current_y" type="double" default="0.0"/>
+      <output_port name="return_x" type="double"/>
+      <output_port name="return_y" type="double"/>
+    </Action>
+    <Condition ID="ResourcesLow">
+      <input_port name="health" type="double" default="0.0"/>
+      <input_port name="health_threshold" type="double" default="0.0"/>
+      <input_port name="economy" type="double" default="0.0"/>
+      <input_port name="economy_threshold" type="double" default="0.0"/>
+    </Condition>
+    <Action ID="SelectAttackTarget">
+      <input_port name="attack_targets" type="std::string"/>
+      <input_port name="low_health_threshold" type="double" default="50.0"/>
+      <input_port name="require_in_range" type="bool" default="true"/>
+      <output_port name="selected_target_id" type="std::string"/>
+      <output_port name="selected_health" type="double"/>
+      <output_port name="selected_distance" type="double"/>
+      <output_port name="selected_in_range" type="bool"/>
+      <output_port name="target_selected" type="bool"/>
+    </Action>
+    <Action ID="SelectPatrolPoint">
+      <input_port name="points" type="std::string"/>
+      <input_port name="index" type="int" default="0"/>
+      <output_port name="target_x" type="double"/>
+      <output_port name="target_y" type="double"/>
+      <output_port name="point_count" type="int"/>
+    </Action>
+    <Action ID="SendGoalPose">
+      <input_port name="target_x" type="double"/>
+      <input_port name="target_y" type="double"/>
+      <input_port name="target_z" type="double" default="1.0"/>
+      <input_port name="target_yaw" type="double" default="0.0"/>
+      <input_port name="frame_id" type="std::string" default="map"/>
+      <output_port name="goal_x" type="double"/>
+      <output_port name="goal_y" type="double"/>
+      <output_port name="goal_z" type="double"/>
+      <output_port name="goal_yaw" type="double"/>
+      <output_port name="goal_frame_id" type="std::string"/>
+      <output_port name="goal_enabled" type="bool"/>
+    </Action>
+    <Action ID="SetPosture">
+      <input_port name="posture" type="int" default="3"/>
+      <output_port name="posture_command" type="int"/>
+    </Action>
+  </TreeNodesModel>
+</root>
