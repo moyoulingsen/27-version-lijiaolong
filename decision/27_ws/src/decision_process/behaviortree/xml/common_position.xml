@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<root BTCPP_format="4">
+  <!-- Every tree that needs an arrival check includes this definition. -->
+  <BehaviorTree ID="PositionCheck">
+    <PositionReached current_x="{current_x}"
+                     current_y="{current_y}"
+                     target_x="{target_x}"
+                     target_y="{target_y}"
+                     tolerance="{tolerance}"
+                     localization_valid="{localization_valid}"/>
+  </BehaviorTree>
+</root>

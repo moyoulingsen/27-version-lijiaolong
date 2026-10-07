@@ -1,0 +1,51 @@
+<?xml version="1.0"?>
+<root BTCPP_format="4">
+  <include path="common_position.xml"/>
+
+  <!-- Four placeholders near the supply point. Replace or append points in XML. -->
+  <BehaviorTree ID="ConservativePatrol">
+    <Sequence name="ConservativePatrolSequence">
+      <ConfigureConservativePatrol
+        posture_command="{posture_command}"
+        gyro_mode_command="{gyro_mode_command}"
+        gimbal_enabled_command="{gimbal_enabled}"/>
+
+      <KeepRunningUntilFailure name="ConservativePatrolLoop">
+        <Sequence name="ConservativePatrolPoint">
+          <SelectPatrolPoint
+            points="0.0,0.0;1.0,0.0;1.0,1.0;0.0,1.0"
+            index="{waypoint_index}"
+            target_x="{target_x}"
+            target_y="{target_y}"
+            point_count="{point_count}"/>
+
+          <ReactiveFallback name="GoToConservativePoint">
+            <SubTree ID="PositionCheck"
+                     current_x="{current_x}"
+                     current_y="{current_y}"
+                     target_x="{target_x}"
+                     target_y="{target_y}"
+                     tolerance="{tolerance}"
+                     localization_valid="{localization_valid}"/>
+            <SendGoalPose target_x="{target_x}"
+                          target_y="{target_y}"
+                          target_z="1.0"
+                          target_yaw="0.0"
+                          frame_id="map"
+                          goal_x="{goal_x}"
+                          goal_y="{goal_y}"
+                          goal_z="{goal_z}"
+                          goal_yaw="{goal_yaw}"
+                          goal_frame_id="{goal_frame_id}"
+                          goal_enabled="{goal_enabled}"/>
+          </ReactiveFallback>
+
+          <DisableGoal goal_enabled="{goal_enabled}"/>
+          <AdvancePatrolPoint index="{waypoint_index}"
+                              point_count="{point_count}"
+                              next_index="{waypoint_index}"/>
+        </Sequence>
+      </KeepRunningUntilFailure>
+    </Sequence>
+  </BehaviorTree>
+</root>
