@@ -1,0 +1,179 @@
+<?xml version="1.0"?>
+<root BTCPP_format="4">
+  <include path="tree_nodes_model.xml"/>
+  <include path="5.pursue.xml"/>
+  <include path="patrol_conservative.xml"/>
+  <include path="patrol_aggressive.xml"/>
+
+  <!--
+    Target format for targets and persistent_targets:
+      id:health:distance:in_range:invincible:persistent;...
+    Example:
+      outpost:100:8.2:0:0:1;enemy_1:35:3.1:1:0:0
+
+    Fresh observations replace persistent entries with the same id. The
+    parent application must update target_lost_seconds, gimbal_aligned,
+    damage_confirmed, target_in_range_seconds, pursuit_elapsed_seconds,
+    health_decreased, at_target, and no_damage_seconds.
+  -->
+  <BehaviorTree ID="Attack">
+    <Sequence name="AttackDecision">
+      <ConfigureAttack posture="3"
+                        gyro_mode="2.3"
+                        gimbal_enabled="false"
+                        posture_command="{posture_command}"
+                        gyro_mode_command="{gyro_mode_command}"
+                        gimbal_enabled_command="{gimbal_enabled}"/>
+
+      <BuildAttackTargetList targets="{targets}"
+                             persistent_targets="{persistent_targets}"
+                             attack_targets="{attack_targets}"
+                             target_count="{target_count}"
+                             visible_target_count="{visible_target_count}"
+                             in_range_count="{in_range_count}"
+                             has_in_range="{has_in_range}"
+                             all_out_of_range="{all_out_of_range}"/>
+
+      <ReactiveFallback name="NoTargetsOrEngage">
+        <ReactiveSequence name="EvadeWhenDamaged">
+          <EvadeEligible visible_enemy_count="{visible_target_count}"
+                          health_decreased="{health_decreased}"
+                          at_target="{at_target}"
+                          no_damage_seconds="{no_damage_seconds}"
+                          recovery_seconds="5.0"/>
+          <!-- ConservativePatrol provides the evasive route: defense
+               posture, high-speed gyro 2.4, gimbal disabled. -->
+          <SubTree ID="ConservativePatrol"
+                   current_x="{current_x}"
+                   current_y="{current_y}"
+                   localization_valid="{localization_valid}"
+                   tolerance="{tolerance}"
+                   waypoint_index="{waypoint_index}"
+                   goal_x="{goal_x}"
+                   goal_y="{goal_y}"
+                   goal_z="{goal_z}"
+                   goal_yaw="{goal_yaw}"
+                   goal_frame_id="{goal_frame_id}"
+                   goal_enabled="{goal_enabled}"
+                   posture_command="{posture_command}"
+                   gyro_mode_command="{gyro_mode_command}"
+                   gimbal_enabled="{gimbal_enabled}"/>
+        </ReactiveSequence>
+
+        <Sequence name="NoTargets">
+          <Inverter>
+            <HasAttackTargets target_count="{target_count}"/>
+          </Inverter>
+          <ReactiveFallback name="PatrolByResources">
+            <ReactiveSequence name="ConservativeWhenResourcesLow">
+              <ResourcesLow health="{health}"
+                            health_threshold="100.0"
+                            economy="{economy}"
+                            economy_threshold="400.0"/>
+              <SubTree ID="ConservativePatrol"
+                       current_x="{current_x}"
+                       current_y="{current_y}"
+                       localization_valid="{localization_valid}"
+                       tolerance="{tolerance}"
+                       waypoint_index="{waypoint_index}"
+                       goal_x="{goal_x}"
+                       goal_y="{goal_y}"
+                       goal_z="{goal_z}"
+                       goal_yaw="{goal_yaw}"
+                       goal_frame_id="{goal_frame_id}"
+                       goal_enabled="{goal_enabled}"
+                       posture_command="{posture_command}"
+                       gyro_mode_command="{gyro_mode_command}"
+                       gimbal_enabled="{gimbal_enabled}"/>
+            </ReactiveSequence>
+            <SubTree ID="AggressivePatrol"
+                     current_x="{current_x}"
+                     current_y="{current_y}"
+                     localization_valid="{localization_valid}"
+                     tolerance="{tolerance}"
+                     waypoint_index="{waypoint_index}"
+                     goal_x="{goal_x}"
+                     goal_y="{goal_y}"
+                     goal_z="{goal_z}"
+                     goal_yaw="{goal_yaw}"
+                     goal_frame_id="{goal_frame_id}"
+                     goal_enabled="{goal_enabled}"
+                     posture_command="{posture_command}"
+                     gyro_mode_command="{gyro_mode_command}"
+                     gimbal_enabled="{gimbal_enabled}"/>
+          </ReactiveFallback>
+        </Sequence>
+
+        <ReactiveFallback name="AttackOrPursue">
+          <Sequence name="AttackInRangeTarget">
+            <HasInRangeTarget in_range_count="{in_range_count}"/>
+            <SelectAttackTarget attack_targets="{attack_targets}"
+                                low_health_threshold="50.0"
+                                require_in_range="true"
+                                selected_target_id="{selected_target_id}"
+                                selected_health="{selected_health}"
+                                selected_distance="{selected_distance}"
+                                selected_in_range="{selected_in_range}"
+                                target_selected="{target_selected}"/>
+            <ReactiveFallback name="AttackUntilTargetLost">
+              <AimAndFire target_id="{selected_target_id}"
+                          target_visible="{target_visible}"
+                          gimbal_aligned="{gimbal_aligned}"
+                          damage_confirmed="{damage_confirmed}"
+                          target_destroyed="{target_destroyed}"
+                          target_lost_seconds="{target_lost_seconds}"
+                          lost_timeout_seconds="5.0"
+                          posture_command="{posture_command}"
+                          gyro_mode_command="{gyro_mode_command}"
+                          gimbal_enabled_command="{gimbal_enabled}"
+                          gimbal_rotate_command="{gimbal_rotate}"
+                          target_lock_command="{target_lock}"
+                          fire_command="{fire_command}"/>
+              <ConfigureAttack posture="3"
+                                gyro_mode="2.3"
+                                gimbal_enabled="false"
+                                posture_command="{posture_command}"
+                                gyro_mode_command="{gyro_mode_command}"
+                                gimbal_enabled_command="{gimbal_enabled}"/>
+            </ReactiveFallback>
+          </Sequence>
+
+          <Sequence name="PursueOutOfRangeTarget">
+            <SelectAttackTarget attack_targets="{attack_targets}"
+                                low_health_threshold="50.0"
+                                require_in_range="false"
+                                selected_target_id="{selected_target_id}"
+                                selected_health="{selected_health}"
+                                selected_distance="{selected_distance}"
+                                selected_in_range="{selected_in_range}"
+                                target_selected="{target_selected}"/>
+            <PursuitEligible attack_targets="{attack_targets}"
+                              own_count="{own_count}"
+                              enemy_count="{enemy_count}"
+                              own_health="{own_health}"
+                              enemy_health="{enemy_health}"
+                              health_advantage="200.0"
+                              weak_enemy_health="30.0"/>
+            <SubTree ID="Pursue"
+                     selected_target_id="{selected_target_id}"
+                     selected_in_range="{selected_in_range}"
+                     target_in_range_seconds="{target_in_range_seconds}"
+                     pursuit_elapsed_seconds="{pursuit_elapsed_seconds}"
+                     posture_command="{posture_command}"
+                     gyro_mode_command="{gyro_mode_command}"
+                     gimbal_enabled="{gimbal_enabled}"
+                     pursuit_enabled="{pursuit_enabled}"
+                     pursuit_target_id="{pursuit_target_id}"/>
+          </Sequence>
+        </ReactiveFallback>
+        <!-- Clear a halted evade/pursuit command before the next scan. -->
+        <ConfigureAttack posture="3"
+                          gyro_mode="2.3"
+                          gimbal_enabled="false"
+                          posture_command="{posture_command}"
+                          gyro_mode_command="{gyro_mode_command}"
+                          gimbal_enabled_command="{gimbal_enabled}"/>
+      </ReactiveFallback>
+    </Sequence>
+  </BehaviorTree>
+</root>

@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<root BTCPP_format="4">
+  <include path="tree_nodes_model.xml"/>
+  <!--
+    Pursuit is entered after the attack tree has selected a target outside
+    weapon range. Timing values are supplied by the perception/navigation
+    adapter through the blackboard.
+  -->
+  <BehaviorTree ID="Pursue">
+    <DrivePursuit target_id="{selected_target_id}"
+                  target_in_range="{selected_in_range}"
+                  in_range_seconds="{target_in_range_seconds}"
+                  pursuit_elapsed_seconds="{pursuit_elapsed_seconds}"
+                  range_hold_seconds="2.0"
+                  pursuit_timeout_seconds="5.0"
+                  posture_command="{posture_command}"
+                  gyro_mode_command="{gyro_mode_command}"
+                  gimbal_enabled_command="{gimbal_enabled}"
+                  pursuit_enabled_command="{pursuit_enabled}"
+                  pursuit_target_id="{pursuit_target_id}"/>
+  </BehaviorTree>
+</root>
