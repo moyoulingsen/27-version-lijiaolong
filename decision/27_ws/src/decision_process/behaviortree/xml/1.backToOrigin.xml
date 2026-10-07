@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<root BTCPP_format="4">
+  <!-- Shared by return-home, bullet, and patrol trees. -->
+  <include path="tree_nodes_model.xml"/>
+  <include path="common_position.xml"/>
+
+  <!--
+    MatchFinished latches after either playing time reaches zero or the
+    referee phase changes from 2 to 0. ReactiveFallback reticks the position
+    condition while SendGoalPose is RUNNING.
+  -->
+  <BehaviorTree ID="ReturnHome">
+    <ReactiveSequence name="ReturnHomeSequence">
+      <MatchFinished game_period="{game_period}" time="{time}"/>
+      <SetPosture posture="3" posture_command="{posture_command}"/>
+
+      <ReactiveFallback name="ReturnHomeUntilReached">
+        <Sequence name="AlreadyAtStart">
+          <SubTree ID="PositionCheck"
+                   current_x="{current_x}"
+                   current_y="{current_y}"
+                   target_x="4.971"
+                   target_y="7.5"
+                   tolerance="0.25"
+                   localization_valid="{localization_valid}"/>
+          <DisableGoal goal_enabled="{goal_enabled}"/>
+        </Sequence>
+
+        <SendGoalPose target_x="4.971"
+                      target_y="7.5"
+                      target_z="1.0"
+                      target_yaw="0.0"
+                      frame_id="map"
+                      goal_x="{goal_x}"
+                      goal_y="{goal_y}"
+                      goal_z="{goal_z}"
+                      goal_yaw="{goal_yaw}"
+                      goal_frame_id="{goal_frame_id}"
+                      goal_enabled="{goal_enabled}"/>
+      </ReactiveFallback>
+    </ReactiveSequence>
+  </BehaviorTree>
+</root>
