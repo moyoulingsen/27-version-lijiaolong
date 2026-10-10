@@ -547,16 +547,43 @@ BT::PortsList PursueAction::providedPorts()
 {
   return {
     BT::InputPort<std::string>("target_id"),
+    BT::InputPort<double>(
+      "target_distance", -1.0,
+      "Latest target distance in meters; negative means use the legacy range input"),
     BT::InputPort<bool>("target_in_range", false, "Whether the target is in weapon range"),
     BT::InputPort<double>("in_range_seconds", 0.0, "Continuous time in range"),
     BT::InputPort<double>("pursuit_elapsed_seconds", 0.0, "Elapsed pursuit time"),
     BT::InputPort<double>("range_hold_seconds", 2.0, "Required continuous range time"),
     BT::InputPort<double>("pursuit_timeout_seconds", 5.0, "Pursuit timeout"),
+    BT::InputPort<double>(
+      "approach_trigger_distance", 4.0,
+      "Start approaching when the target is farther than this distance"),
+    BT::InputPort<double>(
+      "approach_stop_distance", 2.8,
+      "Stop approaching at or below this distance"),
+    BT::InputPort<double>(
+      "retreat_trigger_distance", 1.2,
+      "Start retreating when the target is closer than this distance"),
+    BT::InputPort<double>(
+      "retreat_stop_distance", 1.8,
+      "Stop retreating at or above this distance"),
     BT::OutputPort<int>("posture_command"),
     BT::OutputPort<double>("gyro_mode_command"),
     BT::OutputPort<bool>("gimbal_enabled_command"),
     BT::OutputPort<bool>("pursuit_enabled_command"),
-    BT::OutputPort<std::string>("pursuit_target_id")};
+    BT::OutputPort<std::string>("pursuit_target_id"),
+    BT::OutputPort<std::string>(
+      "pursuit_direction",
+      "approach, retreat, or empty when no navigation command is active"),
+    BT::OutputPort<double>(
+      "pursuit_desired_distance",
+      "Desired target separation for the navigation adapter")};
+}
+
+void PursueAction::resetPursuitState()
+{
+  active_target_id_.clear();
+  direction_ = Direction::NONE;
 }
 
 void PursueAction::publishSafeOutputs()
@@ -566,36 +593,132 @@ void PursueAction::publishSafeOutputs()
   setOutput("gimbal_enabled_command", false);
   setOutput("pursuit_enabled_command", false);
   setOutput("pursuit_target_id", std::string{});
+  setOutput("pursuit_direction", std::string{});
+  setOutput("pursuit_desired_distance", 0.0);
 }
 
 BT::NodeStatus PursueAction::evaluate()
 {
   const auto target_id = getInput<std::string>("target_id");
+  const auto target_distance = getInput<double>("target_distance");
   const auto target_in_range = getInput<bool>("target_in_range");
   const auto in_range_seconds = getInput<double>("in_range_seconds");
   const auto elapsed = getInput<double>("pursuit_elapsed_seconds");
   const auto hold = getInput<double>("range_hold_seconds");
   const auto timeout = getInput<double>("pursuit_timeout_seconds");
-  if(!target_id || !target_in_range || !in_range_seconds || !elapsed || !hold || !timeout ||
-    target_id.value().empty() || !finite(in_range_seconds.value()) || !finite(elapsed.value()) ||
-    !finite(hold.value()) || !finite(timeout.value()) || in_range_seconds.value() < 0.0 ||
-    elapsed.value() < 0.0 || hold.value() <= 0.0 || timeout.value() <= 0.0)
+  const auto approach_trigger = getInput<double>("approach_trigger_distance");
+  const auto approach_stop = getInput<double>("approach_stop_distance");
+  const auto retreat_trigger = getInput<double>("retreat_trigger_distance");
+  const auto retreat_stop = getInput<double>("retreat_stop_distance");
+  if(!target_id || !target_distance || !target_in_range || !in_range_seconds || !elapsed ||
+    !hold || !timeout || !approach_trigger || !approach_stop || !retreat_trigger ||
+    !retreat_stop || target_id.value().empty() || !finite(in_range_seconds.value()) ||
+    !finite(elapsed.value()) || !finite(hold.value()) || !finite(timeout.value()) ||
+    !finite(target_distance.value()) || target_distance.value() < -1.0 ||
+    !finite(approach_trigger.value()) || !finite(approach_stop.value()) ||
+    !finite(retreat_trigger.value()) || !finite(retreat_stop.value()) ||
+    in_range_seconds.value() < 0.0 || elapsed.value() < 0.0 || hold.value() <= 0.0 ||
+    timeout.value() <= 0.0 || approach_trigger.value() <= approach_stop.value() ||
+    retreat_trigger.value() >= retreat_stop.value() || retreat_trigger.value() < 0.0)
   {
+    resetPursuitState();
+    publishSafeOutputs();
+    return BT::NodeStatus::FAILURE;
+  }
+
+  if(active_target_id_ != target_id.value())
+  {
+    active_target_id_ = target_id.value();
+    direction_ = Direction::NONE;
+  }
+
+  // Distance is refreshed by the perception input on every tree tick. Keep
+  // the selected direction latched until its stop threshold is crossed; this
+  // hysteresis prevents alternating approach/retreat commands around a limit.
+  const bool has_distance = target_distance.value() >= 0.0 && finite(target_distance.value());
+  if(has_distance)
+  {
+    const double distance = target_distance.value();
+    if(direction_ == Direction::APPROACH && distance < retreat_trigger.value())
+    {
+      // A stale or sparse sensor update can skip over the approach stop
+      // band. Treat the new close observation as a retreat request.
+      direction_ = Direction::RETREAT;
+    }
+    else if(direction_ == Direction::RETREAT && distance > approach_trigger.value())
+    {
+      direction_ = Direction::APPROACH;
+    }
+    if(distance < retreat_trigger.value() && direction_ == Direction::NONE)
+    {
+      direction_ = Direction::RETREAT;
+    }
+    else if(distance > approach_trigger.value() && direction_ == Direction::NONE)
+    {
+      direction_ = Direction::APPROACH;
+    }
+
+    if(direction_ == Direction::APPROACH && distance <= approach_stop.value())
+    {
+      resetPursuitState();
+      publishSafeOutputs();
+      return BT::NodeStatus::SUCCESS;
+    }
+    if(direction_ == Direction::RETREAT && distance >= retreat_stop.value())
+    {
+      resetPursuitState();
+      publishSafeOutputs();
+      return BT::NodeStatus::SUCCESS;
+    }
+    if(direction_ == Direction::NONE)
+    {
+      publishSafeOutputs();
+      return BT::NodeStatus::SUCCESS;
+    }
+  }
+
+  if(elapsed.value() >= timeout.value())
+  {
+    resetPursuitState();
     publishSafeOutputs();
     return BT::NodeStatus::FAILURE;
   }
 
   publishSafeOutputs();
-  if(target_in_range.value() && in_range_seconds.value() >= hold.value())
+  if(!has_distance && target_in_range.value() && in_range_seconds.value() >= hold.value())
+  {
+    resetPursuitState();
+    return BT::NodeStatus::SUCCESS;
+  }
+
+  std::string direction;
+  double desired_distance = 0.0;
+  if(direction_ == Direction::APPROACH)
+  {
+    direction = "approach";
+    desired_distance = approach_stop.value();
+  }
+  else if(direction_ == Direction::RETREAT)
+  {
+    direction = "retreat";
+    desired_distance = retreat_stop.value();
+  }
+  else if(!has_distance)
+  {
+    // Compatibility path for integrations that have not yet supplied a
+    // numeric distance. It preserves the original range/timeout contract.
+    direction = "approach";
+    desired_distance = approach_stop.value();
+  }
+  else
   {
     return BT::NodeStatus::SUCCESS;
   }
-  if(elapsed.value() >= timeout.value())
-  {
-    return BT::NodeStatus::FAILURE;
-  }
+
   setOutput("pursuit_enabled_command", true);
   setOutput("pursuit_target_id", target_id.value());
+  setOutput("pursuit_direction", direction);
+  setOutput("pursuit_desired_distance", desired_distance);
   return BT::NodeStatus::RUNNING;
 }
 
@@ -611,6 +734,7 @@ BT::NodeStatus PursueAction::onRunning()
 
 void PursueAction::onHalted()
 {
+  resetPursuitState();
   publishSafeOutputs();
 }
 

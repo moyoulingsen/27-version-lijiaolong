@@ -75,6 +75,17 @@ public:
   BT::NodeStatus tick() override;
 };
 
+/** Returns SUCCESS while health is below the threshold selected by defense buff. */
+class HealthRecoveryNeededCondition : public BT::ConditionNode
+{
+public:
+  HealthRecoveryNeededCondition(const std::string & name, const BT::NodeConfig & config);
+
+  static BT::PortsList providedPorts();
+
+  BT::NodeStatus tick() override;
+};
+
 void registerBulletNodes(BT::BehaviorTreeFactory & factory);
 
 }  // namespace decision_process

@@ -3,7 +3,6 @@
   <include path="tree_nodes_model.xml"/>
   <include path="5.pursue.xml"/>
   <include path="patrol_conservative.xml"/>
-  <include path="patrol_aggressive.xml"/>
 
   <!--
     Target format for targets and persistent_targets:
@@ -14,7 +13,8 @@
     Fresh observations replace persistent entries with the same id. The
     parent application must update target_lost_seconds, gimbal_aligned,
     damage_confirmed, target_in_range_seconds, pursuit_elapsed_seconds,
-    health_decreased, at_target, and no_damage_seconds.
+    health_decreased, at_target, no_damage_seconds, and each target's
+    distance on every perception update.
   -->
   <BehaviorTree ID="Attack">
     <Sequence name="AttackDecision">
@@ -59,50 +59,6 @@
                    gyro_mode_command="{gyro_mode_command}"
                    gimbal_enabled="{gimbal_enabled}"/>
         </ReactiveSequence>
-
-        <Sequence name="NoTargets">
-          <Inverter>
-            <HasAttackTargets target_count="{target_count}"/>
-          </Inverter>
-          <ReactiveFallback name="PatrolByResources">
-            <ReactiveSequence name="ConservativeWhenResourcesLow">
-              <ResourcesLow health="{health}"
-                            health_threshold="100.0"
-                            economy="{economy}"
-                            economy_threshold="400.0"/>
-              <SubTree ID="ConservativePatrol"
-                       current_x="{current_x}"
-                       current_y="{current_y}"
-                       localization_valid="{localization_valid}"
-                       tolerance="{tolerance}"
-                       waypoint_index="{waypoint_index}"
-                       goal_x="{goal_x}"
-                       goal_y="{goal_y}"
-                       goal_z="{goal_z}"
-                       goal_yaw="{goal_yaw}"
-                       goal_frame_id="{goal_frame_id}"
-                       goal_enabled="{goal_enabled}"
-                       posture_command="{posture_command}"
-                       gyro_mode_command="{gyro_mode_command}"
-                       gimbal_enabled="{gimbal_enabled}"/>
-            </ReactiveSequence>
-            <SubTree ID="AggressivePatrol"
-                     current_x="{current_x}"
-                     current_y="{current_y}"
-                     localization_valid="{localization_valid}"
-                     tolerance="{tolerance}"
-                     waypoint_index="{waypoint_index}"
-                     goal_x="{goal_x}"
-                     goal_y="{goal_y}"
-                     goal_z="{goal_z}"
-                     goal_yaw="{goal_yaw}"
-                     goal_frame_id="{goal_frame_id}"
-                     goal_enabled="{goal_enabled}"
-                     posture_command="{posture_command}"
-                     gyro_mode_command="{gyro_mode_command}"
-                     gimbal_enabled="{gimbal_enabled}"/>
-          </ReactiveFallback>
-        </Sequence>
 
         <ReactiveFallback name="AttackOrPursue">
           <Sequence name="AttackInRangeTarget">
@@ -157,13 +113,16 @@
             <SubTree ID="Pursue"
                      selected_target_id="{selected_target_id}"
                      selected_in_range="{selected_in_range}"
+                     selected_distance="{selected_distance}"
                      target_in_range_seconds="{target_in_range_seconds}"
                      pursuit_elapsed_seconds="{pursuit_elapsed_seconds}"
                      posture_command="{posture_command}"
                      gyro_mode_command="{gyro_mode_command}"
                      gimbal_enabled="{gimbal_enabled}"
                      pursuit_enabled="{pursuit_enabled}"
-                     pursuit_target_id="{pursuit_target_id}"/>
+                     pursuit_target_id="{pursuit_target_id}"
+                     pursuit_direction="{pursuit_direction}"
+                     pursuit_desired_distance="{pursuit_desired_distance}"/>
           </Sequence>
         </ReactiveFallback>
         <!-- Clear a halted evade/pursuit command before the next scan. -->

@@ -3,20 +3,29 @@
   <include path="tree_nodes_model.xml"/>
   <!--
     Pursuit is entered after the attack tree has selected a target outside
-    weapon range. Timing values are supplied by the perception/navigation
-    adapter through the blackboard.
+    weapon range. Distance values are supplied by the perception/navigation
+    adapter through the blackboard. The adapter must turn pursuit_direction
+    and pursuit_desired_distance into a map-frame goal using the tracked
+    target pose; an empty direction means the goal must be disabled.
   -->
   <BehaviorTree ID="Pursue">
     <DrivePursuit target_id="{selected_target_id}"
+                  target_distance="{selected_distance}"
                   target_in_range="{selected_in_range}"
                   in_range_seconds="{target_in_range_seconds}"
                   pursuit_elapsed_seconds="{pursuit_elapsed_seconds}"
                   range_hold_seconds="2.0"
                   pursuit_timeout_seconds="5.0"
+                  approach_trigger_distance="4.0"
+                  approach_stop_distance="2.8"
+                  retreat_trigger_distance="1.2"
+                  retreat_stop_distance="1.8"
                   posture_command="{posture_command}"
                   gyro_mode_command="{gyro_mode_command}"
                   gimbal_enabled_command="{gimbal_enabled}"
                   pursuit_enabled_command="{pursuit_enabled}"
-                  pursuit_target_id="{pursuit_target_id}"/>
+                  pursuit_target_id="{pursuit_target_id}"
+                  pursuit_direction="{pursuit_direction}"
+                  pursuit_desired_distance="{pursuit_desired_distance}"/>
   </BehaviorTree>
 </root>

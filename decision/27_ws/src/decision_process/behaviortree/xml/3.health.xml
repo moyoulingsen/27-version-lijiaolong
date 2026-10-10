@@ -1,0 +1,57 @@
+<?xml version="1.0"?>
+<root BTCPP_format="4">
+  <include path="tree_nodes_model.xml"/>
+  <include path="common_position.xml"/>
+
+  <!--
+    Health is sampled on every tree tick. The branch is deliberately placed
+    below Attack in MainTree, so an active engagement keeps priority. Once
+    this branch is running, it owns navigation until the health threshold is
+    reached again.
+
+    defense_buff is a ratio in [0, 1]. The supply point is configured by the
+    parent subtree remapping (the current default is 0.0, 0.0).
+  -->
+  <BehaviorTree ID="HealthRecovery">
+    <ReactiveSequence name="HealthRecoverySequence">
+      <HealthRecoveryNeeded health="{health}"
+                            defense_buff="{defense_buff}"
+                            normal_threshold="200.0"
+                            enhanced_threshold="160.0"
+                            enhanced_buff_threshold="0.6"/>
+      <SetPosture posture="3" posture_command="{posture_command}"/>
+
+      <ReactiveFallback name="GoToHealthSupplyAndWait">
+        <Sequence name="AtHealthSupply">
+          <SubTree ID="PositionCheck"
+                   current_x="{current_x}"
+                   current_y="{current_y}"
+                   target_x="{health_supply_x}"
+                   target_y="{health_supply_y}"
+                   tolerance="{tolerance}"
+                   localization_valid="{localization_valid}"/>
+          <!-- Keep the branch RUNNING while health remains below its target. -->
+          <KeepRunningUntilFailure>
+            <HealthRecoveryNeeded health="{health}"
+                                  defense_buff="{defense_buff}"
+                                  normal_threshold="200.0"
+                                  enhanced_threshold="160.0"
+                                  enhanced_buff_threshold="0.6"/>
+          </KeepRunningUntilFailure>
+        </Sequence>
+
+        <SendGoalPose target_x="{health_supply_x}"
+                      target_y="{health_supply_y}"
+                      target_z="1.0"
+                      target_yaw="0.0"
+                      frame_id="map"
+                      goal_x="{goal_x}"
+                      goal_y="{goal_y}"
+                      goal_z="{goal_z}"
+                      goal_yaw="{goal_yaw}"
+                      goal_frame_id="{goal_frame_id}"
+                      goal_enabled="{goal_enabled}"/>
+      </ReactiveFallback>
+    </ReactiveSequence>
+  </BehaviorTree>
+</root>

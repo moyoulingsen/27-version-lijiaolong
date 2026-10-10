@@ -46,6 +46,17 @@ private:
   bool match_finished_{false};
 };
 
+/** Returns SUCCESS only while the referee reports the playing phase. */
+class MatchStartedCondition : public BT::ConditionNode
+{
+public:
+  MatchStartedCondition(const std::string & name, const BT::NodeConfig & config);
+
+  static BT::PortsList providedPorts();
+
+  BT::NodeStatus tick() override;
+};
+
 /** Sets the requested chassis posture through a blackboard output. */
 class SetPostureAction : public BT::SyncActionNode
 {
@@ -98,7 +109,7 @@ private:
 /** Register nodes shared by any tree that publishes navigation goals. */
 void registerNavigationNodes(BT::BehaviorTreeFactory & factory);
 
-/** Register navigation nodes and the match-finished condition. */
+/** Register navigation nodes and match phase conditions. */
 void registerReturnHomeNodes(BT::BehaviorTreeFactory & factory);
 
 }  // namespace decision_process

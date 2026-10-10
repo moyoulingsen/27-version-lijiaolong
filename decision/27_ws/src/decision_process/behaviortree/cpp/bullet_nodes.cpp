@@ -159,6 +159,48 @@ BT::NodeStatus ResourcesLowCondition::tick()
            BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
+HealthRecoveryNeededCondition::HealthRecoveryNeededCondition(
+  const std::string & name, const BT::NodeConfig & config)
+: BT::ConditionNode(name, config)
+{
+}
+
+BT::PortsList HealthRecoveryNeededCondition::providedPorts()
+{
+  return {
+    BT::InputPort<double>("health", 0.0, "Current health value"),
+    BT::InputPort<double>("defense_buff", 0.0, "Defense buff ratio in the range [0, 1]"),
+    BT::InputPort<double>("normal_threshold", 200.0, "Health threshold without the defense buff"),
+    BT::InputPort<double>(
+      "enhanced_threshold", 160.0, "Health threshold when the defense buff is active"),
+    BT::InputPort<double>(
+      "enhanced_buff_threshold", 0.6, "Defense buff ratio that selects enhanced_threshold")};
+}
+
+BT::NodeStatus HealthRecoveryNeededCondition::tick()
+{
+  const auto health = getInput<double>("health");
+  const auto defense_buff = getInput<double>("defense_buff");
+  const auto normal_threshold = getInput<double>("normal_threshold");
+  const auto enhanced_threshold = getInput<double>("enhanced_threshold");
+  const auto enhanced_buff_threshold = getInput<double>("enhanced_buff_threshold");
+  if(!health || !defense_buff || !normal_threshold || !enhanced_threshold ||
+    !enhanced_buff_threshold || !std::isfinite(health.value()) ||
+    !std::isfinite(defense_buff.value()) || !std::isfinite(normal_threshold.value()) ||
+    !std::isfinite(enhanced_threshold.value()) ||
+    !std::isfinite(enhanced_buff_threshold.value()) || health.value() < 0.0 ||
+    defense_buff.value() < 0.0 || defense_buff.value() > 1.0 ||
+    normal_threshold.value() < 0.0 || enhanced_threshold.value() < 0.0 ||
+    enhanced_buff_threshold.value() < 0.0 || enhanced_buff_threshold.value() > 1.0)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+
+  const double threshold = defense_buff.value() >= enhanced_buff_threshold.value() ?
+                             enhanced_threshold.value() : normal_threshold.value();
+  return health.value() < threshold ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
 void registerBulletNodes(BT::BehaviorTreeFactory & factory)
 {
   factory.registerNodeType<HasAmmoCondition>("HasAmmo");
@@ -167,6 +209,7 @@ void registerBulletNodes(BT::BehaviorTreeFactory & factory)
   factory.registerNodeType<RememberPositionAction>("RememberPosition");
   factory.registerNodeType<AmmoIncreasedCondition>("AmmoIncreased");
   factory.registerNodeType<ResourcesLowCondition>("ResourcesLow");
+  factory.registerNodeType<HealthRecoveryNeededCondition>("HealthRecoveryNeeded");
 }
 
 }  // namespace decision_process

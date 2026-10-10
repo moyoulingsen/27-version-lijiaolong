@@ -130,8 +130,19 @@ public:
   void onHalted() override;
 
 private:
+  enum class Direction
+  {
+    NONE,
+    APPROACH,
+    RETREAT
+  };
+
   BT::NodeStatus evaluate();
   void publishSafeOutputs();
+  void resetPursuitState();
+
+  std::string active_target_id_;
+  Direction direction_{Direction::NONE};
 };
 
 void registerAttackNodes(BT::BehaviorTreeFactory & factory);

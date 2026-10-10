@@ -101,6 +101,28 @@ BT::NodeStatus MatchFinishedCondition::tick()
   return match_finished_ ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
+MatchStartedCondition::MatchStartedCondition(
+  const std::string & name, const BT::NodeConfig & config)
+: BT::ConditionNode(name, config)
+{
+}
+
+BT::PortsList MatchStartedCondition::providedPorts()
+{
+  return {
+    BT::InputPort<int>("game_period", 0, "0 before/after match, 1 preparation, 2 playing")};
+}
+
+BT::NodeStatus MatchStartedCondition::tick()
+{
+  const auto game_period = getInput<int>("game_period");
+  if(!game_period || game_period.value() < 0 || game_period.value() > 2)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+  return game_period.value() == 2 ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
 SetPostureAction::SetPostureAction(
   const std::string & name, const BT::NodeConfig & config)
 : BT::SyncActionNode(name, config)
@@ -232,6 +254,7 @@ void registerReturnHomeNodes(BT::BehaviorTreeFactory & factory)
 {
   registerNavigationNodes(factory);
   factory.registerNodeType<MatchFinishedCondition>("MatchFinished");
+  factory.registerNodeType<MatchStartedCondition>("MatchStarted");
 }
 
 }  // namespace decision_process

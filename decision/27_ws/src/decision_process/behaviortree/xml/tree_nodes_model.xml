@@ -65,16 +65,23 @@
     </Action>
     <Action ID="DrivePursuit">
       <input_port name="target_id" type="std::string"/>
+      <input_port name="target_distance" type="double" default="-1.0"/>
       <input_port name="target_in_range" type="bool" default="false"/>
       <input_port name="in_range_seconds" type="double" default="0.0"/>
       <input_port name="pursuit_elapsed_seconds" type="double" default="0.0"/>
       <input_port name="range_hold_seconds" type="double" default="2.0"/>
       <input_port name="pursuit_timeout_seconds" type="double" default="5.0"/>
+      <input_port name="approach_trigger_distance" type="double" default="4.0"/>
+      <input_port name="approach_stop_distance" type="double" default="2.8"/>
+      <input_port name="retreat_trigger_distance" type="double" default="1.2"/>
+      <input_port name="retreat_stop_distance" type="double" default="1.8"/>
       <output_port name="posture_command" type="int"/>
       <output_port name="gyro_mode_command" type="double"/>
       <output_port name="gimbal_enabled_command" type="bool"/>
       <output_port name="pursuit_enabled_command" type="bool"/>
       <output_port name="pursuit_target_id" type="std::string"/>
+      <output_port name="pursuit_direction" type="std::string"/>
+      <output_port name="pursuit_desired_distance" type="double"/>
     </Action>
     <Condition ID="EvadeEligible">
       <input_port name="visible_enemy_count" type="int" default="0"/>
@@ -95,9 +102,19 @@
     <Condition ID="HasPickupAmmo">
       <input_port name="pickup_ammo_count" type="int" default="0"/>
     </Condition>
+    <Condition ID="HealthRecoveryNeeded">
+      <input_port name="health" type="double" default="0.0"/>
+      <input_port name="defense_buff" type="double" default="0.0"/>
+      <input_port name="normal_threshold" type="double" default="200.0"/>
+      <input_port name="enhanced_threshold" type="double" default="160.0"/>
+      <input_port name="enhanced_buff_threshold" type="double" default="0.6"/>
+    </Condition>
     <Condition ID="MatchFinished">
       <input_port name="game_period" type="int" default="0"/>
       <input_port name="time" type="int" default="0"/>
+    </Condition>
+    <Condition ID="MatchStarted">
+      <input_port name="game_period" type="int" default="0"/>
     </Condition>
     <Condition ID="PositionReached">
       <input_port name="current_x" type="double" default="0.0"/>
