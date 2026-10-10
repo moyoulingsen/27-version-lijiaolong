@@ -20,7 +20,8 @@
 
   <BehaviorTree ID="MainTree">
     <Parallel name="BehaviorAndAuxControllers" success_count="1" failure_count="2">
-      <ReactiveFallback name="TenTaskPriority">
+      <ReactiveFallback name="BehaviorLoop">
+        <ReactiveFallback name="TenTaskPriority">
       <!-- 最高优先级：比赛退出阶段 2 后，无论剩余血量都返回启动点。 -->
       <SubTree ID="ReturnHome"
                home_x="4.971" home_y="7.5" home_z="1.0"
@@ -73,6 +74,9 @@
       <SubTree ID="PostureManager"
                requested_posture="3" cooldown_sec="5.0"
                applied_posture="{applied_posture}"/>
+        </ReactiveFallback>
+        <!-- 上游消息尚未到达时保持 RUNNING，确保 Parallel 下一帧继续重试。 -->
+        <KeepRunning/>
       </ReactiveFallback>
       <ReactiveSequence name="AuxiliaryControllers">
         <SubTree ID="SpinController" enabled_mode="1"/>

@@ -7,7 +7,16 @@ from pathlib import Path
 
 from .core import Arena, SentryState, Viewport
 from .map_asset import load_p5_pgm
-from .task_state import ATTACK, HOME, SUPPLY, SUPPLY_ZONE, FIELD_ENTITIES, TaskScenario
+from .ros_bridge import BehaviorTreeBridgeClient
+from .task_state import (
+    ATTACK,
+    HOME,
+    SUPPLY,
+    SUPPLY_ZONE,
+    DecisionView,
+    FIELD_ENTITIES,
+    TaskScenario,
+)
 
 
 APP_ROOT = Path(__file__).resolve().parent.parent
@@ -43,6 +52,7 @@ class SimulatorApp:
         self.controlled_robot_id: int | None = None
         self.task = TaskScenario()
         self.decision = self.task.evaluate(self.sentry)
+        self.bridge = BehaviorTreeBridgeClient()
         self.title_font = self.pg.font.Font(_font_path(True), 25)
         self.data_font = self.pg.font.Font(_font_path(False), 17)
         self.small_font = self.pg.font.Font(_font_path(False), 14)
@@ -108,7 +118,12 @@ class SimulatorApp:
 
                 viewport = self._viewport()
                 move_x, move_y = self._movement_input()
-                self.decision = self.task.update(elapsed_seconds, self.sentry)
+                bridge_decision = self._bridge_decision()
+                self.decision = self.task.update(
+                    elapsed_seconds,
+                    self.sentry,
+                    decision_override=bridge_decision,
+                )
                 if self.controlled_robot_id is not None:
                     self.task.move_robot(
                         self.controlled_robot_id,
@@ -117,14 +132,8 @@ class SimulatorApp:
                         elapsed_seconds,
                         self.arena,
                     )
-                self.sentry.update(
-                    elapsed_seconds,
-                    move_x,
-                    move_y,
-                    self.arena,
-                    spin_enabled=self.decision.spin_mode > 0,
-                    turret_enabled=self.decision.tripod_mode > 0,
-                )
+                self._update_sentry_motion(elapsed_seconds, move_x, move_y)
+                self.bridge.publish_state(self._bridge_state())
                 self._render(viewport)
                 self.pg.display.flip()
 
@@ -134,6 +143,7 @@ class SimulatorApp:
                         self.pg.image.save(self.screen, str(screenshot_path))
                     running = False
         finally:
+            self.bridge.close()
             self.pg.quit()
 
     def _viewport(self) -> Viewport:
@@ -163,6 +173,167 @@ class SimulatorApp:
         x = float(keys[self.pg.K_d]) - float(keys[self.pg.K_a])
         y = float(keys[self.pg.K_w]) - float(keys[self.pg.K_s])
         return x, y
+
+    def _update_sentry_motion(
+        self,
+        elapsed_seconds: float,
+        manual_x: float,
+        manual_y: float,
+    ) -> None:
+        if self.sentry.manual_control:
+            self.sentry.update(
+                elapsed_seconds,
+                manual_x,
+                manual_y,
+                self.arena,
+                spin_enabled=self.decision.spin_mode > 0,
+                turret_enabled=self.decision.tripod_mode > 0,
+            )
+            return
+
+        if self.bridge.connected and self.decision.goal is not None:
+            goal_x, goal_y = self.decision.goal
+            delta_x = goal_x - self.sentry.x
+            delta_y = goal_y - self.sentry.y
+            distance = math.hypot(delta_x, delta_y)
+            if distance > 0.08:
+                travel = min(distance, self.sentry.movement_speed * elapsed_seconds)
+                self.sentry.x, self.sentry.y = self.arena.clamp(
+                    self.sentry.x + delta_x / distance * travel,
+                    self.sentry.y + delta_y / distance * travel,
+                )
+
+        self.sentry.update(
+            elapsed_seconds,
+            0.0,
+            0.0,
+            self.arena,
+            spin_enabled=self.decision.spin_mode > 0,
+            turret_enabled=self.decision.tripod_mode > 0,
+        )
+
+    def _bridge_decision(self) -> DecisionView | None:
+        if not self.bridge.connected:
+            return None
+        output = self.bridge.latest_output()
+        if output is None:
+            return None
+        serial = output.get("serial", {})
+        autoaim = output.get("autoaim", {})
+        raw_goal = output.get("goal")
+        goal = tuple(raw_goal) if raw_goal is not None else None
+        target = int(autoaim.get("target", 0))
+        return DecisionView(
+            behavior=self._bridge_behavior(goal, target),
+            posture=int(serial.get("posture", 3)),
+            goal=goal,
+            spin_mode=int(serial.get("spin_mode", 0)),
+            tripod_mode=int(serial.get("tripod_mode", 1)),
+            shoot_mode=int(serial.get("shoot_mode", 0)),
+            target=target,
+            confirm_respawn=int(serial.get("confirm_respawn", 0)),
+            health_threshold=self.task.health_threshold,
+        )
+
+    def _bridge_behavior(
+        self,
+        goal: tuple[float, float] | None,
+        target: int,
+    ) -> str:
+        if self.task.game_finished and self._near_goal(goal, HOME):
+            return "行为树：比赛结束归位"
+        if target == 6 or self._near_goal(goal, ATTACK):
+            return "行为树：攻击敌方前哨"
+        if self._near_goal(goal, SUPPLY):
+            if self.task.sentry_hp < self.task.health_threshold:
+                return "行为树：低血量回血"
+            return "行为树：前往补给区"
+        if goal is not None and any(
+            self._near_goal(goal, point) for point in self.task.patrol_points
+        ):
+            return f"行为树：{self.task.patrol_name}"
+        if goal is not None:
+            return "行为树：执行导航"
+        return "行为树：等待输出"
+
+    @staticmethod
+    def _near_goal(
+        first: tuple[float, float] | None,
+        second: tuple[float, float],
+        tolerance: float = 0.08,
+    ) -> bool:
+        return first is not None and math.hypot(
+            first[0] - second[0],
+            first[1] - second[1],
+        ) <= tolerance
+
+    def _bridge_state(self) -> dict:
+        enemy_hp = [
+            round(self.task.enemy_health(1)),
+            round(self.task.enemy_health(2)),
+            round(self.task.enemy_health(3)),
+            round(self.task.enemy_health(4)),
+            round(self.task.enemy_health(5)),
+            round(self.task.enemy_health(6)),
+            round(self.task.enemy_health(7)),
+            round(self.task.enemy_health(8)),
+        ]
+        radar_data: list[float] = []
+        for target_id in (1, 2, 3, 4, 5, 8):
+            x, y = self.task.robot_position(target_id)
+            radar_data.extend((x, y))
+        return {
+            "game_period": 2 if self.task.game_running else 0,
+            "time": max(0, round(self.task.remaining_time)),
+            "hp_sentry": max(0, round(self.task.sentry_hp)),
+            "defence_buff": self.task.defence_buff,
+            "color": 0,
+            "ammo": max(0, round(self.task.ammo)),
+            "hp_outpost": max(0, round(self.task.own_outpost_hp)),
+            "hp_base": 5000,
+            "hp_enemy": enemy_hp,
+            "radar_data": radar_data,
+            "x": self.sentry.x,
+            "y": self.sentry.y,
+            "yaw": self.sentry.spin_angle,
+            "autoaim": self._simulated_autoaim(enemy_hp),
+            "aggressive_patrol": self.task.aggressive_patrol,
+        }
+
+    def _simulated_autoaim(self, enemy_hp: list[int]) -> dict:
+        visible = [0] * 9
+        distances = [0.0] * 9
+        polar_radius = [0.0] * 9
+        polar_angle = [0.0] * 9
+        positions = {
+            target_id: self.task.robot_position(target_id)
+            for target_id in (1, 2, 3, 4, 5, 8)
+        }
+        positions[6] = (20.0, 7.5)
+        positions[7] = (27.0, 7.5)
+        half_view = math.radians(24.0)
+        for target_id, position in positions.items():
+            health = enemy_hp[target_id - 1]
+            if health <= 0 or health == 1001:
+                continue
+            delta_x = position[0] - self.sentry.x
+            delta_y = position[1] - self.sentry.y
+            distance = math.hypot(delta_x, delta_y)
+            angle = math.atan2(delta_y, delta_x)
+            relative_angle = (
+                angle - self.sentry.turret_angle + math.pi
+            ) % math.tau - math.pi
+            if distance <= 6.2 and abs(relative_angle) <= half_view:
+                visible[target_id] = 1
+                distances[target_id] = distance
+                polar_radius[target_id] = distance
+                polar_angle[target_id] = relative_angle
+        return {
+            "target": visible,
+            "target_distance": distances,
+            "target_polar_r": polar_radius,
+            "target_polar_angle": polar_angle,
+        }
 
     def _handle_task_key(self, key: int) -> None:
         if key == self.pg.K_F1:
@@ -252,7 +423,11 @@ class SimulatorApp:
             mode = f"人工控制｜蓝方 {self.controlled_robot_id} 号"
             mode_color = (74, 143, 224)
         else:
-            mode = "决策自动控制"
+            mode = (
+                "行为树自动控制"
+                if self.bridge.connected
+                else "本地决策自动控制"
+            )
             mode_color = (245, 180, 65)
         self.pg.draw.circle(self.screen, mode_color, (36, 55), 5)
         mode_text = self.data_font.render(f"控制状态：{mode}", True, (202, 209, 212))
@@ -317,6 +492,13 @@ class SimulatorApp:
 
         y = self._draw_section_title(x, y, "任务状态")
         y = self._draw_key_value(x, y, "当前控制", self._control_name(), bar_width)
+        y = self._draw_key_value(
+            x,
+            y,
+            "决策来源",
+            "WSL 行为树在线" if self.bridge.connected else "Python 本地回退",
+            bar_width,
+        )
         y = self._draw_key_value(x, y, "当前行为", self.decision.behavior, bar_width)
         y = self._draw_key_value(
             x,

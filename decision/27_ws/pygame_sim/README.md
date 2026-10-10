@@ -22,6 +22,17 @@ python -m venv ".venv"
 & ".venv/Scripts/python.exe" "main.py"
 ```
 
+接入 WSL 中真实 C++ BehaviorTree.CPP 行为树的一键启动方式：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "run_behavior_tree_sim.ps1"
+```
+
+一键脚本会在后台启动 WSL ROS 桥接节点和 `decision_process`。Windows
+Pygame 会发布裁判、自瞄和定位输入，并使用行为树输出驱动导航、姿态、云台、
+小陀螺、射击及目标选择。界面显示“WSL 行为树在线”时，自动决策来自真实
+C++ 行为树；连接失败时会显示“Python 本地回退”。
+
 Linux：
 
 ```bash
