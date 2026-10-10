@@ -731,9 +731,8 @@ BT::NodeStatus PatrolRouteAction::updatePatrol()
   }
   const PatrolPoint & current = points_[point_index_];
   if (goalReached(localization.x, localization.y, current.x, current.y, tolerance_)) {
-    const PatrolStep next = advancePatrolStep(point_index_, forward_, points_.size());
-    point_index_ = next.index;
-    forward_ = next.forward;
+    point_index_ = (point_index_ + 1U) % points_.size();
+    forward_ = true;
     publishCurrentGoal();
   }
   return BT::NodeStatus::RUNNING;

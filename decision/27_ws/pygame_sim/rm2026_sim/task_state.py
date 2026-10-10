@@ -201,7 +201,12 @@ class TaskScenario:
             self.death_elapsed = None
         self._set_event(f"己方哨兵血量已调整为 {round(self.sentry_hp)}")
 
-    def update(self, elapsed_seconds: float, sentry: SentryState) -> DecisionView:
+    def update(
+        self,
+        elapsed_seconds: float,
+        sentry: SentryState,
+        decision_override: DecisionView | None = None,
+    ) -> DecisionView:
         if elapsed_seconds < 0.0:
             raise ValueError("elapsed_seconds must be non-negative")
         self.event_message_remaining = max(0.0, self.event_message_remaining - elapsed_seconds)
@@ -218,7 +223,7 @@ class TaskScenario:
         self._update_patrol(sentry)
         self.dodge_remaining = max(0.0, self.dodge_remaining - elapsed_seconds)
 
-        decision = self.evaluate(sentry)
+        decision = decision_override or self.evaluate(sentry)
         if decision.shoot_mode and self.enemy_outpost_hp > 0.0:
             self.enemy_outpost_hp = max(0.0, self.enemy_outpost_hp - 240.0 * elapsed_seconds)
             self._ammo_shot_accumulator += 10.0 * elapsed_seconds

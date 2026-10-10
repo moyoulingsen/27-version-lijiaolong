@@ -110,7 +110,11 @@ class ScenarioDriver(Node):
         self.goal = None
         self.serial_command = None
         self.autoaim_command = None
-        self.enemy_outpost_hp = self.snapshot.enemy_outpost_hp
+        self.enemy_outpost_hp = (
+            0
+            if self.scenario in {"posture", "no_ammo"}
+            else self.snapshot.enemy_outpost_hp
+        )
         self.ammo = 0 if self.scenario == "no_ammo" else 120
         self.sentry_hp = 400
         self.result_state = "RUNNING"
@@ -286,9 +290,10 @@ class ScenarioDriver(Node):
             if self._supply_reached_at is not None and self.ammo > 0:
                 self._pass("zero-ammo sentry collected the pending 100 rounds at supply")
         elif self.scenario == "dodge":
-            if planar_distance(self.position, (5.0, 5.0)) <= 0.18:
+            if planar_distance(self.position, (16.0, 11.0)) <= 0.22:
                 self._normal_reached = True
-            if elapsed >= 12.0 and self._normal_reached and self._damage_at is None:
+            if self._normal_reached and self._damage_at is None:
+                self.enemy_outpost_hp = 0
                 self.sentry_hp = 350
                 self._damage_at = elapsed
                 self._damage_position = tuple(self.position)

@@ -19,11 +19,11 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 
 SCENARIO_TREE = {
-    "return_home": "01_return_home.xml",
-    "posture": "02_posture_switch.xml",
-    "attack_outpost": "03_attack_outpost.xml",
-    "no_ammo": "04_no_ammo.xml",
-    "dodge": "05_dodge.xml",
+    "return_home": "decision_master.xml",
+    "posture": "decision_master.xml",
+    "attack_outpost": "decision_master.xml",
+    "no_ammo": "decision_master.xml",
+    "dodge": "decision_master.xml",
 }
 SCENARIO_START = {
     "return_home": (14.0, 4.0, 0.0),
@@ -169,7 +169,9 @@ def _launch_setup(context):
 
 def _default_dataset():
     source_candidate = Path(__file__).resolve().parents[2] / "data/rmuc_2026_region_dataset.sqlite"
-    return str(source_candidate)
+    if source_candidate.is_file():
+        return str(source_candidate)
+    return str(Path(__file__).resolve().parents[1] / "config/dataset_snapshot.yaml")
 
 
 def generate_launch_description():

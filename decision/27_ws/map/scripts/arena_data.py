@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import sqlite3
 
+import yaml
+
 
 @dataclass(frozen=True)
 class Entity:
@@ -47,10 +49,46 @@ def _bounded_hp(value, maximum):
     return max(0, min(int(round(value or 0)), maximum))
 
 
+def _load_yaml_snapshot(path):
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    buildings = data["buildings"]
+    enemies = tuple(
+        Entity(
+            target_id=int(robot["target"]),
+            robot_id=int(robot["robot_id"]),
+            robot_type=str(robot["type"]),
+            team="蓝",
+            hp=int(robot["hp"]),
+            max_hp=int(robot.get("max_hp", robot["hp"])),
+            x=float(robot["position"][0]),
+            y=float(robot["position"][1]),
+        )
+        for robot in data["blue_robots"]
+    )
+    return ArenaSnapshot(
+        game_id=int(data["game_id"]),
+        match_name=str(data["match"]),
+        red_school=str(data["red_school"]),
+        blue_school=str(data["blue_school"]),
+        own_base_hp=int(buildings["red_base"]["hp"]),
+        own_outpost_hp=int(buildings["red_outpost"]["interface_hp"]),
+        enemy_base_hp=int(buildings["blue_base"]["hp"]),
+        enemy_outpost_hp=int(buildings["blue_outpost"]["interface_hp"]),
+        enemies=enemies,
+    )
+
+
 def load_snapshot(database_path, requested_game_id=0):
     path = Path(database_path).expanduser().resolve()
     if not path.is_file():
         raise FileNotFoundError(f"RMUC dataset does not exist: {path}")
+    if path.suffix.lower() in {".yaml", ".yml"}:
+        snapshot = _load_yaml_snapshot(path)
+        if requested_game_id and int(requested_game_id) != snapshot.game_id:
+            raise ValueError(
+                f"game_id {requested_game_id} does not match snapshot {snapshot.game_id}"
+            )
+        return snapshot
 
     connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
