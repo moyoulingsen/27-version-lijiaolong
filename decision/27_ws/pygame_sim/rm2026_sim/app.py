@@ -22,7 +22,6 @@ from .task_state import (
 APP_ROOT = Path(__file__).resolve().parent.parent
 MAP_PATH = APP_ROOT / "assets" / "rmuc2026.pgm"
 WINDOW_SIZE = (1440, 820)
-MINIMUM_WINDOW_SIZE = (1180, 700)
 HEADER_HEIGHT = 76
 SIDE_PANEL_WIDTH = 250
 
@@ -107,12 +106,17 @@ class SimulatorApp:
                             self._release_manual_control()
                         else:
                             self._handle_task_key(event.key)
-                    elif event.type == self.pg.VIDEORESIZE:
-                        size = (
-                            max(event.w, MINIMUM_WINDOW_SIZE[0]),
-                            max(event.h, MINIMUM_WINDOW_SIZE[1]),
-                        )
-                        self.screen = self.pg.display.set_mode(size, self.pg.RESIZABLE)
+                    elif event.type in (
+                        self.pg.VIDEORESIZE,
+                        self.pg.WINDOWSIZECHANGED,
+                    ):
+                        # Pygame 2/SDL2 resizes a RESIZABLE display surface
+                        # automatically. Calling set_mode() again here can
+                        # generate another resize event on X11 and make the
+                        # window continuously flash.
+                        resized_surface = self.pg.display.get_surface()
+                        if resized_surface is not None:
+                            self.screen = resized_surface
                     elif event.type == self.pg.MOUSEBUTTONDOWN and event.button == 1:
                         self._handle_mouse_click(event.pos)
 
@@ -1003,4 +1007,7 @@ def main() -> None:
         raise SystemExit(
             "尚未安装 Pygame，请执行：python -m pip install -r requirements.txt"
         ) from error
-    SimulatorApp(pygame).run()
+    try:
+        SimulatorApp(pygame).run()
+    except KeyboardInterrupt:
+        pass
