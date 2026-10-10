@@ -1,3 +1,6 @@
+# 本地参考资料嵌套仓库
+定位导航参考资料/26_task_ws/
+
 # ROS 2 / colcon 编译产物（匹配仓库中任意工作空间）
 **/build/
 **/install/
@@ -50,3 +53,11 @@ ccache/
 .env.*
 docker-compose.override.yml
 data/
+
+# Windows / WSL 本地启动 ROS 行为树服务
+/decision/27_ws/pygame_sim/run_behavior_tree_sim.ps1
+/decision/27_ws/tools/run_pygame_bt_stack.sh
+/decision/27_ws/map/scripts/pygame_bt_bridge.py
+/decision/27_ws/pygame_sim/rm2026_sim/ros_bridge.py
+
+/decision/docx/rmuc_2026_region_dataset.sqlite
