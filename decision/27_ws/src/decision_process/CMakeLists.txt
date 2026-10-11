@@ -17,6 +17,8 @@ find_package(nav_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ReceiveData.msg"
@@ -48,6 +50,8 @@ ament_target_dependencies(decision_process_node
   nav_msgs
   rclcpp
   std_msgs
+  tf2
+  tf2_ros
 )
 target_link_libraries(decision_process_node "${cpp_typesupport_target}")
 

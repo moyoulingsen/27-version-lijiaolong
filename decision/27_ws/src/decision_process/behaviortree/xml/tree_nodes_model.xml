@@ -122,6 +122,9 @@
     <Condition ID="HasInRangeTarget">
       <input_port name="in_range_count" type="int" default="0"/>
     </Condition>
+    <Condition ID="SelectedTargetInRange">
+      <input_port name="selected_in_range" type="bool" default="false"/>
+    </Condition>
     <Condition ID="HasPickupAmmo">
       <input_port name="pickup_ammo_count" type="int" default="0"/>
     </Condition>
@@ -177,6 +180,8 @@
       <input_port name="attack_targets" type="std::string"/>
       <input_port name="low_health_threshold" type="double" default="50.0"/>
       <input_port name="require_in_range" type="bool" default="true"/>
+      <input_port name="require_low_health" type="bool" default="false"/>
+      <input_port name="require_observed" type="bool" default="false"/>
       <output_port name="selected_target_id" type="std::string"/>
       <output_port name="selected_health" type="double"/>
       <output_port name="selected_distance" type="double"/>

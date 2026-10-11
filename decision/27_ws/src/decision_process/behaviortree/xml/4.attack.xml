@@ -61,6 +61,54 @@
         </ReactiveSequence>
 
         <ReactiveFallback name="AttackOrPursue">
+          <!-- Any currently detected robot below 50 HP preempts the persistent
+               outpost even when that robot is still outside attack range. -->
+          <ReactiveSequence name="DetectedLowHealthPriority">
+            <SelectAttackTarget attack_targets="{attack_targets}"
+                                low_health_threshold="50.0"
+                                require_in_range="false"
+                                require_low_health="true"
+                                require_observed="true"
+                                selected_target_id="{selected_target_id}"
+                                selected_health="{selected_health}"
+                                selected_distance="{selected_distance}"
+                                selected_in_range="{selected_in_range}"
+                                target_selected="{target_selected}"/>
+            <ReactiveFallback name="LowHealthAttackOrPursue">
+              <ReactiveSequence name="AttackLowHealthInRange">
+                <SelectedTargetInRange selected_in_range="{selected_in_range}"/>
+                <SetPosture posture="1" posture_command="{posture_command}"/>
+                <SetGyroMode mode="0" gyro_mode_command="{gyro_mode_command}"/>
+                <AimAndFire target_id="{selected_target_id}"
+                            target_visible="{target_visible}"
+                            gimbal_aligned="{gimbal_aligned}"
+                            damage_confirmed="{damage_confirmed}"
+                            target_destroyed="{target_destroyed}"
+                            target_lost_seconds="{target_lost_seconds}"
+                            lost_timeout_seconds="5.0"
+                            posture_command="{posture_command}"
+                            gyro_mode_command="{gyro_mode_command}"
+                            gimbal_enabled_command="{gimbal_enabled}"
+                            gimbal_rotate_command="{gimbal_rotate}"
+                            target_lock_command="{target_lock}"
+                            fire_command="{fire_command}"/>
+              </ReactiveSequence>
+              <SubTree ID="Pursue"
+                       selected_target_id="{selected_target_id}"
+                       selected_in_range="{selected_in_range}"
+                       selected_distance="{selected_distance}"
+                       target_in_range_seconds="{target_in_range_seconds}"
+                       pursuit_elapsed_seconds="{pursuit_elapsed_seconds}"
+                       posture_command="{posture_command}"
+                       gyro_mode_command="{gyro_mode_command}"
+                       gimbal_enabled="{gimbal_enabled}"
+                       pursuit_enabled="{pursuit_enabled}"
+                       pursuit_target_id="{pursuit_target_id}"
+                       pursuit_direction="{pursuit_direction}"
+                       pursuit_desired_distance="{pursuit_desired_distance}"/>
+            </ReactiveFallback>
+          </ReactiveSequence>
+
           <ReactiveSequence name="AttackInRangeTarget">
             <HasInRangeTarget in_range_count="{in_range_count}"/>
             <SelectAttackTarget attack_targets="{attack_targets}"

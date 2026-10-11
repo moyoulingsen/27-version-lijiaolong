@@ -7,11 +7,12 @@ import os
 import socket
 
 import rclpy
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, TransformStamped
 from nav_msgs.msg import Odometry
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_msgs.msg import Bool
+from tf2_ros import TransformBroadcaster
 
 from decision_process.msg import (
     AutoaimToDecision,
@@ -41,6 +42,7 @@ class PygameRosBridge(Node):
             AutoaimToDecision, "/autoaim_to_decision", 10
         )
         self.odom_pub = self.create_publisher(Odometry, "/state_estimation", 10)
+        self.tf_broadcaster = TransformBroadcaster(self)
 
         self.create_subscription(
             DesicionSendData, "/serial_send_data", self._serial_callback, 10
@@ -133,8 +135,10 @@ class PygameRosBridge(Node):
         self.autoaim_pub.publish(autoaim)
 
         yaw = float(state.get("yaw", 0.0))
+        camera_yaw = float(state.get("camera_yaw", yaw))
+        stamp = self.get_clock().now().to_msg()
         odometry = Odometry()
-        odometry.header.stamp = self.get_clock().now().to_msg()
+        odometry.header.stamp = stamp
         odometry.header.frame_id = "map"
         odometry.child_frame_id = "base_link"
         odometry.pose.pose.position.x = float(state.get("x", 0.0))
@@ -142,6 +146,16 @@ class PygameRosBridge(Node):
         odometry.pose.pose.orientation.z = math.sin(yaw * 0.5)
         odometry.pose.pose.orientation.w = math.cos(yaw * 0.5)
         self.odom_pub.publish(odometry)
+
+        camera = TransformStamped()
+        camera.header.stamp = stamp
+        camera.header.frame_id = "map"
+        camera.child_frame_id = "camera_link"
+        camera.transform.translation.x = float(state.get("x", 0.0))
+        camera.transform.translation.y = float(state.get("y", 0.0))
+        camera.transform.rotation.z = math.sin(camera_yaw * 0.5)
+        camera.transform.rotation.w = math.cos(camera_yaw * 0.5)
+        self.tf_broadcaster.sendTransform(camera)
 
     def _send_output(self) -> None:
         if self.client_address is None:

@@ -162,7 +162,8 @@ class SimulatorApp:
                 viewport = self._viewport()
                 move_x, move_y = self._movement_input()
                 bridge_decision = self._bridge_decision()
-                motion_decision = bridge_decision or self.task.evaluate(self.sentry)
+                local_decision = self._local_decision()
+                motion_decision = bridge_decision or local_decision
                 restarting = self._restart_signal_remaining > 0.0
                 simulation_elapsed = (
                     0.0
@@ -206,7 +207,7 @@ class SimulatorApp:
                 self.decision = self.task.update(
                     0.0 if restarting else elapsed_seconds,
                     self.sentry,
-                    decision_override=bridge_decision,
+                    decision_override=motion_decision,
                     fire_request=fire_request,
                     hit_target_id=self.hit_target_id,
                 )
@@ -279,7 +280,7 @@ class SimulatorApp:
             )
             return
 
-        if self.bridge.connected and decision.goal is not None:
+        if decision.goal is not None:
             goal_x, goal_y = decision.goal
             delta_x = goal_x - self.sentry.x
             delta_y = goal_y - self.sentry.y
@@ -336,6 +337,71 @@ class SimulatorApp:
 
     def _manual_fire_requested(self) -> bool:
         return self.sentry.manual_control and self._manual_fire_held
+
+    def _local_decision(self) -> DecisionView:
+        base = self.task.evaluate(self.sentry)
+        if (
+            self.task.game_finished
+            or not self.task.game_running
+            or self.task.sentry_hp <= 0.0
+            or self.task.respawn_fire_locked
+            or self.task.ammo <= 0
+        ):
+            return base
+
+        autoaim = self._simulated_autoaim(self._enemy_health_snapshot())
+        candidates = []
+        for target_id in (1, 3, 4, 5, 8):
+            health = self.task.enemy_health(target_id)
+            if (
+                autoaim["target"][target_id]
+                and 0.0 < health < 50.0
+                and health != 1001.0
+            ):
+                candidates.append(
+                    (autoaim["target_distance"][target_id], target_id)
+                )
+        if not candidates:
+            return base
+
+        distance, target_id = min(candidates)
+        if distance > ATTACK_RANGE:
+            polar_radius = autoaim["target_polar_r"][target_id]
+            polar_angle = autoaim["target_polar_angle"][target_id]
+            map_angle = self.sentry.turret_angle + polar_angle
+            target_x = self.sentry.x + polar_radius * math.cos(map_angle)
+            target_y = self.sentry.y + polar_radius * math.sin(map_angle)
+            delta_x = target_x - self.sentry.x
+            delta_y = target_y - self.sentry.y
+            length = max(1e-6, math.hypot(delta_x, delta_y))
+            desired_distance = 2.8
+            goal = self.arena.clamp(
+                target_x - delta_x / length * desired_distance,
+                target_y - delta_y / length * desired_distance,
+            )
+            return DecisionView(
+                behavior="追击残血目标",
+                posture=3,
+                goal=goal,
+                spin_mode=1,
+                tripod_mode=1,
+                shoot_mode=0,
+                target=target_id,
+                confirm_respawn=0,
+                health_threshold=base.health_threshold,
+            )
+
+        return DecisionView(
+            behavior="攻击残血目标",
+            posture=1,
+            goal=None,
+            spin_mode=0,
+            tripod_mode=1,
+            shoot_mode=1,
+            target=target_id,
+            confirm_respawn=0,
+            health_threshold=base.health_threshold,
+        )
 
     def _bridge_decision(self) -> DecisionView | None:
         if not self.bridge.connected:
@@ -418,6 +484,7 @@ class SimulatorApp:
             "x": self.sentry.x,
             "y": self.sentry.y,
             "yaw": self.sentry.spin_angle,
+            "camera_yaw": self.sentry.turret_angle,
             "autoaim": self._simulated_autoaim(enemy_hp),
             "aggressive_patrol": self.task.patrol_is_aggressive,
         }

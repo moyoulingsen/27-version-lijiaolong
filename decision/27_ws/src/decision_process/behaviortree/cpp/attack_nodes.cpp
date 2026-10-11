@@ -266,6 +266,8 @@ BT::PortsList SelectAttackTargetAction::providedPorts()
     BT::InputPort<std::string>("attack_targets"),
     BT::InputPort<double>("low_health_threshold", 50.0, "Low-health priority threshold"),
     BT::InputPort<bool>("require_in_range", true, "Only select targets in weapon range"),
+    BT::InputPort<bool>("require_low_health", false, "Only select targets below the threshold"),
+    BT::InputPort<bool>("require_observed", false, "Only select currently observed non-persistent targets"),
     BT::OutputPort<std::string>("selected_target_id"),
     BT::OutputPort<double>("selected_health"),
     BT::OutputPort<double>("selected_distance"),
@@ -277,7 +279,10 @@ BT::NodeStatus SelectAttackTargetAction::tick()
 {
   const auto threshold = getInput<double>("low_health_threshold");
   const auto require_in_range = getInput<bool>("require_in_range");
-  if(!threshold || !require_in_range || !finite(threshold.value()) || threshold.value() < 0.0)
+  const auto require_low_health = getInput<bool>("require_low_health");
+  const auto require_observed = getInput<bool>("require_observed");
+  if(!threshold || !require_in_range || !require_low_health || !require_observed ||
+    !finite(threshold.value()) || threshold.value() < 0.0)
   {
     return BT::NodeStatus::FAILURE;
   }
@@ -290,7 +295,9 @@ BT::NodeStatus SelectAttackTargetAction::tick()
   const Target * selected = nullptr;
   for(const auto & target : targets)
   {
-    if(target.invincible || (require_in_range.value() && !target.in_range))
+    if(target.invincible || (require_in_range.value() && !target.in_range) ||
+      (require_low_health.value() && target.health >= threshold.value()) ||
+      (require_observed.value() && target.persistent))
     {
       continue;
     }
@@ -363,6 +370,23 @@ BT::NodeStatus HasInRangeTargetCondition::tick()
 {
   const auto count = getInput<int>("in_range_count");
   return count && count.value() > 0 ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
+SelectedTargetInRangeCondition::SelectedTargetInRangeCondition(
+  const std::string & name, const BT::NodeConfig & config)
+: BT::ConditionNode(name, config)
+{
+}
+
+BT::PortsList SelectedTargetInRangeCondition::providedPorts()
+{
+  return {BT::InputPort<bool>("selected_in_range", false, "Selected target is in range")};
+}
+
+BT::NodeStatus SelectedTargetInRangeCondition::tick()
+{
+  const auto in_range = getInput<bool>("selected_in_range");
+  return in_range && in_range.value() ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
 EvadeEligibleCondition::EvadeEligibleCondition(
@@ -846,6 +870,7 @@ void registerAttackNodes(BT::BehaviorTreeFactory & factory)
   factory.registerNodeType<SelectAttackTargetAction>("SelectAttackTarget");
   factory.registerNodeType<HasAttackTargetsCondition>("HasAttackTargets");
   factory.registerNodeType<HasInRangeTargetCondition>("HasInRangeTarget");
+  factory.registerNodeType<SelectedTargetInRangeCondition>("SelectedTargetInRange");
   factory.registerNodeType<EvadeEligibleCondition>("EvadeEligible");
   factory.registerNodeType<EvasiveManeuverAction>("EvasiveManeuver");
   factory.registerNodeType<AimAndFireAction>("AimAndFire");

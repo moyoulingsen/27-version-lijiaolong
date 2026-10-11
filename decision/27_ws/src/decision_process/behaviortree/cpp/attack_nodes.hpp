@@ -39,7 +39,7 @@ public:
   BT::NodeStatus tick() override;
 };
 
-/** Selects the lowest-health target first, then the nearest target. */
+/** Selects the highest-priority target, optionally filtering to visible low-health units. */
 class SelectAttackTargetAction : public BT::SyncActionNode
 {
 public:
@@ -66,6 +66,17 @@ class HasInRangeTargetCondition : public BT::ConditionNode
 {
 public:
   HasInRangeTargetCondition(const std::string & name, const BT::NodeConfig & config);
+
+  static BT::PortsList providedPorts();
+
+  BT::NodeStatus tick() override;
+};
+
+/** Returns SUCCESS when the already selected target is inside weapon range. */
+class SelectedTargetInRangeCondition : public BT::ConditionNode
+{
+public:
+  SelectedTargetInRangeCondition(const std::string & name, const BT::NodeConfig & config);
 
   static BT::PortsList providedPorts();
 

@@ -15,6 +15,10 @@
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/bool.hpp"
+#include "tf2/exceptions.hpp"
+#include "tf2/time.hpp"
+#include "tf2_ros/buffer.h"
+#include "tf2_ros/transform_listener.h"
 
 #include "decision_process/msg/autoaim_to_decision.hpp"
 #include "decision_process/msg/decision_to_autoaim.hpp"
@@ -77,7 +81,10 @@ class DecisionProcessNode : public rclcpp::Node
 {
 public:
   DecisionProcessNode()
-  : Node("decision_process"), blackboard_(BT::Blackboard::create())
+  : Node("decision_process"),
+    tf_buffer_(get_clock()),
+    tf_listener_(tf_buffer_),
+    blackboard_(BT::Blackboard::create())
   {
     const double tick_rate_hz = declare_parameter<double>("tick_rate_hz", 20.0);
     goal_tolerance_ = declare_parameter<double>("goal_tolerance", 0.25);
@@ -204,6 +211,81 @@ private:
     blackboard_->set("selected_target_id", std::string{});
   }
 
+  std::optional<std::pair<double, double>> visualPolarCoordinate(int target) const
+  {
+    if(!autoaimVisible(target))
+    {
+      return std::nullopt;
+    }
+    const std::size_t index = static_cast<std::size_t>(target);
+    if(index >= autoaim_.target_polar_r.size() ||
+      index >= autoaim_.target_polar_angle.size())
+    {
+      return std::nullopt;
+    }
+    const double radius = autoaim_.target_polar_r[index];
+    const double angle = autoaim_.target_polar_angle[index];
+    if(!std::isfinite(radius) || !std::isfinite(angle) || radius <= 0.0)
+    {
+      return std::nullopt;
+    }
+    return std::pair<double, double>{radius, angle};
+  }
+
+  std::optional<std::pair<double, double>> visualTargetPosition(int target) const
+  {
+    const auto polar = visualPolarCoordinate(target);
+    if(!polar)
+    {
+      return std::nullopt;
+    }
+    try
+    {
+      // Auto-aim reports polar coordinates whose positive axis is the camera
+      // direction at detection time.  The map->camera transform supplies only
+      // our own sensor pose; no enemy world coordinate is consumed here.
+      const auto camera = tf_buffer_.lookupTransform(
+        "map", "camera_link", tf2::TimePointZero);
+      const auto & q = camera.transform.rotation;
+      const double camera_yaw = std::atan2(
+        2.0 * (q.w * q.z + q.x * q.y),
+        1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+      const double map_angle = camera_yaw + polar->second;
+      return std::pair<double, double>{
+        camera.transform.translation.x + polar->first * std::cos(map_angle),
+        camera.transform.translation.y + polar->first * std::sin(map_angle)};
+    }
+    catch(const tf2::TransformException & error)
+    {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Cannot convert auto-aim polar target to map: %s", error.what());
+      return std::nullopt;
+    }
+  }
+
+  std::optional<std::pair<double, double>> radarTargetPosition(int target) const
+  {
+    const std::array<int, 6> ids{{1, 2, 3, 4, 5, 8}};
+    const auto iterator = std::find(ids.begin(), ids.end(), target);
+    if(iterator == ids.end())
+    {
+      return std::nullopt;
+    }
+    const std::size_t index = static_cast<std::size_t>(iterator - ids.begin()) * 2U;
+    if(referee_.radar_data.size() <= index + 1U)
+    {
+      return std::nullopt;
+    }
+    const double x = referee_.radar_data[index];
+    const double y = referee_.radar_data[index + 1U];
+    if(!std::isfinite(x) || !std::isfinite(y) || (x == 0.0 && y == 0.0))
+    {
+      return std::nullopt;
+    }
+    return std::pair<double, double>{x, y};
+  }
+
   double tacticalDistance(int target) const
   {
     if(target == 6)
@@ -224,19 +306,14 @@ private:
     {
       return std::pair<double, double>{27.0, 7.5};
     }
-    const std::array<int, 6> ids{{1, 2, 3, 4, 5, 8}};
-    const auto iterator = std::find(ids.begin(), ids.end(), target);
-    if(iterator == ids.end())
+    // A visible unit must be positioned from the camera-relative observation.
+    // Do not silently replace malformed/missing visual coordinates with the
+    // referee/radar world coordinate, otherwise the robot gains omniscience.
+    if(autoaimVisible(target))
     {
-      return std::nullopt;
+      return visualTargetPosition(target);
     }
-    const std::size_t index = static_cast<std::size_t>(iterator - ids.begin()) * 2U;
-    if(referee_.radar_data.size() <= index + 1U)
-    {
-      return std::nullopt;
-    }
-    return std::pair<double, double>{
-      referee_.radar_data[index], referee_.radar_data[index + 1U]};
+    return radarTargetPosition(target);
   }
 
   uint16_t targetHealth(int target) const
@@ -253,6 +330,11 @@ private:
 
   double autoaimDistance(int target) const
   {
+    const auto polar = visualPolarCoordinate(target);
+    if(polar)
+    {
+      return polar->first;
+    }
     if(target > 0 && static_cast<std::size_t>(target) < autoaim_.target_distance.size())
     {
       const double reported = autoaim_.target_distance[static_cast<std::size_t>(target)];
@@ -575,6 +657,8 @@ private:
   }
 
   BT::BehaviorTreeFactory factory_;
+  tf2_ros::Buffer tf_buffer_;
+  tf2_ros::TransformListener tf_listener_;
   BT::Blackboard::Ptr blackboard_;
   std::unique_ptr<BT::Tree> tree_;
   std::string tree_file_;

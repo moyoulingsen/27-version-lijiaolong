@@ -4,9 +4,10 @@
   <include path="common_position.xml"/>
 
   <!--
-    Health is sampled on every tree tick. The branch is deliberately placed
-    before Attack in MainTree, so recovery preempts attack and evasion below
-    the configured threshold. Once running, it owns navigation until 400 HP.
+    Health is sampled on every tree tick. The branch is placed before ordinary
+    attack and evasion, but MainTree gives a currently detected sub-50-HP
+    robot permission to finish before recovery. Otherwise, once running,
+    recovery owns navigation until 400 HP.
 
     defense_buff is a ratio in [0, 1]. The supply point is configured by the
     parent subtree remapping (the current default is 0.0, 0.0).

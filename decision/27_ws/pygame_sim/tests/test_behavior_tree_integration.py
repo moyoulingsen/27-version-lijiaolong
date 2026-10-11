@@ -32,6 +32,7 @@ def base_state() -> dict:
         "x": 4.971,
         "y": 7.5,
         "yaw": 0.0,
+        "camera_yaw": 0.0,
         "autoaim": {
             "target": [0] * 9,
             "target_distance": [0.0] * 9,
@@ -93,21 +94,27 @@ def main() -> None:
             "engineer robot 2 is excluded from target selection",
         )
 
-        # Any other observed attackable robot preempts the persistent outpost.
+        # A visual target must be projected from camera-relative polar data.
+        # Deliberately publish a contradictory radar coordinate to prove that
+        # visible-target pursuit does not consume the global radar/world value.
+        state["camera_yaw"] = math.pi / 2.0
+        state["radar_data"][4:6] = [1.0, 14.0]
         state["autoaim"]["target"][3] = 1
         state["autoaim"]["target_distance"][3] = 5.0
+        state["autoaim"]["target_polar_r"][3] = 5.0
+        state["autoaim"]["target_polar_angle"][3] = -math.pi / 2.0
         wait_for(
             client,
             state,
             lambda output: output["autoaim"]["target"] == 3
             and output["serial"]["posture"] == 3
             and output["serial"]["shoot_mode"] == 0
-            and output.get("goal") is not None
-            and not near_goal(output, (17.0, 10.0)),
-            "detected target outside 4m starts pursuit instead of firing",
+            and near_goal(output, (7.171, 7.5)),
+            "camera-relative target converts to map without radar world coordinate",
         )
 
         state["autoaim"]["target_distance"][3] = 3.0
+        state["autoaim"]["target_polar_r"][3] = 3.0
         wait_for(
             client,
             state,
@@ -119,6 +126,8 @@ def main() -> None:
         state["autoaim"]["target_distance"][2] = 0.0
         state["autoaim"]["target"][3] = 0
         state["autoaim"]["target_distance"][3] = 0.0
+        state["autoaim"]["target_polar_r"][3] = 0.0
+        state["autoaim"]["target_polar_angle"][3] = 0.0
         wait_for(
             client,
             state,
@@ -157,6 +166,39 @@ def main() -> None:
             and output["serial"]["posture"] == 1,
             "attack and fire at outpost",
         )
+
+        # A detected robot below 50 HP preempts the in-range outpost even
+        # while it remains outside the 4 m attack range.
+        state["hp_enemy"][2] = 40
+        state["autoaim"]["target"][3] = 1
+        state["autoaim"]["target_distance"][3] = 5.0
+        state["autoaim"]["target_polar_r"][3] = 5.0
+        state["autoaim"]["target_polar_angle"][3] = 0.0
+        wait_for(
+            client,
+            state,
+            lambda output: output["autoaim"]["target"] == 3
+            and output["serial"]["posture"] == 3
+            and output["serial"]["shoot_mode"] == 0
+            and output.get("goal") is not None,
+            "detected low-health target preempts in-range outpost and is pursued",
+        )
+
+        state["autoaim"]["target_distance"][3] = 3.0
+        state["autoaim"]["target_polar_r"][3] = 3.0
+        wait_for(
+            client,
+            state,
+            lambda output: output["autoaim"]["target"] == 3
+            and output["serial"]["posture"] == 1
+            and output["serial"]["shoot_mode"] == 1,
+            "pursued low-health target is attacked after entering 4m",
+        )
+        state["hp_enemy"][2] = 200
+        state["autoaim"]["target"][3] = 0
+        state["autoaim"]["target_distance"][3] = 0.0
+        state["autoaim"]["target_polar_r"][3] = 0.0
+        state["autoaim"]["target_polar_angle"][3] = 0.0
 
         state["hp_enemy"][5] = 0
         state["autoaim"]["target"][6] = 0
@@ -245,15 +287,28 @@ def main() -> None:
         state["autoaim"]["target"][3] = 0
         state["autoaim"]["target_distance"][3] = 0.0
 
-        # Recovery now preempts both evasion and attack below the health threshold.
+        # A detected target below 50 HP still preempts recovery, even when the
+        # sentry itself is below the health-recovery threshold.
         state["hp_sentry"] = 150
-        state["hp_enemy"][2] = 100
+        state["hp_enemy"][2] = 40
         state["autoaim"]["target"][3] = 1
         state["autoaim"]["target_distance"][3] = 3.0
         wait_for(
+            client,
+            state,
+            lambda output: output["autoaim"]["target"] == 3
+            and output["serial"]["posture"] == 1
+            and output["serial"]["shoot_mode"] == 1
+            and not near_goal(output, (2.0, 1.0)),
+            "sub-50-HP target preempts health recovery",
+        )
+
+        # A non-low-health target cannot block recovery.
+        state["hp_enemy"][2] = 100
+        wait_for(
             client, state, lambda output: near_goal(output, (2.0, 1.0))
             and output["serial"]["posture"] == 3,
-            "low health recovery preempts evasive counterattack",
+            "non-low-health target does not block recovery",
         )
         state["autoaim"]["target"][3] = 0
         state["autoaim"]["target_distance"][3] = 0.0
