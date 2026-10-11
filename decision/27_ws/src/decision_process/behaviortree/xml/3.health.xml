@@ -5,8 +5,8 @@
 
   <!--
     Health is sampled on every tree tick. The branch is deliberately placed
-    below Attack in MainTree, so an active engagement keeps priority. Once
-    this branch is running, it owns navigation until health reaches 400.
+    before Attack in MainTree, so recovery preempts attack and evasion below
+    the configured threshold. Once running, it owns navigation until 400 HP.
 
     defense_buff is a ratio in [0, 1]. The supply point is configured by the
     parent subtree remapping (the current default is 0.0, 0.0).

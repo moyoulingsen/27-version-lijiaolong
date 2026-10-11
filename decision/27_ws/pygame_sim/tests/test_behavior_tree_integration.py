@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import math
+import os
 from pathlib import Path
 import sys
 import time
@@ -27,6 +28,7 @@ def base_state() -> dict:
         "hp_enemy": [200, 250, 200, 200, 100, 1000, 5000, 400],
         "radar_data": [5.0, 7.5, 8.0, 7.5, 9.0, 9.0, 12.0, 5.0, 15.0, 10.0, 25.0, 8.0],
         "pending_ammo": 0,
+        "economy": 500,
         "x": 4.971,
         "y": 7.5,
         "yaw": 0.0,
@@ -63,28 +65,78 @@ def wait_for(client, state, predicate, label, timeout=5.0):
 
 
 def main() -> None:
-    client = BehaviorTreeBridgeClient(timeout=2.0)
+    client = BehaviorTreeBridgeClient(
+        port=int(os.environ.get("RM2026_SIM_PORT", "39001")),
+        timeout=2.0,
+    )
     try:
         state = base_state()
         wait_for(
             client,
             state,
             lambda output: output["autoaim"]["target"] == 6
-            and near_goal(output, (16.0, 11.0))
-            and output["serial"]["spin_mode"] == 1,
-            "enemy outpost pursuit uses low-speed gyro",
+            and near_goal(output, (17.0, 10.0))
+            and output["serial"]["spin_mode"] == 1
+            and output["serial"]["tripod_mode"] == 1,
+            "enemy outpost pursuit uses low-speed gyro and scans with gimbal",
+        )
+
+        # Engineer robot 2 is not an attack candidate. Even when visible, the
+        # opening outpost remains selected.
+        state["autoaim"]["target"][2] = 1
+        state["autoaim"]["target_distance"][2] = 3.0
+        wait_for(
+            client,
+            state,
+            lambda output: output["autoaim"]["target"] == 6
+            and near_goal(output, (17.0, 10.0)),
+            "engineer robot 2 is excluded from target selection",
+        )
+
+        # Any other observed attackable robot preempts the persistent outpost.
+        state["autoaim"]["target"][3] = 1
+        state["autoaim"]["target_distance"][3] = 5.0
+        wait_for(
+            client,
+            state,
+            lambda output: output["autoaim"]["target"] == 3
+            and output["serial"]["posture"] == 3
+            and output["serial"]["shoot_mode"] == 0
+            and output.get("goal") is not None
+            and not near_goal(output, (17.0, 10.0)),
+            "detected target outside 4m starts pursuit instead of firing",
+        )
+
+        state["autoaim"]["target_distance"][3] = 3.0
+        wait_for(
+            client,
+            state,
+            lambda output: output["autoaim"]["target"] == 3
+            and output["serial"]["posture"] == 1,
+            "detected non-engineer robot preempts opening outpost",
+        )
+        state["autoaim"]["target"][2] = 0
+        state["autoaim"]["target_distance"][2] = 0.0
+        state["autoaim"]["target"][3] = 0
+        state["autoaim"]["target_distance"][3] = 0.0
+        wait_for(
+            client,
+            state,
+            lambda output: output["autoaim"]["target"] == 6
+            and near_goal(output, (17.0, 10.0)),
+            "outpost pursuit resumes after detected robot disappears",
         )
 
         state["x"], state["y"] = 13.65, 9.86
         wait_for(
             client,
             state,
-            lambda output: near_goal(output, (16.0, 11.0))
+            lambda output: near_goal(output, (17.0, 10.0))
             and output["serial"]["shoot_mode"] == 0,
             "outpost pursuit does not stop or fire early",
         )
 
-        state["x"], state["y"] = 16.0, 11.0
+        state["x"], state["y"] = 17.0, 10.0
         wait_for(
             client,
             state,
@@ -95,7 +147,7 @@ def main() -> None:
         )
 
         state["autoaim"]["target"][6] = 1
-        state["autoaim"]["target_distance"][6] = 5.3
+        state["autoaim"]["target_distance"][6] = 3.9
         wait_for(
             client,
             state,
@@ -111,34 +163,107 @@ def main() -> None:
         state["autoaim"]["target_distance"][6] = 0.0
         state["hp_sentry"] = 150
         wait_for(
-            client, state, lambda output: near_goal(output, (2.0, 1.0)),
+            client, state, lambda output: near_goal(output, (2.0, 1.0))
+            and output["serial"]["posture"] == 3,
             "low-health recovery",
         )
 
         state["hp_sentry"] = 250
         wait_for(
-            client, state, lambda output: near_goal(output, (2.0, 1.0)),
+            client, state, lambda output: near_goal(output, (2.0, 1.0))
+            and output["serial"]["posture"] == 3,
             "health recovery remains active above trigger threshold",
         )
 
         state["hp_sentry"] = 400
         state["x"], state["y"] = 4.971, 7.5
-        state["aggressive_patrol"] = False
+        state["economy"] = 399
         wait_for(
             client,
             state,
             lambda output: near_goal(output, (5.0, 5.0))
-            and output["serial"]["spin_mode"] == 3,
-            "conservative patrol uses high-speed gyro",
+            and output["serial"]["spin_mode"] == 3
+            and output["serial"]["tripod_mode"] == 0,
+            "low economy selects conservative patrol and closes gimbal",
         )
 
-        state["aggressive_patrol"] = True
+        state["economy"] = 400
+        wait_for(
+            client,
+            state,
+            lambda output: near_goal(output, (12.0, 3.0))
+            and output["serial"]["spin_mode"] == 1
+            and output["serial"]["tripod_mode"] == 1,
+            "sufficient economy selects aggressive patrol and opens gimbal",
+        )
+
+        # One 25 HP hit remains below the accumulated significant-damage threshold.
+        state["hp_sentry"] = 375
         wait_for(
             client,
             state,
             lambda output: near_goal(output, (12.0, 3.0))
             and output["serial"]["spin_mode"] == 1,
-            "aggressive patrol uses low-speed gyro",
+            "one 25 HP hit does not trigger evasion",
+        )
+
+        # A second 25 HP hit within one second raises the burst total to 50 HP.
+        state["hp_sentry"] = 350
+        wait_for(
+            client,
+            state,
+            lambda output: output["serial"]["posture"] == 2
+            and output["serial"]["spin_mode"] == 3
+            and output["serial"]["tripod_mode"] == 1
+            and output.get("goal") is not None
+            and not near_goal(output, (12.0, 3.0)),
+            "two rapid 25 HP hits start accumulated-damage evasion",
+        )
+
+        # A detected stronger robot does not cancel evasion.
+        state["hp_enemy"][2] = 400
+        state["autoaim"]["target"][3] = 1
+        state["autoaim"]["target_distance"][3] = 3.0
+        wait_for(
+            client,
+            state,
+            lambda output: output["serial"]["posture"] == 2
+            and output["serial"]["spin_mode"] == 3
+            and output["serial"]["shoot_mode"] == 0,
+            "stronger detected target keeps evasion active",
+        )
+
+        # Once the observed robot is weaker than the sentry, normal attack owns it.
+        state["hp_enemy"][2] = 300
+        wait_for(
+            client,
+            state,
+            lambda output: output["autoaim"]["target"] == 3
+            and output["serial"]["posture"] == 1,
+            "weaker detected target preempts evasion and is attacked",
+        )
+        state["autoaim"]["target"][3] = 0
+        state["autoaim"]["target_distance"][3] = 0.0
+
+        # Recovery now preempts both evasion and attack below the health threshold.
+        state["hp_sentry"] = 150
+        state["hp_enemy"][2] = 100
+        state["autoaim"]["target"][3] = 1
+        state["autoaim"]["target_distance"][3] = 3.0
+        wait_for(
+            client, state, lambda output: near_goal(output, (2.0, 1.0))
+            and output["serial"]["posture"] == 3,
+            "low health recovery preempts evasive counterattack",
+        )
+        state["autoaim"]["target"][3] = 0
+        state["autoaim"]["target_distance"][3] = 0.0
+        state["hp_sentry"] = 400
+        wait_for(
+            client,
+            state,
+            lambda output: near_goal(output, (12.0, 3.0)),
+            "original aggressive patrol resumes after recovery and evade timeout",
+            timeout=7.0,
         )
 
         # Reproduce the UI sequence: clear carried ammunition first, allow the
@@ -168,7 +293,7 @@ def main() -> None:
             "outpost destruction does not override aggressive patrol mode",
         )
 
-        state["aggressive_patrol"] = False
+        state["economy"] = 399
         wait_for(
             client,
             state,

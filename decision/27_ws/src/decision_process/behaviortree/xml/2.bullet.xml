@@ -60,12 +60,20 @@
     </ReactiveFallback>
   </BehaviorTree>
 
-  <!-- Select the route requested by the simulator/referee adapter. -->
+  <!--
+    Patrol boundary from the task specification:
+      health < 150 OR economy < 400 -> conservative patrol;
+      otherwise                    -> aggressive patrol.
+    Economy is an independent referee/simulator attribute.
+  -->
   <BehaviorTree ID="NoAmmoPatrolDecision">
-    <ReactiveFallback name="PatrolByRequestedMode">
-      <ReactiveSequence name="AggressiveWhenRequested">
-        <AggressivePatrolRequested requested="{aggressive_patrol}"/>
-        <SubTree ID="AggressivePatrol"
+    <ReactiveFallback name="PatrolByResources">
+      <ReactiveSequence name="ConservativeWhenResourcesLow">
+        <ResourcesLow health="{health}"
+                      health_threshold="150.0"
+                      economy="{economy}"
+                      economy_threshold="400.0"/>
+        <SubTree ID="ConservativePatrol"
                  current_x="{current_x}"
                  current_y="{current_y}"
                  localization_valid="{localization_valid}"
@@ -81,7 +89,7 @@
                  gyro_mode_command="{gyro_mode_command}"
                  gimbal_enabled="{gimbal_enabled}"/>
       </ReactiveSequence>
-      <SubTree ID="ConservativePatrol"
+      <SubTree ID="AggressivePatrol"
                current_x="{current_x}"
                current_y="{current_y}"
                localization_valid="{localization_valid}"

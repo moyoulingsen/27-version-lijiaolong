@@ -3,6 +3,7 @@
 
 import json
 import math
+import os
 import socket
 
 import rclpy
@@ -21,7 +22,7 @@ from decision_process.msg import (
 
 
 HOST = "127.0.0.1"
-PORT = 39001
+PORT = int(os.environ.get("RM2026_SIM_PORT", "39001"))
 
 
 class PygameRosBridge(Node):
@@ -113,6 +114,7 @@ class PygameRosBridge(Node):
             state.get("radar_data"), 12, float
         )
         referee.pending_ammo = max(0, int(state.get("pending_ammo", 0)))
+        referee.economy = max(0, min(1000, int(state.get("economy", 0))))
         referee.aggressive_patrol = bool(state.get("aggressive_patrol", False))
         self.referee_pub.publish(referee)
 

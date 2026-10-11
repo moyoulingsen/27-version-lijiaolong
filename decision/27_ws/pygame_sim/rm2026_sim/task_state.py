@@ -10,10 +10,27 @@ from .core import Arena, SentryState
 
 HOME = (4.971, 7.5)
 SUPPLY = (2.0, 1.0)
-ATTACK = (16.0, 11.0)
+ATTACK = (17.0, 10.0)
 MATCH_DURATION = 420.0
-WEAPON_RANGE = 6.2
+DETECTION_RANGE = 6.2
+ATTACK_RANGE = 4.0
+WEAPON_RANGE = ATTACK_RANGE
 FIRE_ALIGNMENT_TOLERANCE = math.radians(4.0)
+RULE_FIRE_RATE_MAX = 20
+RULE_DAMAGE_PER_SHOT = 20
+DAMAGE_BURST_THRESHOLD = 30.0
+DAMAGE_BURST_WINDOW = 1.0
+EVADE_DURATION = 5.0
+EVADE_DIRECTION_PERIOD = 0.7
+EVADE_OFFSETS = (
+    (1.10, 0.35),
+    (-0.55, 1.05),
+    (0.80, -0.95),
+    (-1.15, -0.30),
+    (0.25, 1.20),
+    (0.95, -0.55),
+    (-0.85, 0.65),
+)
 SUPPLY_ZONE = (0.5, 3.7, 0.2, 2.4)
 CONSERVATIVE_PATROL_POINTS = ((5.0, 5.0), (9.0, 5.0), (9.0, 9.0))
 AGGRESSIVE_PATROL_POINTS = ((12.0, 3.0), (16.0, 7.5), (12.0, 12.0))
@@ -86,6 +103,9 @@ class TaskScenario:
     defence_buff: int = 60
     ammo: int = 120
     pending_ammo: int = 0
+    economy: int = 300
+    fire_rate: int = RULE_FIRE_RATE_MAX
+    damage_per_shot: int = RULE_DAMAGE_PER_SHOT
     own_outpost_hp: int = 1000
     own_base_hp: int = 5000
     enemy_outpost_hp: float = 1000.0
@@ -103,18 +123,29 @@ class TaskScenario:
     _last_minute: int = 7
     _ammo_shot_accumulator: float = field(default=0.0, repr=False)
     _health_recovery_active: bool = field(default=False, repr=False)
+    _dodge_phase: int = field(default=-1, repr=False)
+    _unseen_damage_accumulator: float = field(default=0.0, repr=False)
+    _unseen_damage_window_remaining: float = field(default=0.0, repr=False)
 
     @property
     def health_threshold(self) -> int:
         return 160 if self.defence_buff >= 60 else 200
 
     @property
+    def resources_low_for_patrol(self) -> bool:
+        return self.sentry_hp < 150.0 or self.economy < 400.0
+
+    @property
+    def patrol_is_aggressive(self) -> bool:
+        return not self.resources_low_for_patrol
+
+    @property
     def patrol_name(self) -> str:
-        return "激进巡逻" if self.aggressive_patrol else "保守巡逻"
+        return "激进巡逻" if self.patrol_is_aggressive else "保守巡逻"
 
     @property
     def patrol_points(self) -> tuple[tuple[float, float], ...]:
-        return AGGRESSIVE_PATROL_POINTS if self.aggressive_patrol else CONSERVATIVE_PATROL_POINTS
+        return AGGRESSIVE_PATROL_POINTS if self.patrol_is_aggressive else CONSERVATIVE_PATROL_POINTS
 
     def reset(self) -> None:
         fresh = type(self)()
@@ -204,16 +235,16 @@ class TaskScenario:
         return min(aligned)[2]
 
     def toggle_patrol_mode(self) -> None:
-        self.aggressive_patrol = not self.aggressive_patrol
+        if self.patrol_is_aggressive:
+            self.economy = 350
+        else:
+            self.economy = 400
         self.patrol_index = 0
-        self._set_event(f"已切换为{self.patrol_name}")
+        self._set_event(f"已按资源边界切换为{self.patrol_name}")
 
     def reset_match_time(self) -> None:
-        self.remaining_time = MATCH_DURATION
-        self.game_running = True
-        self.game_finished = False
-        self._last_minute = math.ceil(MATCH_DURATION / 60.0)
-        self._set_event("比赛时间已重置为 420 秒")
+        self.reset()
+        self._set_event("比赛时间及全场状态已全部复位")
 
     def toggle_pause(self) -> None:
         self.game_paused = not self.game_paused
@@ -270,15 +301,41 @@ class TaskScenario:
             name = f"敌方 {target_id} 号机器人"
         self._set_event(f"{name}血量已调整为 {round(health)}")
 
-    def adjust_sentry_health(self, direction: int) -> None:
+    def adjust_sentry_health(
+        self,
+        direction: int,
+        sentry: SentryState | None = None,
+        *,
+        unseen_damage: bool = False,
+    ) -> None:
         if direction not in (-1, 1):
             raise ValueError("direction must be -1 or 1")
         previous_health = self.sentry_hp
-        self.sentry_hp = max(0.0, min(400.0, self.sentry_hp + 40.0 * direction))
+        self.sentry_hp = max(0.0, min(400.0, self.sentry_hp + 25.0 * direction))
         if self.sentry_hp == 0.0 and previous_health > 0.0:
             self.death_elapsed = 0.0
         elif self.sentry_hp > 0.0:
             self.death_elapsed = None
+        damage = previous_health - self.sentry_hp
+        if damage > 0.0 and unseen_damage and sentry is not None:
+            if self._unseen_damage_window_remaining <= 0.0:
+                self._unseen_damage_accumulator = 0.0
+            self._unseen_damage_accumulator += damage
+            self._unseen_damage_window_remaining = DAMAGE_BURST_WINDOW
+            if self._unseen_damage_accumulator >= DAMAGE_BURST_THRESHOLD:
+                accumulated = self._unseen_damage_accumulator
+                self._unseen_damage_accumulator = 0.0
+                self._unseen_damage_window_remaining = 0.0
+                self._start_unseen_damage_evasion(sentry, accumulated)
+                return
+            self._set_event(
+                f"己方哨兵血量 {round(self.sentry_hp)}，"
+                f"视野外伤害累计 {round(self._unseen_damage_accumulator)}/30"
+            )
+            return
+        if damage > 0.0:
+            self._unseen_damage_accumulator = 0.0
+            self._unseen_damage_window_remaining = 0.0
         self._set_event(f"己方哨兵血量已调整为 {round(self.sentry_hp)}")
 
     def adjust_ammo(self, direction: int) -> None:
@@ -290,6 +347,22 @@ class TaskScenario:
         self._validate_adjustment_direction(direction)
         self.pending_ammo = max(0, min(500, self.pending_ammo + 25 * direction))
         self._set_event(f"待领弹药已调整为 {self.pending_ammo}")
+
+    def adjust_economy(self, direction: int) -> None:
+        self._validate_adjustment_direction(direction)
+        self.economy = max(0, min(1000, self.economy + 50 * direction))
+        self.patrol_index = 0
+        self._set_event(f"经济已调整为 {self.economy}")
+
+    def adjust_fire_rate(self, direction: int) -> None:
+        self._validate_adjustment_direction(direction)
+        self.fire_rate = max(1, min(RULE_FIRE_RATE_MAX, self.fire_rate + direction))
+        self._set_event(f"射速已调整为 {self.fire_rate} 发/秒")
+
+    def adjust_damage_per_shot(self, direction: int) -> None:
+        self._validate_adjustment_direction(direction)
+        self.damage_per_shot = max(1, min(RULE_DAMAGE_PER_SHOT, self.damage_per_shot + direction))
+        self._set_event(f"单发伤害已调整为 {self.damage_per_shot} HP")
 
     def adjust_defence_buff(self, direction: int) -> None:
         self._validate_adjustment_direction(direction)
@@ -328,6 +401,12 @@ class TaskScenario:
         self.pending_ammo = max(0, min(500, self.pending_ammo))
         self._finish_if_base_destroyed()
         simulation_elapsed = 0.0 if self.game_paused else elapsed_seconds
+        self._unseen_damage_window_remaining = max(
+            0.0,
+            self._unseen_damage_window_remaining - elapsed_seconds,
+        )
+        if self._unseen_damage_window_remaining <= 0.0:
+            self._unseen_damage_accumulator = 0.0
         self.event_message_remaining = max(
             0.0,
             self.event_message_remaining - simulation_elapsed,
@@ -351,17 +430,33 @@ class TaskScenario:
                 0.0,
                 self.dodge_remaining - simulation_elapsed,
             )
+            if self.dodge_remaining > 0.0:
+                elapsed = EVADE_DURATION - self.dodge_remaining
+                phase = int(elapsed / EVADE_DIRECTION_PERIOD) % len(EVADE_OFFSETS)
+                if phase != self._dodge_phase:
+                    self._dodge_phase = phase
+                    offset_x, offset_y = EVADE_OFFSETS[phase]
+                    self.dodge_goal = Arena().clamp(
+                        sentry.x + offset_x,
+                        sentry.y + offset_y,
+                    )
+            else:
+                self.dodge_goal = None
+                self._dodge_phase = -1
 
         decision = decision_override or self.evaluate(sentry)
         requested = bool(decision.shoot_mode) if fire_request is None else fire_request
         if requested and self.ammo > 0 and not self.respawn_fire_locked:
-            self._ammo_shot_accumulator += 10.0 * simulation_elapsed
-            spent = int(self._ammo_shot_accumulator)
+            self._ammo_shot_accumulator += self.fire_rate * simulation_elapsed
+            spent = min(int(self._ammo_shot_accumulator), self.ammo)
             if spent:
                 self.ammo = max(0, self.ammo - spent)
                 self._ammo_shot_accumulator -= spent
-            if hit_target_id is not None:
-                self._apply_fire_damage(hit_target_id, 240.0 * simulation_elapsed)
+                if hit_target_id is not None:
+                    self._apply_fire_damage(
+                        hit_target_id,
+                        float(self.damage_per_shot * spent),
+                    )
         return decision
 
     def _apply_fire_damage(self, target_id: int, damage: float) -> None:
@@ -411,6 +506,8 @@ class TaskScenario:
             behavior, goal = "复活后补给解锁", SUPPLY
         elif self._health_recovery_active:
             behavior, goal = "低血量回血", SUPPLY
+        elif self.dodge_remaining > 0.0 and self.dodge_goal is not None:
+            behavior, posture, goal = "视野外显著受伤不规则回避", 2, self.dodge_goal
         elif self.enemy_outpost_hp > 0.0:
             behavior, posture, goal, target = "攻击敌方前哨", 1, ATTACK, 6
             at_attack = _distance((sentry.x, sentry.y), ATTACK) <= 0.20
@@ -418,18 +515,20 @@ class TaskScenario:
         elif self.ammo == 0:
             behavior = "前往补给领弹" if self.pending_ammo > 0 else "无弹站桩"
             goal = SUPPLY if self.pending_ammo > 0 else HOME
-        elif self.dodge_remaining > 0.0 and self.dodge_goal is not None:
-            behavior, goal = "视野外受伤躲避", self.dodge_goal
-
         if self.game_running and self.sentry_hp > 0.0:
             if "巡逻" in behavior:
-                spin_mode = 1 if self.aggressive_patrol else 3
-            elif behavior == "视野外受伤躲避":
+                spin_mode = 1 if self.patrol_is_aggressive else 3
+            elif "回避" in behavior:
                 spin_mode = 3
             elif target > 0:
                 spin_mode = 0 if shoot_mode else 1
 
-        tripod_mode = int(shoot_mode == 0)
+        if "回避" in behavior:
+            tripod_mode = 1
+        elif "巡逻" in behavior:
+            tripod_mode = int(self.patrol_is_aggressive)
+        else:
+            tripod_mode = int(target > 0 and shoot_mode == 0)
         return DecisionView(
             behavior=behavior,
             posture=posture,
@@ -449,15 +548,17 @@ class TaskScenario:
     def inject_unseen_damage(self, sentry: SentryState) -> None:
         if self.sentry_hp <= 0.0:
             return
-        current_goal = self.evaluate(sentry).goal
         self.sentry_hp = max(0.0, self.sentry_hp - 50.0)
-        if current_goal is None or _distance((sentry.x, sentry.y), current_goal) > 0.15:
-            self._set_event("视野外受伤 -50，移动中不触发躲避")
-            return
-        direction = 0.8 if sentry.x <= 27.0 else -0.8
-        self.dodge_goal = Arena().clamp(sentry.x + direction, sentry.y)
-        self.dodge_remaining = 4.0
-        self._set_event("视野外受伤 -50，已触发躲避")
+        self._start_unseen_damage_evasion(sentry, 50.0)
+
+    def _start_unseen_damage_evasion(
+        self, sentry: SentryState, damage: float
+    ) -> None:
+        offset_x, offset_y = EVADE_OFFSETS[0]
+        self.dodge_goal = Arena().clamp(sentry.x + offset_x, sentry.y + offset_y)
+        self.dodge_remaining = EVADE_DURATION
+        self._dodge_phase = 0
+        self._set_event(f"视野外显著受伤 -{round(damage)}，启动不规则回避")
 
     def empty_ammo(self) -> None:
         self.ammo = 0

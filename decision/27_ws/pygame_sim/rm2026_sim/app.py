@@ -11,16 +11,20 @@ from .ros_bridge import BehaviorTreeBridgeClient
 from .scenario_store import (
     ScenarioStore,
     capture_snapshot,
+    delete_snapshot,
     restore_snapshot,
 )
 from .task_state import (
     AGGRESSIVE_PATROL_POINTS,
     ATTACK,
+    ATTACK_RANGE,
     CONSERVATIVE_PATROL_POINTS,
+    DETECTION_RANGE,
     HOME,
+    RULE_DAMAGE_PER_SHOT,
+    RULE_FIRE_RATE_MAX,
     SUPPLY,
     SUPPLY_ZONE,
-    WEAPON_RANGE,
     DecisionView,
     FIELD_ENTITIES,
     TaskScenario,
@@ -315,7 +319,7 @@ class SimulatorApp:
             return False
         delta_x = target_x - self.sentry.x
         delta_y = target_y - self.sentry.y
-        if math.hypot(delta_x, delta_y) > WEAPON_RANGE:
+        if math.hypot(delta_x, delta_y) > DETECTION_RANGE:
             return False
         target_angle = math.atan2(delta_y, delta_x)
         difference = (
@@ -389,16 +393,7 @@ class SimulatorApp:
         ) <= tolerance
 
     def _bridge_state(self) -> dict:
-        enemy_hp = [
-            round(self.task.enemy_health(1)),
-            round(self.task.enemy_health(2)),
-            round(self.task.enemy_health(3)),
-            round(self.task.enemy_health(4)),
-            round(self.task.enemy_health(5)),
-            round(self.task.enemy_health(6)),
-            round(self.task.enemy_health(7)),
-            round(self.task.enemy_health(8)),
-        ]
+        enemy_hp = self._enemy_health_snapshot()
         radar_data: list[float] = []
         for target_id in (1, 2, 3, 4, 5, 8):
             x, y = self.task.robot_position(target_id)
@@ -419,12 +414,29 @@ class SimulatorApp:
             "hp_enemy": enemy_hp,
             "radar_data": radar_data,
             "pending_ammo": max(0, round(self.task.pending_ammo)),
+            "economy": max(0, round(self.task.economy)),
             "x": self.sentry.x,
             "y": self.sentry.y,
             "yaw": self.sentry.spin_angle,
             "autoaim": self._simulated_autoaim(enemy_hp),
-            "aggressive_patrol": self.task.aggressive_patrol,
+            "aggressive_patrol": self.task.patrol_is_aggressive,
         }
+
+    def _enemy_health_snapshot(self) -> list[int]:
+        return [
+            round(self.task.enemy_health(1)),
+            round(self.task.enemy_health(2)),
+            round(self.task.enemy_health(3)),
+            round(self.task.enemy_health(4)),
+            round(self.task.enemy_health(5)),
+            round(self.task.enemy_health(6)),
+            round(self.task.enemy_health(7)),
+            round(self.task.enemy_health(8)),
+        ]
+
+    def _self_detects_enemy(self) -> bool:
+        visible = self._simulated_autoaim(self._enemy_health_snapshot())["target"]
+        return any(visible)
 
     def _simulated_autoaim(self, enemy_hp: list[int]) -> dict:
         visible = [0] * 9
@@ -448,7 +460,7 @@ class SimulatorApp:
             relative_angle = (
                 angle - self.sentry.turret_angle + math.pi
             ) % math.tau - math.pi
-            if distance <= WEAPON_RANGE and abs(relative_angle) <= AUTOAIM_HALF_VIEW:
+            if distance <= DETECTION_RANGE and abs(relative_angle) <= AUTOAIM_HALF_VIEW:
                 visible[target_id] = 1
                 distances[target_id] = distance
                 polar_radius[target_id] = distance
@@ -462,13 +474,7 @@ class SimulatorApp:
 
     def _handle_task_key(self, key: int) -> None:
         if key == self.pg.K_F1:
-            self.task.reset()
-            self.sentry = SentryState()
-            self.controlled_robot_id = None
-            self._manual_fire_held = False
-            self.manual_fire_active = False
-            self.hit_target_id = None
-            self._restart_validation()
+            self._reset_entire_match()
         elif key == self.pg.K_F2:
             self.task.destroy_own_outpost()
         elif key == self.pg.K_F3:
@@ -486,24 +492,34 @@ class SimulatorApp:
         elif key == self.pg.K_F9:
             self.task.toggle_patrol_mode()
         elif key == self.pg.K_F10:
-            self.task.reset_match_time()
+            self._reset_entire_match()
 
     def _handle_mouse_click(self, position: tuple[int, int]) -> bool:
         for rect, action, target_id, direction in reversed(self.click_regions):
             if not rect.collidepoint(position):
                 continue
             if action == "reset_time":
-                self.task.reset_match_time()
+                self._reset_entire_match()
             elif action == "adjust_time":
                 self.task.adjust_match_time(direction)
             elif action == "enemy_health":
                 self.task.adjust_enemy_health(target_id, direction)
             elif action == "sentry_health":
-                self.task.adjust_sentry_health(direction)
+                self.task.adjust_sentry_health(
+                    direction,
+                    self.sentry,
+                    unseen_damage=direction < 0 and not self._self_detects_enemy(),
+                )
             elif action == "ammo":
                 self.task.adjust_ammo(direction)
             elif action == "pending_ammo":
                 self.task.adjust_pending_ammo(direction)
+            elif action == "economy":
+                self.task.adjust_economy(direction)
+            elif action == "fire_rate":
+                self.task.adjust_fire_rate(direction)
+            elif action == "damage_per_shot":
+                self.task.adjust_damage_per_shot(direction)
             elif action == "defence_buff":
                 self.task.adjust_defence_buff(direction)
             elif action == "own_outpost_health":
@@ -518,6 +534,8 @@ class SimulatorApp:
                 self._save_snapshot()
             elif action == "load_snapshot":
                 self._load_snapshot(target_id)
+            elif action == "delete_snapshot":
+                self._delete_snapshot(target_id)
             return True
         return False
 
@@ -553,6 +571,19 @@ class SimulatorApp:
         if notify:
             self.task.notify("已切换为自动控制")
 
+    def _reset_entire_match(self) -> None:
+        self.task.reset_match_time()
+        self.sentry = SentryState()
+        self.controlled_robot_id = None
+        self.active_snapshot_index = None
+        self._manual_fire_held = False
+        self.manual_fire_active = False
+        self.hit_target_id = None
+        self._restart_signal_remaining = 0.20
+        self.bridge.clear_output()
+        self.decision = self.task.evaluate(self.sentry)
+        self.task.notify("比赛时间、位置和全部属性已复位")
+
     def _restart_validation(self) -> None:
         self._switch_to_auto_control(notify=False)
         self.task.game_running = True
@@ -565,7 +596,11 @@ class SimulatorApp:
         self.task.notify("验证已重新启动，行为树正在复位")
 
     def _save_snapshot(self) -> None:
-        name = f"场景 {len(self.snapshots) + 1}"
+        existing_names = {str(snapshot.get("name") or "") for snapshot in self.snapshots}
+        number = 1
+        while f"场景 {number}" in existing_names:
+            number += 1
+        name = f"场景 {number}"
         snapshot = capture_snapshot(
             name,
             self.task,
@@ -606,6 +641,26 @@ class SimulatorApp:
         self.task.notify(
             f"已载入{self.snapshots[index].get('name', f'场景 {index + 1}')}"
         )
+
+    def _delete_snapshot(self, index: int) -> None:
+        if not 0 <= index < len(self.snapshots):
+            return
+        previous_snapshots = self.snapshots
+        previous_active = self.active_snapshot_index
+        self.snapshots, removed = delete_snapshot(self.snapshots, index)
+        if self.active_snapshot_index == index:
+            self.active_snapshot_index = None
+        elif self.active_snapshot_index is not None and self.active_snapshot_index > index:
+            self.active_snapshot_index -= 1
+        try:
+            self.scenario_store.save(self.snapshots)
+        except OSError:
+            self.snapshots = previous_snapshots
+            self.active_snapshot_index = previous_active
+            self.task.notify("场景删除失败，请检查目录权限")
+            return
+        name = str(removed.get("name") or f"场景 {index + 1}")
+        self.task.notify(f"已删除{name}")
 
     def _render(self, viewport: Viewport) -> None:
         self.click_regions.clear()
@@ -807,6 +862,44 @@ class SimulatorApp:
             0,
             compact=True,
             action="pending_ammo",
+        )
+        y = self._draw_adjustable_progress_bar(
+            x,
+            y,
+            bar_width,
+            "经济",
+            self.task.economy,
+            1000,
+            (88, 183, 102),
+            0,
+            compact=True,
+            action="economy",
+        )
+        y = self._draw_adjustable_progress_bar(
+            x,
+            y,
+            bar_width,
+            "射速",
+            self.task.fire_rate,
+            RULE_FIRE_RATE_MAX,
+            (221, 137, 52),
+            0,
+            suffix=" 发/秒",
+            compact=True,
+            action="fire_rate",
+        )
+        y = self._draw_adjustable_progress_bar(
+            x,
+            y,
+            bar_width,
+            "单发伤害",
+            self.task.damage_per_shot,
+            RULE_DAMAGE_PER_SHOT,
+            (207, 80, 85),
+            0,
+            suffix=" HP",
+            compact=True,
+            action="damage_per_shot",
         )
         posture_name = {1: "进攻", 2: "防御", 3: "移动"}.get(
             self.decision.posture, "未知"
@@ -1067,7 +1160,7 @@ class SimulatorApp:
         maximum_right = width - 260
         for index, snapshot in enumerate(self.snapshots):
             name = str(snapshot.get("name") or f"场景 {index + 1}")
-            tab_width = max(120, min(190, self.panel_label_font.size(name)[0] + 42))
+            tab_width = max(140, min(210, self.panel_label_font.size(name)[0] + 70))
             if x + tab_width > maximum_right:
                 break
             rect = self.pg.Rect(x, tab_top, tab_width, tab_height)
@@ -1083,9 +1176,27 @@ class SimulatorApp:
                 1,
                 border_radius=8,
             )
+            close_size = 26
+            close_rect = self.pg.Rect(
+                rect.right - close_size - 8,
+                rect.centery - close_size // 2,
+                close_size,
+                close_size,
+            )
+            label_rect = self.pg.Rect(
+                rect.left + 10,
+                rect.top,
+                rect.width - close_size - 24,
+                rect.height,
+            )
             rendered = self.panel_label_font.render(name, True, color)
-            self.screen.blit(rendered, rendered.get_rect(center=rect.center))
+            self.screen.blit(rendered, rendered.get_rect(center=label_rect.center))
+            close_hovered = close_rect.collidepoint(self.pg.mouse.get_pos())
+            close_color = (218, 72, 72) if close_hovered else (156, 164, 168)
+            close_text = self.panel_label_font.render("×", True, close_color)
+            self.screen.blit(close_text, close_text.get_rect(center=close_rect.center))
             self.click_regions.append((rect, "load_snapshot", index, 0))
+            self.click_regions.append((close_rect, "delete_snapshot", index, 0))
             x += tab_width + 7
 
         plus_button = self.pg.Rect(x, tab_top, 48, tab_height)
@@ -1107,7 +1218,7 @@ class SimulatorApp:
         self.click_regions.append((plus_button, "save_snapshot", 0, 0))
 
         hint = self.small_font.render(
-            "Ctrl+S 保存场景｜点击标签恢复｜R 重新启动行为树",
+            "Ctrl+S 保存｜点击标签恢复｜× 删除｜R 重新启动",
             True,
             (170, 180, 185),
         )
@@ -1241,7 +1352,7 @@ class SimulatorApp:
     def _draw_objectives(self, viewport: Viewport) -> None:
         objectives = (
             (4.971, 7.5, "归位点", (38, 160, 218)),
-            (16.0, 11.0, "攻击点", (215, 74, 73)),
+            (*ATTACK, "攻击点", (215, 74, 73)),
         )
         for x, y, name, color in objectives:
             center = self.pg.Vector2(viewport.world_to_screen(x, y))
@@ -1267,36 +1378,79 @@ class SimulatorApp:
 
     def _draw_sensor_view(self, viewport: Viewport) -> None:
         center = self.pg.Vector2(viewport.world_to_screen(self.sentry.x, self.sentry.y))
-        radius = viewport.scale * 5.0
-        half_angle = math.radians(24.0)
-        points = [center]
-        for index in range(17):
-            angle = self.sentry.turret_angle - half_angle + 2.0 * half_angle * index / 16.0
-            points.append(
-                center
-                + self.pg.Vector2(math.cos(angle) * radius, -math.sin(angle) * radius)
-            )
+        half_angle = AUTOAIM_HALF_VIEW
+
+        def sector_points(distance: float):
+            radius = viewport.scale * distance
+            points = [center]
+            for index in range(17):
+                angle = (
+                    self.sentry.turret_angle
+                    - half_angle
+                    + 2.0 * half_angle * index / 16.0
+                )
+                points.append(
+                    center
+                    + self.pg.Vector2(
+                        math.cos(angle) * radius,
+                        -math.sin(angle) * radius,
+                    )
+                )
+            return points
+
+        detection_points = sector_points(DETECTION_RANGE)
+        attack_points = sector_points(ATTACK_RANGE)
         overlay = self.pg.Surface(self.screen.get_size(), self.pg.SRCALPHA)
-        color = (47, 177, 197, 30) if self.decision.tripod_mode else (222, 74, 74, 36)
-        self.pg.draw.polygon(overlay, color, points)
+        detection_color = (47, 177, 197, 28) if self.decision.tripod_mode else (195, 82, 96, 28)
+        self.pg.draw.polygon(overlay, detection_color, detection_points)
+        self.pg.draw.polygon(overlay, (242, 158, 54, 46), attack_points)
         self.screen.blit(overlay, (0, 0))
-        edge_color = (55, 154, 172) if self.decision.tripod_mode else (210, 62, 62)
-        self.pg.draw.line(self.screen, edge_color, points[0], points[1], 1)
-        self.pg.draw.line(self.screen, edge_color, points[0], points[-1], 1)
+
+        detection_edge = (55, 154, 172) if self.decision.tripod_mode else (184, 72, 84)
+        attack_edge = (225, 126, 36)
+        self.pg.draw.line(
+            self.screen, detection_edge, detection_points[0], detection_points[1], 1
+        )
+        self.pg.draw.line(
+            self.screen, detection_edge, detection_points[0], detection_points[-1], 1
+        )
+        self.pg.draw.line(self.screen, attack_edge, attack_points[0], attack_points[1], 2)
+        self.pg.draw.line(self.screen, attack_edge, attack_points[0], attack_points[-1], 2)
+
+        direction = self.pg.Vector2(
+            math.cos(self.sentry.turret_angle),
+            -math.sin(self.sentry.turret_angle),
+        )
+        detection_label = self.small_font.render(
+            f"探测 {DETECTION_RANGE:.1f}m", True, detection_edge
+        )
+        attack_label = self.small_font.render(
+            f"攻击 {ATTACK_RANGE:.1f}m", True, attack_edge
+        )
+        detection_anchor = center + direction * (viewport.scale * DETECTION_RANGE)
+        attack_anchor = center + direction * (viewport.scale * ATTACK_RANGE)
+        self.screen.blit(
+            detection_label,
+            detection_label.get_rect(midleft=(detection_anchor.x + 4, detection_anchor.y)),
+        )
+        self.screen.blit(
+            attack_label,
+            attack_label.get_rect(midleft=(attack_anchor.x + 4, attack_anchor.y)),
+        )
 
     def _draw_patrol_route(self, viewport: Viewport) -> None:
         routes = (
             (
                 CONSERVATIVE_PATROL_POINTS,
                 "保守",
-                (68, 116, 132) if not self.task.aggressive_patrol else (137, 151, 157),
-                not self.task.aggressive_patrol,
+                (68, 116, 132) if not self.task.patrol_is_aggressive else (137, 151, 157),
+                not self.task.patrol_is_aggressive,
             ),
             (
                 AGGRESSIVE_PATROL_POINTS,
                 "激进",
-                (222, 86, 48) if self.task.aggressive_patrol else (190, 126, 101),
-                self.task.aggressive_patrol,
+                (222, 86, 48) if self.task.patrol_is_aggressive else (190, 126, 101),
+                self.task.patrol_is_aggressive,
             ),
         )
         for route_points, label_prefix, route_color, active in sorted(
@@ -1334,6 +1488,15 @@ class SimulatorApp:
                 )
 
     def _draw_entities(self, viewport: Viewport) -> None:
+        robot_labels = []
+        robot_names = {
+            1: "1号 英雄",
+            2: "2号 工程",
+            3: "3号 步兵",
+            4: "4号 步兵",
+            5: "5号 空中",
+            8: "8号 哨兵",
+        }
         for entity in FIELD_ENTITIES:
             entity_x, entity_y = entity.x, entity.y
             if entity.kind == "robot":
@@ -1366,6 +1529,28 @@ class SimulatorApp:
                 self.pg.draw.circle(self.screen, color, center, 7, 2)
                 number = self.small_font.render(str(entity.target_id), True, color)
                 self.screen.blit(number, number.get_rect(center=center))
+                robot_labels.append(
+                    (center, robot_names.get(entity.target_id, entity.name), color)
+                )
+
+        occupied = []
+        for center, name, color in robot_labels:
+            rendered = self.small_font.render(name, True, color)
+            label_rect = rendered.get_rect(midbottom=(center.x, center.y - 13))
+            while any(label_rect.colliderect(other) for other in occupied):
+                label_rect.y -= label_rect.height + 3
+            background = label_rect.inflate(8, 4)
+            self.pg.draw.line(
+                self.screen,
+                color,
+                center,
+                (label_rect.centerx, label_rect.bottom + 2),
+                1,
+            )
+            self.pg.draw.rect(self.screen, (247, 249, 249), background, border_radius=4)
+            self.pg.draw.rect(self.screen, color, background, 1, border_radius=4)
+            self.screen.blit(rendered, label_rect)
+            occupied.append(background)
 
     def _draw_navigation(self, viewport: Viewport) -> None:
         if self.decision.goal is None:

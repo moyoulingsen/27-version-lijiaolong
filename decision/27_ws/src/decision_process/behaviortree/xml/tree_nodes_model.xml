@@ -86,10 +86,30 @@
       <output_port name="pursuit_direction" type="std::string"/>
       <output_port name="pursuit_desired_distance" type="double"/>
     </Action>
+    <Action ID="EvasiveManeuver">
+      <input_port name="current_x" type="double" default="0.0"/>
+      <input_port name="current_y" type="double" default="0.0"/>
+      <input_port name="localization_valid" type="bool" default="false"/>
+      <input_port name="no_damage_seconds" type="double" default="0.0"/>
+      <input_port name="direction_period" type="double" default="0.7"/>
+      <output_port name="goal_x" type="double"/>
+      <output_port name="goal_y" type="double"/>
+      <output_port name="goal_z" type="double"/>
+      <output_port name="goal_yaw" type="double"/>
+      <output_port name="goal_frame_id" type="std::string"/>
+      <output_port name="goal_enabled" type="bool"/>
+      <output_port name="posture_command" type="int"/>
+      <output_port name="gyro_mode_command" type="int"/>
+      <output_port name="gimbal_enabled_command" type="bool"/>
+      <output_port name="gimbal_rotate_command" type="bool"/>
+      <output_port name="target_lock_command" type="bool"/>
+      <output_port name="fire_command" type="bool"/>
+    </Action>
     <Condition ID="EvadeEligible">
       <input_port name="visible_enemy_count" type="int" default="0"/>
       <input_port name="health_decreased" type="bool" default="false"/>
-      <input_port name="at_target" type="bool" default="false"/>
+      <input_port name="attack_targets" type="std::string"/>
+      <input_port name="own_health" type="double" default="0.0"/>
       <input_port name="no_damage_seconds" type="double" default="0.0"/>
       <input_port name="recovery_seconds" type="double" default="5.0"/>
     </Condition>

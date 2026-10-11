@@ -10,4 +10,5 @@ uint16 hp_base
 uint16[] hp_enemy
 float32[] radar_data
 uint16 pending_ammo
+uint16 economy
 bool aggressive_patrol

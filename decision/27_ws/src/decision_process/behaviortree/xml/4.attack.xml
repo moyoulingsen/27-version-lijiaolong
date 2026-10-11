@@ -2,7 +2,6 @@
 <root BTCPP_format="4">
   <include path="tree_nodes_model.xml"/>
   <include path="5.pursue.xml"/>
-  <include path="patrol_conservative.xml"/>
 
   <!--
     Target format for targets and persistent_targets:
@@ -13,7 +12,7 @@
     Fresh observations replace persistent entries with the same id. The
     parent application must update target_lost_seconds, gimbal_aligned,
     damage_confirmed, target_in_range_seconds, pursuit_elapsed_seconds,
-    health_decreased, at_target, no_damage_seconds, and each target's
+    health_decreased, no_damage_seconds, and each target's
     distance on every perception update.
   -->
   <BehaviorTree ID="Attack">
@@ -38,26 +37,27 @@
         <ReactiveSequence name="EvadeWhenDamaged">
           <EvadeEligible visible_enemy_count="{visible_target_count}"
                           health_decreased="{health_decreased}"
-                          at_target="{at_target}"
+                          attack_targets="{attack_targets}"
+                          own_health="{own_health}"
                           no_damage_seconds="{no_damage_seconds}"
                           recovery_seconds="5.0"/>
-          <!-- ConservativePatrol provides the evasive route: defense
-               posture, high-speed gyro mode 3, gimbal disabled. -->
-          <SubTree ID="ConservativePatrol"
-                   current_x="{current_x}"
-                   current_y="{current_y}"
-                   localization_valid="{localization_valid}"
-                   tolerance="{tolerance}"
-                   waypoint_index="{waypoint_index}"
-                   goal_x="{goal_x}"
-                   goal_y="{goal_y}"
-                   goal_z="{goal_z}"
-                   goal_yaw="{goal_yaw}"
-                   goal_frame_id="{goal_frame_id}"
-                   goal_enabled="{goal_enabled}"
-                   posture_command="{posture_command}"
-                   gyro_mode_command="{gyro_mode_command}"
-                   gimbal_enabled="{gimbal_enabled}"/>
+          <EvasiveManeuver current_x="{current_x}"
+                           current_y="{current_y}"
+                           localization_valid="{localization_valid}"
+                           no_damage_seconds="{no_damage_seconds}"
+                           direction_period="0.7"
+                           goal_x="{goal_x}"
+                           goal_y="{goal_y}"
+                           goal_z="{goal_z}"
+                           goal_yaw="{goal_yaw}"
+                           goal_frame_id="{goal_frame_id}"
+                           goal_enabled="{goal_enabled}"
+                           posture_command="{posture_command}"
+                           gyro_mode_command="{gyro_mode_command}"
+                           gimbal_enabled_command="{gimbal_enabled}"
+                           gimbal_rotate_command="{gimbal_rotate}"
+                           target_lock_command="{target_lock}"
+                           fire_command="{fire_command}"/>
         </ReactiveSequence>
 
         <ReactiveFallback name="AttackOrPursue">

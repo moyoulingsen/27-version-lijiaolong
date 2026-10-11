@@ -56,6 +56,16 @@ def restore_snapshot(
     )
 
 
+def delete_snapshot(
+    snapshots: list[dict[str, Any]], index: int
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not 0 <= index < len(snapshots):
+        raise IndexError("snapshot index out of range")
+    remaining = list(snapshots)
+    removed = remaining.pop(index)
+    return remaining, removed
+
+
 class ScenarioStore:
     def __init__(self, path: Path) -> None:
         self.path = path

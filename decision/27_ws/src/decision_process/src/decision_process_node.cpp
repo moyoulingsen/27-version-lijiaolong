@@ -32,6 +32,11 @@ using namespace std::chrono_literals;
 
 namespace
 {
+constexpr double kAttackRange = 4.0;
+constexpr double kOutpostAttackX = 17.0;
+constexpr double kOutpostAttackY = 10.0;
+constexpr uint32_t kSignificantDamageThreshold = 30U;
+constexpr auto kDamageBurstWindow = 1s;
 
 double distance(double ax, double ay, double bx, double by)
 {
@@ -122,6 +127,7 @@ public:
       std::chrono::duration_cast<std::chrono::nanoseconds>(period),
       [this]() {tick();});
     last_damage_time_ = std::chrono::steady_clock::now() - 60s;
+    last_damage_sample_time_ = std::chrono::steady_clock::now() - 60s;
     last_target_seen_time_ = std::chrono::steady_clock::now() - 60s;
     RCLCPP_INFO(get_logger(), "Loaded behavior tree: %s", tree_file_.c_str());
   }
@@ -138,10 +144,12 @@ private:
     death_started_.reset();
     previous_hp_.reset();
     health_decreased_ = false;
+    accumulated_damage_ = 0U;
     last_selected_target_.clear();
     last_goal_enabled_ = false;
     last_target_seen_time_ = std::chrono::steady_clock::now() - 60s;
     last_damage_time_ = std::chrono::steady_clock::now() - 60s;
+    last_damage_sample_time_ = std::chrono::steady_clock::now() - 60s;
     if(recreate_tree)
     {
       blackboard_ = BT::Blackboard::create();
@@ -178,7 +186,7 @@ private:
   {
     blackboard_->set("waypoint_index", 0);
     blackboard_->set("tolerance", goal_tolerance_);
-    blackboard_->set("economy_threshold", 0.0);
+    blackboard_->set("economy_threshold", 400.0);
     blackboard_->set("persistent_targets", std::string{});
     blackboard_->set("targets", std::string{});
     blackboard_->set("goal_frame_id", std::string{"map"});
@@ -200,7 +208,7 @@ private:
   {
     if(target == 6)
     {
-      return distance(current_x_, current_y_, 16.0, 11.0);
+      return distance(current_x_, current_y_, kOutpostAttackX, kOutpostAttackY);
     }
     const auto position = targetPosition(target);
     return position ? distance(current_x_, current_y_, position->first, position->second) : 99.0;
@@ -260,6 +268,8 @@ private:
   {
     std::ostringstream stream;
     bool first = true;
+    // Engineer robot 2 remains visible to perception but is marked invincible
+    // below so it never enters the filtered attack candidate list.
     for(const int target : {1, 2, 3, 4, 5, 8})
     {
       if(!autoaimVisible(target) || targetHealth(target) == 0U)
@@ -273,7 +283,8 @@ private:
       }
       first = false;
       stream << target << ':' << targetHealth(target) << ':' << range << ':'
-             << (range <= 6.2 ? 1 : 0) << ':' << (targetHealth(target) == 1001U ? 1 : 0)
+             << (range <= kAttackRange ? 1 : 0) << ':'
+             << (target == 2 || targetHealth(target) == 1001U ? 1 : 0)
              << ":0";
     }
     return stream.str();
@@ -287,9 +298,9 @@ private:
       return {};
     }
     const double tactical_range = tacticalDistance(6);
-    // Target 6 is a fixed building with a prescribed firing point at (16, 11).
+    // Target 6 is a fixed building with a prescribed firing point at (17, 10).
     // The generic pursuit node stops 4.1 m short of a moving target, therefore
-    // encode the fixed-point distance so its generated goal remains (16, 11).
+    // encode the fixed-point distance so its generated goal remains (17, 10).
     const double pursuit_range = tactical_range + 4.1;
     std::ostringstream stream;
     stream << "6:" << health << ':' << pursuit_range << ':'
@@ -301,10 +312,28 @@ private:
   void updateInputs()
   {
     const auto now = std::chrono::steady_clock::now();
-    if(previous_hp_ && referee_.hp_sentry < *previous_hp_)
+    if(previous_hp_ && *previous_hp_ > referee_.hp_sentry)
     {
-      health_decreased_ = true;
-      last_damage_time_ = now;
+      if(now - last_damage_sample_time_ > kDamageBurstWindow)
+      {
+        accumulated_damage_ = 0U;
+      }
+      accumulated_damage_ += static_cast<uint32_t>(*previous_hp_ - referee_.hp_sentry);
+      last_damage_sample_time_ = now;
+      if(accumulated_damage_ >= kSignificantDamageThreshold)
+      {
+        health_decreased_ = true;
+        last_damage_time_ = now;
+        accumulated_damage_ = 0U;
+      }
+    }
+    else if(previous_hp_ && *previous_hp_ < referee_.hp_sentry)
+    {
+      accumulated_damage_ = 0U;
+    }
+    else if(now - last_damage_sample_time_ > kDamageBurstWindow)
+    {
+      accumulated_damage_ = 0U;
     }
     previous_hp_ = referee_.hp_sentry;
 
@@ -321,7 +350,7 @@ private:
 
     const bool selected_in_range = selected > 0 &&
       (selected == 6 ? tacticalDistance(6) <= goal_tolerance_ :
-      autoaimDistance(selected) <= 6.2);
+      autoaimDistance(selected) <= kAttackRange);
     if(selected_in_range)
     {
       if(!in_range_started_)
@@ -359,7 +388,7 @@ private:
     blackboard_->set("pickup_ammo_count", static_cast<int>(referee_.pending_ammo));
     blackboard_->set("health", static_cast<double>(referee_.hp_sentry));
     blackboard_->set("defense_buff", static_cast<double>(referee_.defence_buff) / 100.0);
-    blackboard_->set("economy", static_cast<double>(referee_.ammo + referee_.pending_ammo));
+    blackboard_->set("economy", static_cast<double>(referee_.economy));
     blackboard_->set("aggressive_patrol", referee_.aggressive_patrol);
     blackboard_->set("targets", observedTargets());
     blackboard_->set("persistent_targets", persistentTargets());
@@ -384,6 +413,7 @@ private:
     blackboard_->set("goal_enabled", false);
     blackboard_->set("fire_command", false);
     blackboard_->set("target_lock", false);
+    blackboard_->set("gimbal_enabled", false);
     blackboard_->set("gimbal_rotate", true);
     blackboard_->set("pursuit_enabled", false);
     blackboard_->set("selected_target_id", std::string{});
@@ -401,8 +431,8 @@ private:
     }
     if(target == 6 && direction == "approach")
     {
-      goal_x = 16.0;
-      goal_y = 11.0;
+      goal_x = kOutpostAttackX;
+      goal_y = kOutpostAttackY;
       return true;
     }
     const auto position = targetPosition(target);
@@ -455,7 +485,8 @@ private:
     serial.spin_mode = referee_.game_period == 2U ?
       static_cast<uint8_t>(std::clamp(gyro, 0, 3)) : 0U;
     serial.shoot_mode = blackboardValue<bool>(blackboard_, "fire_command", false) ? 1U : 0U;
-    serial.tripod_mode = blackboardValue<bool>(blackboard_, "target_lock", false) ? 0U : 1U;
+    serial.tripod_mode =
+      blackboardValue<bool>(blackboard_, "gimbal_enabled", false) ? 1U : 0U;
     serial_pub_->publish(serial);
 
     std::string selected = blackboardValue<std::string>(
@@ -560,7 +591,9 @@ private:
   double goal_tolerance_{0.25};
   std::optional<uint16_t> previous_hp_;
   bool health_decreased_{false};
+  uint32_t accumulated_damage_{0U};
   std::chrono::steady_clock::time_point last_damage_time_;
+  std::chrono::steady_clock::time_point last_damage_sample_time_;
   std::chrono::steady_clock::time_point last_target_seen_time_;
   std::optional<std::chrono::steady_clock::time_point> in_range_started_;
   std::optional<std::chrono::steady_clock::time_point> pursuit_started_;

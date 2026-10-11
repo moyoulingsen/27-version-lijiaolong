@@ -1,6 +1,7 @@
 #include "attack_nodes.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iomanip>
 #include <limits>
@@ -298,6 +299,17 @@ BT::NodeStatus SelectAttackTargetAction::tick()
       selected = &target;
       continue;
     }
+    // A currently observed robot must preempt a persistent preset target such
+    // as the opening enemy outpost. Once the robot disappears or is destroyed,
+    // the persistent outpost target naturally becomes active again.
+    if(target.persistent != selected->persistent)
+    {
+      if(!target.persistent)
+      {
+        selected = &target;
+      }
+      continue;
+    }
     const bool target_is_low = target.health < threshold.value();
     const bool selected_is_low = selected->health < threshold.value();
     if(target_is_low != selected_is_low ? target_is_low : target.distance < selected->distance)
@@ -364,7 +376,8 @@ BT::PortsList EvadeEligibleCondition::providedPorts()
   return {
     BT::InputPort<int>("visible_enemy_count", 0, "Number of visible enemy units"),
     BT::InputPort<bool>("health_decreased", false, "Whether a new health drop was observed"),
-    BT::InputPort<bool>("at_target", false, "Whether the robot is stationary at a goal"),
+    BT::InputPort<std::string>("attack_targets", "Filtered attack target list"),
+    BT::InputPort<double>("own_health", 0.0, "Current sentry health"),
     BT::InputPort<double>("no_damage_seconds", 0.0, "Time since the last damage event"),
     BT::InputPort<double>("recovery_seconds", 5.0, "Time without damage required to recover")};
 }
@@ -373,18 +386,21 @@ BT::NodeStatus EvadeEligibleCondition::tick()
 {
   const auto visible_enemy_count = getInput<int>("visible_enemy_count");
   const auto health_decreased = getInput<bool>("health_decreased");
-  const auto at_target = getInput<bool>("at_target");
+  const auto own_health = getInput<double>("own_health");
   const auto no_damage_seconds = getInput<double>("no_damage_seconds");
   const auto recovery_seconds = getInput<double>("recovery_seconds");
-  if(!visible_enemy_count || !health_decreased || !at_target || !no_damage_seconds ||
-    !recovery_seconds || visible_enemy_count.value() < 0 ||
+  if(!visible_enemy_count || !health_decreased || !own_health || !no_damage_seconds ||
+    !recovery_seconds || visible_enemy_count.value() < 0 || !finite(own_health.value()) ||
     !finite(no_damage_seconds.value()) || !finite(recovery_seconds.value()) ||
-    no_damage_seconds.value() < 0.0 || recovery_seconds.value() <= 0.0)
+    own_health.value() < 0.0 || no_damage_seconds.value() < 0.0 ||
+    recovery_seconds.value() <= 0.0)
   {
     return BT::NodeStatus::FAILURE;
   }
 
-  if(health_decreased.value())
+  // Significant damage only starts evasion when the sentry did not detect an
+  // enemy at that moment. A visible attacker stays in the normal attack path.
+  if(health_decreased.value() && visible_enemy_count.value() == 0)
   {
     damage_latched_ = true;
   }
@@ -393,8 +409,91 @@ BT::NodeStatus EvadeEligibleCondition::tick()
     damage_latched_ = false;
   }
 
-  return damage_latched_ && visible_enemy_count.value() == 0 && at_target.value() ?
-           BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+  if(!damage_latched_)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+
+  std::vector<Target> targets;
+  if(!readTargetList(*this, "attack_targets", targets))
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+  const bool weaker_observed_target = std::any_of(
+    targets.begin(), targets.end(), [&](const Target & target) {
+      return !target.persistent && !target.invincible && target.health < own_health.value();
+    });
+
+  // A newly observed weaker target preempts evasion and is selected by the
+  // normal attack branch. Stronger targets do not cancel the evasive motion.
+  return weaker_observed_target ? BT::NodeStatus::FAILURE : BT::NodeStatus::SUCCESS;
+}
+
+EvasiveManeuverAction::EvasiveManeuverAction(
+  const std::string & name, const BT::NodeConfig & config)
+: BT::SyncActionNode(name, config)
+{
+}
+
+BT::PortsList EvasiveManeuverAction::providedPorts()
+{
+  return {
+    BT::InputPort<double>("current_x", 0.0, "Current map x"),
+    BT::InputPort<double>("current_y", 0.0, "Current map y"),
+    BT::InputPort<bool>("localization_valid", false, "Whether localization is valid"),
+    BT::InputPort<double>("no_damage_seconds", 0.0, "Time since significant damage"),
+    BT::InputPort<double>("direction_period", 0.7, "Seconds between direction changes"),
+    BT::OutputPort<double>("goal_x"),
+    BT::OutputPort<double>("goal_y"),
+    BT::OutputPort<double>("goal_z"),
+    BT::OutputPort<double>("goal_yaw"),
+    BT::OutputPort<std::string>("goal_frame_id"),
+    BT::OutputPort<bool>("goal_enabled"),
+    BT::OutputPort<int>("posture_command"),
+    BT::OutputPort<int>("gyro_mode_command"),
+    BT::OutputPort<bool>("gimbal_enabled_command"),
+    BT::OutputPort<bool>("gimbal_rotate_command"),
+    BT::OutputPort<bool>("target_lock_command"),
+    BT::OutputPort<bool>("fire_command")};
+}
+
+BT::NodeStatus EvasiveManeuverAction::tick()
+{
+  const auto current_x = getInput<double>("current_x");
+  const auto current_y = getInput<double>("current_y");
+  const auto localization_valid = getInput<bool>("localization_valid");
+  const auto no_damage_seconds = getInput<double>("no_damage_seconds");
+  const auto period = getInput<double>("direction_period");
+  if(!current_x || !current_y || !localization_valid || !no_damage_seconds || !period ||
+    !localization_valid.value() || !finite(current_x.value()) || !finite(current_y.value()) ||
+    !finite(no_damage_seconds.value()) || !finite(period.value()) ||
+    no_damage_seconds.value() < 0.0 || period.value() <= 0.0)
+  {
+    setOutput("goal_enabled", false);
+    return BT::NodeStatus::FAILURE;
+  }
+
+  static constexpr std::array<std::array<double, 2>, 7> offsets{{
+    {{1.10, 0.35}}, {{-0.55, 1.05}}, {{0.80, -0.95}},
+    {{-1.15, -0.30}}, {{0.25, 1.20}}, {{0.95, -0.55}}, {{-0.85, 0.65}}}};
+  const auto phase = static_cast<std::size_t>(
+    std::floor(no_damage_seconds.value() / period.value())) % offsets.size();
+  const double goal_x = std::clamp(current_x.value() + offsets[phase][0], 0.4, 27.6);
+  const double goal_y = std::clamp(current_y.value() + offsets[phase][1], 0.4, 14.6);
+
+  setOutput("goal_x", goal_x);
+  setOutput("goal_y", goal_y);
+  setOutput("goal_z", 1.0);
+  setOutput("goal_yaw", 0.0);
+  setOutput("goal_frame_id", std::string{"map"});
+  setOutput("goal_enabled", true);
+  setOutput("posture_command", 2);
+  setOutput("gyro_mode_command", 3);
+  setOutput("gimbal_enabled_command", true);
+  setOutput("gimbal_rotate_command", true);
+  setOutput("target_lock_command", false);
+  setOutput("fire_command", false);
+  return BT::NodeStatus::SUCCESS;
 }
 
 AimAndFireAction::AimAndFireAction(
@@ -590,7 +689,9 @@ void PursueAction::publishSafeOutputs()
 {
   setOutput("posture_command", 3);
   setOutput("gyro_mode_command", 1);
-  setOutput("gimbal_enabled_command", false);
+  // Keep scanning while moving toward the selected target. This allows a
+  // newly detected non-engineer robot to preempt the opening outpost task.
+  setOutput("gimbal_enabled_command", true);
   setOutput("pursuit_enabled_command", false);
   setOutput("pursuit_target_id", std::string{});
   setOutput("pursuit_direction", std::string{});
@@ -746,6 +847,7 @@ void registerAttackNodes(BT::BehaviorTreeFactory & factory)
   factory.registerNodeType<HasAttackTargetsCondition>("HasAttackTargets");
   factory.registerNodeType<HasInRangeTargetCondition>("HasInRangeTarget");
   factory.registerNodeType<EvadeEligibleCondition>("EvadeEligible");
+  factory.registerNodeType<EvasiveManeuverAction>("EvasiveManeuver");
   factory.registerNodeType<AimAndFireAction>("AimAndFire");
   factory.registerNodeType<PursuitEligibilityCondition>("PursuitEligible");
   factory.registerNodeType<PursueAction>("DrivePursuit");

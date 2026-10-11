@@ -72,7 +72,7 @@ public:
   BT::NodeStatus tick() override;
 };
 
-/** Latches unexplained damage while no enemy is visible until recovery. */
+/** Latches significant unexplained damage and decides evade versus counterattack. */
 class EvadeEligibleCondition : public BT::ConditionNode
 {
 public:
@@ -84,6 +84,17 @@ public:
 
 private:
   bool damage_latched_{false};
+};
+
+/** Publishes a changing local goal with defense, high-speed gyro, and gimbal scan. */
+class EvasiveManeuverAction : public BT::SyncActionNode
+{
+public:
+  EvasiveManeuverAction(const std::string & name, const BT::NodeConfig & config);
+
+  static BT::PortsList providedPorts();
+
+  BT::NodeStatus tick() override;
 };
 
 /**

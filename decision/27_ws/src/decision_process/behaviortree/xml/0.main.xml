@@ -84,10 +84,30 @@
       <output_port name="pursuit_direction" type="std::string"/>
       <output_port name="pursuit_desired_distance" type="double"/>
     </Action>
+    <Action ID="EvasiveManeuver">
+      <input_port name="current_x" type="double" default="0.0"/>
+      <input_port name="current_y" type="double" default="0.0"/>
+      <input_port name="localization_valid" type="bool" default="false"/>
+      <input_port name="no_damage_seconds" type="double" default="0.0"/>
+      <input_port name="direction_period" type="double" default="0.7"/>
+      <output_port name="goal_x" type="double"/>
+      <output_port name="goal_y" type="double"/>
+      <output_port name="goal_z" type="double"/>
+      <output_port name="goal_yaw" type="double"/>
+      <output_port name="goal_frame_id" type="std::string"/>
+      <output_port name="goal_enabled" type="bool"/>
+      <output_port name="posture_command" type="int"/>
+      <output_port name="gyro_mode_command" type="int"/>
+      <output_port name="gimbal_enabled_command" type="bool"/>
+      <output_port name="gimbal_rotate_command" type="bool"/>
+      <output_port name="target_lock_command" type="bool"/>
+      <output_port name="fire_command" type="bool"/>
+    </Action>
     <Condition ID="EvadeEligible">
       <input_port name="visible_enemy_count" type="int" default="0"/>
       <input_port name="health_decreased" type="bool" default="false"/>
-      <input_port name="at_target" type="bool" default="false"/>
+      <input_port name="attack_targets" type="std::string"/>
+      <input_port name="own_health" type="double" default="0.0"/>
       <input_port name="no_damage_seconds" type="double" default="0.0"/>
       <input_port name="recovery_seconds" type="double" default="5.0"/>
     </Condition>
@@ -195,8 +215,8 @@
     Top-level policy:
       1. Return home as soon as the match is finished.
       2. Do nothing before the playing phase starts.
-      3. During play, active attack/evade/pursuit has priority over recovery.
-      4. Recovery is continuously evaluated before the no-ammo and patrol fallbacks.
+      3. Recovery preempts attack/evade/pursuit below the configured health threshold.
+      4. With sufficient health, attack and evasion precede resource patrol fallbacks.
 
     All ports are intentionally mapped to the parent blackboard so the ROS /
     referee adapter can refresh inputs between ticks and consume the command
@@ -231,8 +251,27 @@
         <MatchStarted game_period="{game_period}"/>
 
         <ReactiveFallback name="PlayingPolicy">
-          <!-- Attack is intentionally first: health recovery cannot interrupt
-               an active target engagement. HasAmmo gates firing behavior. -->
+          <!-- Recovery has priority once health crosses its threshold,
+               including while the evasive-damage latch is active. -->
+          <SubTree ID="HealthRecovery"
+                   health="{health}"
+                   defense_buff="{defense_buff}"
+                   current_x="{current_x}"
+                   current_y="{current_y}"
+                   localization_valid="{localization_valid}"
+                   tolerance="{tolerance}"
+                   health_supply_x="2.0"
+                   health_supply_y="1.0"
+                   goal_x="{goal_x}"
+                   goal_y="{goal_y}"
+                   goal_z="{goal_z}"
+                   goal_yaw="{goal_yaw}"
+                   goal_frame_id="{goal_frame_id}"
+                   goal_enabled="{goal_enabled}"
+                   posture_command="{posture_command}"
+                   gyro_mode_command="{gyro_mode_command}"/>
+
+          <!-- With sufficient health, attack and evasion own the next priority. -->
           <ReactiveSequence name="AttackWithAmmo">
             <HasAmmo ammo_count="{ammo_count}"/>
             <SubTree ID="Attack"
@@ -277,26 +316,6 @@
                  pursuit_direction="{pursuit_direction}"
                  pursuit_desired_distance="{pursuit_desired_distance}"/>
           </ReactiveSequence>
-
-          <!-- Health is checked every tick after Attack and before resource
-               patrol. 0.0,0.0 is the editable health-supply point. -->
-          <SubTree ID="HealthRecovery"
-                   health="{health}"
-                   defense_buff="{defense_buff}"
-                   current_x="{current_x}"
-                   current_y="{current_y}"
-                   localization_valid="{localization_valid}"
-                   tolerance="{tolerance}"
-                   health_supply_x="2.0"
-                   health_supply_y="1.0"
-                   goal_x="{goal_x}"
-                   goal_y="{goal_y}"
-                   goal_z="{goal_z}"
-                   goal_yaw="{goal_yaw}"
-                   goal_frame_id="{goal_frame_id}"
-                   goal_enabled="{goal_enabled}"
-                   posture_command="{posture_command}"
-                   gyro_mode_command="{gyro_mode_command}"/>
 
           <!-- No ammo is handled only after health recovery has declined. -->
           <ReactiveSequence name="NoAmmoPolicy">
