@@ -12,6 +12,8 @@ HOME = (4.971, 7.5)
 SUPPLY = (2.0, 1.0)
 ATTACK = (16.0, 11.0)
 MATCH_DURATION = 420.0
+WEAPON_RANGE = 6.2
+FIRE_ALIGNMENT_TOLERANCE = math.radians(4.0)
 SUPPLY_ZONE = (0.5, 3.7, 0.2, 2.4)
 CONSERVATIVE_PATROL_POINTS = ((5.0, 5.0), (9.0, 5.0), (9.0, 9.0))
 AGGRESSIVE_PATROL_POINTS = ((12.0, 3.0), (16.0, 7.5), (12.0, 12.0))
@@ -78,12 +80,14 @@ class DecisionView:
 class TaskScenario:
     game_running: bool = True
     game_finished: bool = False
+    game_paused: bool = False
     remaining_time: float = MATCH_DURATION
     sentry_hp: float = 400.0
     defence_buff: int = 60
     ammo: int = 120
     pending_ammo: int = 0
     own_outpost_hp: int = 1000
+    own_base_hp: int = 5000
     enemy_outpost_hp: float = 1000.0
     enemy_base_hp: float = 5000.0
     respawn_fire_locked: bool = False
@@ -142,6 +146,62 @@ class TaskScenario:
         position = self.robot_positions[target_id]
         return position[0], position[1]
 
+    def target_position(self, target_id: int) -> tuple[float, float]:
+        if target_id in self.robot_positions:
+            return self.robot_position(target_id)
+        entity = next(
+            (
+                item
+                for item in FIELD_ENTITIES
+                if item.team == "blue" and item.target_id == target_id
+            ),
+            None,
+        )
+        if entity is None:
+            raise ValueError(f"target {target_id} is not an enemy unit")
+        return entity.x, entity.y
+
+    def resolve_fire_target(
+        self,
+        sentry: SentryState,
+        preferred_target: int = 0,
+        *,
+        maximum_distance: float = WEAPON_RANGE,
+        alignment_tolerance: float = FIRE_ALIGNMENT_TOLERANCE,
+    ) -> int | None:
+        """Return the unit actually intersected by the simulated gun barrel."""
+        if maximum_distance <= 0.0 or alignment_tolerance < 0.0:
+            raise ValueError("fire geometry limits must be non-negative")
+
+        candidates = (
+            (preferred_target,)
+            if preferred_target
+            else tuple(item.target_id for item in FIELD_ENTITIES if item.team == "blue")
+        )
+        aligned: list[tuple[float, float, int]] = []
+        for target_id in candidates:
+            try:
+                health = self.enemy_health(target_id)
+                target_x, target_y = self.target_position(target_id)
+            except ValueError:
+                continue
+            if health <= 0.0 or health == 1001.0:
+                continue
+            delta_x = target_x - sentry.x
+            delta_y = target_y - sentry.y
+            distance = math.hypot(delta_x, delta_y)
+            if distance > maximum_distance:
+                continue
+            target_angle = math.atan2(delta_y, delta_x)
+            angle_error = abs(
+                (target_angle - sentry.turret_angle + math.pi) % math.tau - math.pi
+            )
+            if angle_error <= alignment_tolerance:
+                aligned.append((angle_error, distance, target_id))
+        if not aligned:
+            return None
+        return min(aligned)[2]
+
     def toggle_patrol_mode(self) -> None:
         self.aggressive_patrol = not self.aggressive_patrol
         self.patrol_index = 0
@@ -153,6 +213,25 @@ class TaskScenario:
         self.game_finished = False
         self._last_minute = math.ceil(MATCH_DURATION / 60.0)
         self._set_event("比赛时间已重置为 420 秒")
+
+    def toggle_pause(self) -> None:
+        self.game_paused = not self.game_paused
+        self._set_event("比赛已暂停" if self.game_paused else "比赛继续")
+
+    def notify(self, message: str) -> None:
+        self._set_event(message)
+
+    def adjust_match_time(self, direction: int, step: float = 10.0) -> None:
+        if direction not in (-1, 1):
+            raise ValueError("direction must be -1 or 1")
+        if step <= 0.0:
+            raise ValueError("step must be positive")
+        self.remaining_time = max(
+            0.0,
+            min(MATCH_DURATION, self.remaining_time + step * direction),
+        )
+        self._last_minute = math.ceil(self.remaining_time / 60.0)
+        self._set_event(f"比赛时间已调整为 {round(self.remaining_time)} 秒")
 
     def enemy_health(self, target_id: int) -> float:
         if target_id == 6:
@@ -201,37 +280,88 @@ class TaskScenario:
             self.death_elapsed = None
         self._set_event(f"己方哨兵血量已调整为 {round(self.sentry_hp)}")
 
+    def adjust_ammo(self, direction: int) -> None:
+        self._validate_adjustment_direction(direction)
+        self.ammo = max(0, min(1000, self.ammo + 20 * direction))
+        self._set_event(f"当前弹量已调整为 {self.ammo}")
+
+    def adjust_defence_buff(self, direction: int) -> None:
+        self._validate_adjustment_direction(direction)
+        self.defence_buff = max(0, min(100, self.defence_buff + 10 * direction))
+        self._set_event(f"防御增益已调整为 {self.defence_buff}%")
+
+    def adjust_own_outpost_health(self, direction: int) -> None:
+        self._validate_adjustment_direction(direction)
+        self.own_outpost_hp = max(
+            0,
+            min(1000, self.own_outpost_hp + 100 * direction),
+        )
+        self._set_event(f"己方前哨血量已调整为 {self.own_outpost_hp}")
+
+    def adjust_own_base_health(self, direction: int) -> None:
+        self._validate_adjustment_direction(direction)
+        self.own_base_hp = max(0, min(5000, self.own_base_hp + 500 * direction))
+        self._set_event(f"己方基地血量已调整为 {self.own_base_hp}")
+
+    @staticmethod
+    def _validate_adjustment_direction(direction: int) -> None:
+        if direction not in (-1, 1):
+            raise ValueError("direction must be -1 or 1")
+
     def update(
         self,
         elapsed_seconds: float,
         sentry: SentryState,
         decision_override: DecisionView | None = None,
+        *,
+        fire_request: bool | None = None,
+        hit_target_id: int | None = None,
     ) -> DecisionView:
         if elapsed_seconds < 0.0:
             raise ValueError("elapsed_seconds must be non-negative")
-        self.event_message_remaining = max(0.0, self.event_message_remaining - elapsed_seconds)
+        simulation_elapsed = 0.0 if self.game_paused else elapsed_seconds
+        self.event_message_remaining = max(
+            0.0,
+            self.event_message_remaining - simulation_elapsed,
+        )
 
         if self.game_running:
-            self.remaining_time = max(0.0, self.remaining_time - elapsed_seconds)
+            self.remaining_time = max(0.0, self.remaining_time - simulation_elapsed)
             current_minute = math.ceil(self.remaining_time / 60.0)
             if current_minute < self._last_minute:
                 self.pending_ammo += 100 * (self._last_minute - current_minute)
                 self._last_minute = current_minute
 
-        self._update_respawn(elapsed_seconds)
-        self._update_supply(sentry, elapsed_seconds)
-        self._update_patrol(sentry)
-        self.dodge_remaining = max(0.0, self.dodge_remaining - elapsed_seconds)
+        if not self.game_paused:
+            self._update_respawn(simulation_elapsed)
+            self._update_supply(sentry, simulation_elapsed)
+            self._update_patrol(sentry)
+            self.dodge_remaining = max(
+                0.0,
+                self.dodge_remaining - simulation_elapsed,
+            )
 
         decision = decision_override or self.evaluate(sentry)
-        if decision.shoot_mode and self.enemy_outpost_hp > 0.0:
-            self.enemy_outpost_hp = max(0.0, self.enemy_outpost_hp - 240.0 * elapsed_seconds)
-            self._ammo_shot_accumulator += 10.0 * elapsed_seconds
+        requested = bool(decision.shoot_mode) if fire_request is None else fire_request
+        if requested and self.ammo > 0 and not self.respawn_fire_locked:
+            self._ammo_shot_accumulator += 10.0 * simulation_elapsed
             spent = int(self._ammo_shot_accumulator)
             if spent:
                 self.ammo = max(0, self.ammo - spent)
                 self._ammo_shot_accumulator -= spent
+            if hit_target_id is not None:
+                self._apply_fire_damage(hit_target_id, 240.0 * simulation_elapsed)
         return decision
+
+    def _apply_fire_damage(self, target_id: int, damage: float) -> None:
+        if damage <= 0.0:
+            return
+        if target_id == 6:
+            self.enemy_outpost_hp = max(0.0, self.enemy_outpost_hp - damage)
+        elif target_id == 7:
+            self.enemy_base_hp = max(0.0, self.enemy_base_hp - damage)
+        elif target_id in self.robot_hp:
+            self.robot_hp[target_id] = max(0.0, self.robot_hp[target_id] - damage)
 
     def evaluate(self, sentry: SentryState) -> DecisionView:
         spin_mode = int(
@@ -311,6 +441,7 @@ class TaskScenario:
     def finish_game(self) -> None:
         self.game_running = False
         self.game_finished = True
+        self.game_paused = False
         self.remaining_time = 0.0
         self._set_event("比赛结束，返回启动点")
 

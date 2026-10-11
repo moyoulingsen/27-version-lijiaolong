@@ -2,6 +2,9 @@
 <root BTCPP_format="4">
   <!-- Generated from the providedPorts() declarations in the decision nodes. -->
   <TreeNodesModel>
+    <Condition ID="AggressivePatrolRequested">
+      <input_port name="requested" type="bool" default="false"/>
+    </Condition>
     <Action ID="AdvancePatrolPoint">
       <input_port name="index" type="int" default="0"/>
       <input_port name="point_count" type="int"/>

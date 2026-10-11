@@ -2,7 +2,7 @@
 <root BTCPP_format="4">
   <include path="common_position.xml"/>
 
-  <!-- Four placeholders near the supply point. Replace or append points in XML. -->
+  <!-- Conservative route on the friendly half of the arena. -->
   <BehaviorTree ID="ConservativePatrol">
     <Sequence name="ConservativePatrolSequence">
       <ConfigureConservativePatrol
@@ -13,7 +13,7 @@
       <KeepRunningUntilFailure name="ConservativePatrolLoop">
         <Sequence name="ConservativePatrolPoint">
           <SelectPatrolPoint
-            points="0.0,0.0;1.0,0.0;1.0,1.0;0.0,1.0"
+            points="5.0,5.0;9.0,5.0;9.0,9.0"
             index="{waypoint_index}"
             target_x="{target_x}"
             target_y="{target_y}"

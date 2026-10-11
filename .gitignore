@@ -59,5 +59,6 @@ data/
 /decision/27_ws/tools/run_pygame_bt_stack.sh
 /decision/27_ws/map/scripts/pygame_bt_bridge.py
 /decision/27_ws/pygame_sim/rm2026_sim/ros_bridge.py
+/decision/27_ws/pygame_sim/scenario_saves.json
 
 /decision/docx/rmuc_2026_region_dataset.sqlite

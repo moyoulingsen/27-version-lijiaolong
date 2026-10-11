@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 
 from rm2026_sim.core import Arena, SentryState, Viewport
 from rm2026_sim.map_asset import load_p5_pgm
+from rm2026_sim.scenario_store import (
+    ScenarioStore,
+    capture_snapshot,
+    restore_snapshot,
+)
 from rm2026_sim.task_state import (
     AGGRESSIVE_PATROL_POINTS,
     ATTACK,
@@ -119,6 +125,59 @@ class TaskScenarioTests(unittest.TestCase):
         self.assertEqual(decision.shoot_mode, 1)
         self.assertEqual(decision.tripod_mode, 0)
 
+    def test_fire_request_without_barrel_alignment_does_not_deal_damage(self) -> None:
+        scenario = TaskScenario()
+        sentry = SentryState(x=ATTACK[0], y=ATTACK[1], turret_angle=0.0)
+        decision = scenario.evaluate(sentry)
+        original_health = scenario.enemy_outpost_hp
+
+        scenario.update(
+            0.5,
+            sentry,
+            decision_override=decision,
+            fire_request=True,
+            hit_target_id=scenario.resolve_fire_target(sentry, preferred_target=6),
+        )
+
+        self.assertEqual(scenario.enemy_outpost_hp, original_health)
+        self.assertLess(scenario.ammo, 120)
+
+    def test_aligned_barrel_hit_deals_damage_to_outpost(self) -> None:
+        scenario = TaskScenario()
+        target_x, target_y = scenario.target_position(6)
+        sentry = SentryState(x=ATTACK[0], y=ATTACK[1])
+        sentry.turret_angle = math.atan2(target_y - sentry.y, target_x - sentry.x)
+        hit_target = scenario.resolve_fire_target(sentry, preferred_target=6)
+
+        scenario.update(
+            0.5,
+            sentry,
+            decision_override=scenario.evaluate(sentry),
+            fire_request=True,
+            hit_target_id=hit_target,
+        )
+
+        self.assertEqual(hit_target, 6)
+        self.assertEqual(scenario.enemy_outpost_hp, 880.0)
+
+    def test_manual_fire_hits_enemy_under_barrel_without_bt_target(self) -> None:
+        scenario = TaskScenario()
+        target_x, target_y = scenario.target_position(6)
+        sentry = SentryState(x=ATTACK[0], y=ATTACK[1], manual_control=True)
+        sentry.turret_angle = math.atan2(target_y - sentry.y, target_x - sentry.x)
+
+        hit_target = scenario.resolve_fire_target(sentry)
+        scenario.update(
+            0.25,
+            sentry,
+            decision_override=scenario.evaluate(sentry),
+            fire_request=True,
+            hit_target_id=hit_target,
+        )
+
+        self.assertEqual(hit_target, 6)
+        self.assertEqual(scenario.enemy_outpost_hp, 940.0)
+
     def test_defence_buff_uses_lower_recovery_threshold(self) -> None:
         scenario = TaskScenario(defence_buff=60, sentry_hp=170.0)
         scenario.enemy_outpost_hp = 0.0
@@ -216,6 +275,55 @@ class TaskScenarioTests(unittest.TestCase):
         self.assertEqual(scenario.sentry_hp, 150.0)
         self.assertEqual(scenario.ammo, 20)
 
+    def test_match_time_can_be_adjusted_and_is_clamped(self) -> None:
+        scenario = TaskScenario(remaining_time=200.0)
+
+        scenario.adjust_match_time(1)
+        self.assertEqual(scenario.remaining_time, 210.0)
+        scenario.adjust_match_time(-1)
+        self.assertEqual(scenario.remaining_time, 200.0)
+
+        scenario.remaining_time = 418.0
+        scenario.adjust_match_time(1)
+        self.assertEqual(scenario.remaining_time, 420.0)
+        scenario.remaining_time = 3.0
+        scenario.adjust_match_time(-1)
+        self.assertEqual(scenario.remaining_time, 0.0)
+
+    def test_pause_freezes_time_ammo_and_damage(self) -> None:
+        scenario = TaskScenario(remaining_time=200.0)
+        target_x, target_y = scenario.target_position(6)
+        sentry = SentryState(x=ATTACK[0], y=ATTACK[1])
+        sentry.turret_angle = math.atan2(target_y - sentry.y, target_x - sentry.x)
+        hit_target = scenario.resolve_fire_target(sentry, preferred_target=6)
+
+        scenario.toggle_pause()
+        scenario.update(
+            1.0,
+            sentry,
+            decision_override=scenario.evaluate(sentry),
+            fire_request=True,
+            hit_target_id=hit_target,
+        )
+
+        self.assertTrue(scenario.game_paused)
+        self.assertEqual(scenario.remaining_time, 200.0)
+        self.assertEqual(scenario.ammo, 120)
+        self.assertEqual(scenario.enemy_outpost_hp, 1000.0)
+
+        scenario.toggle_pause()
+        scenario.update(
+            1.0,
+            sentry,
+            decision_override=scenario.evaluate(sentry),
+            fire_request=True,
+            hit_target_id=hit_target,
+        )
+        self.assertFalse(scenario.game_paused)
+        self.assertEqual(scenario.remaining_time, 199.0)
+        self.assertEqual(scenario.ammo, 110)
+        self.assertEqual(scenario.enemy_outpost_hp, 760.0)
+
     def test_enemy_health_adjustment_is_clamped(self) -> None:
         scenario = TaskScenario(enemy_outpost_hp=0.0)
         scenario.adjust_enemy_health(6, 1)
@@ -243,6 +351,33 @@ class TaskScenarioTests(unittest.TestCase):
             scenario.adjust_sentry_health(1)
         self.assertEqual(scenario.sentry_hp, 400.0)
 
+    def test_own_attributes_can_be_adjusted_and_are_clamped(self) -> None:
+        scenario = TaskScenario(
+            ammo=120,
+            defence_buff=60,
+            own_outpost_hp=1000,
+            own_base_hp=5000,
+        )
+
+        scenario.adjust_ammo(1)
+        scenario.adjust_defence_buff(-1)
+        scenario.adjust_own_outpost_health(-1)
+        scenario.adjust_own_base_health(-1)
+        self.assertEqual(scenario.ammo, 140)
+        self.assertEqual(scenario.defence_buff, 50)
+        self.assertEqual(scenario.own_outpost_hp, 900)
+        self.assertEqual(scenario.own_base_hp, 4500)
+
+        for _ in range(100):
+            scenario.adjust_ammo(-1)
+            scenario.adjust_defence_buff(-1)
+            scenario.adjust_own_outpost_health(-1)
+            scenario.adjust_own_base_health(-1)
+        self.assertEqual(scenario.ammo, 0)
+        self.assertEqual(scenario.defence_buff, 0)
+        self.assertEqual(scenario.own_outpost_hp, 0)
+        self.assertEqual(scenario.own_base_hp, 0)
+
     def test_dodge_requires_current_navigation_goal_to_be_reached(self) -> None:
         scenario = TaskScenario(enemy_outpost_hp=0.0)
         moving_sentry = SentryState()
@@ -253,6 +388,42 @@ class TaskScenarioTests(unittest.TestCase):
         scenario.inject_unseen_damage(at_goal)
         self.assertGreater(scenario.dodge_remaining, 0.0)
         self.assertEqual(scenario.evaluate(at_goal).behavior, "视野外受伤躲避")
+
+
+class ScenarioStoreTests(unittest.TestCase):
+    def test_snapshot_round_trip_preserves_positions_and_properties(self) -> None:
+        scenario = TaskScenario(
+            remaining_time=188.0,
+            sentry_hp=240.0,
+            ammo=80,
+            aggressive_patrol=True,
+            game_paused=True,
+        )
+        scenario.robot_positions[3] = [17.2, 6.4]
+        scenario.robot_hp[3] = 135.0
+        sentry = SentryState(
+            x=12.3,
+            y=8.7,
+            manual_control=True,
+            spin_angle=0.6,
+            turret_angle=-0.4,
+        )
+        snapshot = capture_snapshot("场景 1", scenario, sentry, 3)
+
+        with TemporaryDirectory() as directory:
+            store = ScenarioStore(Path(directory) / "scenarios.json")
+            store.save([snapshot])
+            loaded = store.load()
+
+        restored_task, restored_sentry, controlled = restore_snapshot(loaded[0])
+        self.assertEqual(restored_task.remaining_time, 188.0)
+        self.assertEqual(restored_task.robot_position(3), (17.2, 6.4))
+        self.assertEqual(restored_task.robot_hp[3], 135.0)
+        self.assertTrue(restored_task.aggressive_patrol)
+        self.assertTrue(restored_task.game_paused)
+        self.assertEqual((restored_sentry.x, restored_sentry.y), (12.3, 8.7))
+        self.assertAlmostEqual(restored_sentry.turret_angle, -0.4)
+        self.assertEqual(controlled, 3)
 
 
 if __name__ == "__main__":

@@ -10,8 +10,7 @@
       ammo_count        = ammunition currently carried by the robot;
       pickup_ammo_count = ammunition currently available at the pickup point.
 
-    Replace the 0.0/0.0 values in GoToAmmoPickup with the configured supply
-    point.  The route stores the own-ammo baseline before leaving, and only
+    The route stores the own-ammo baseline before leaving, and only
     succeeds when the own-ammo message increases.
   -->
   <BehaviorTree ID="GoToAmmoPickup">
@@ -19,12 +18,12 @@
       <SubTree ID="PositionCheck"
                current_x="{current_x}"
                current_y="{current_y}"
-               target_x="0.0"
-               target_y="0.0"
+               target_x="2.0"
+               target_y="1.0"
                tolerance="{tolerance}"
                localization_valid="{localization_valid}"/>
-      <SendGoalPose target_x="0.0"
-                    target_y="0.0"
+      <SendGoalPose target_x="2.0"
+                    target_y="1.0"
                     target_z="1.0"
                     target_yaw="0.0"
                     frame_id="map"
@@ -61,15 +60,12 @@
     </ReactiveFallback>
   </BehaviorTree>
 
-  <!-- No pickup succeeded: use the resource policy to choose a patrol. -->
+  <!-- Select the route requested by the simulator/referee adapter. -->
   <BehaviorTree ID="NoAmmoPatrolDecision">
-    <ReactiveFallback name="PatrolByResources">
-      <ReactiveSequence name="ConservativeWhenResourcesLow">
-        <ResourcesLow health="{health}"
-                      health_threshold="{health_threshold}"
-                      economy="{economy}"
-                      economy_threshold="{economy_threshold}"/>
-        <SubTree ID="ConservativePatrol"
+    <ReactiveFallback name="PatrolByRequestedMode">
+      <ReactiveSequence name="AggressiveWhenRequested">
+        <AggressivePatrolRequested requested="{aggressive_patrol}"/>
+        <SubTree ID="AggressivePatrol"
                  current_x="{current_x}"
                  current_y="{current_y}"
                  localization_valid="{localization_valid}"
@@ -85,7 +81,7 @@
                  gyro_mode_command="{gyro_mode_command}"
                  gimbal_enabled="{gimbal_enabled}"/>
       </ReactiveSequence>
-      <SubTree ID="AggressivePatrol"
+      <SubTree ID="ConservativePatrol"
                current_x="{current_x}"
                current_y="{current_y}"
                localization_valid="{localization_valid}"
@@ -116,9 +112,11 @@
                           return_x="{return_x}"
                           return_y="{return_y}"/>
 
-        <!-- One pickup attempt.  After a failed increase, do not retry the
-             same point while the available-pickup message remains positive. -->
-        <Fallback name="PickupOrPatrol">
+        <!-- Re-evaluate pickup availability while patrolling.  A normal
+             Fallback remembers its RUNNING patrol child, so ammunition that
+             becomes available after the robot has started patrolling would
+             otherwise be ignored until the whole subtree resets. -->
+        <ReactiveFallback name="PickupOrPatrol">
           <Sequence name="PickupAvailable">
             <!-- This is the independent available-pickup-ammo message. -->
             <HasPickupAmmo pickup_ammo_count="{pickup_ammo_count}"/>
@@ -165,6 +163,7 @@
                      health_threshold="{health_threshold}"
                      economy="{economy}"
                      economy_threshold="{economy_threshold}"
+                     aggressive_patrol="{aggressive_patrol}"
                      goal_x="{goal_x}"
                      goal_y="{goal_y}"
                      goal_z="{goal_z}"
@@ -175,7 +174,7 @@
                      gyro_mode_command="{gyro_mode_command}"
                      gimbal_enabled="{gimbal_enabled}"/>
           </Sequence>
-        </Fallback>
+        </ReactiveFallback>
       </Sequence>
     </ReactiveFallback>
   </BehaviorTree>

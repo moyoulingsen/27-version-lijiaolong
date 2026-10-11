@@ -2,7 +2,7 @@
 <root BTCPP_format="4">
   <include path="common_position.xml"/>
 
-  <!-- Four placeholders on the high platform. Replace or append points in XML. -->
+  <!-- Aggressive route through the middle and enemy half. -->
   <BehaviorTree ID="AggressivePatrol">
     <Sequence name="AggressivePatrolSequence">
       <!-- The specified high-platform strategy still uses defense posture. -->
@@ -14,7 +14,7 @@
       <KeepRunningUntilFailure name="AggressivePatrolLoop">
         <Sequence name="AggressivePatrolPoint">
           <SelectPatrolPoint
-            points="5.0,5.0;6.0,5.0;6.0,6.0;5.0,6.0"
+            points="12.0,3.0;16.0,7.5;12.0,12.0"
             index="{waypoint_index}"
             target_x="{target_x}"
             target_y="{target_y}"

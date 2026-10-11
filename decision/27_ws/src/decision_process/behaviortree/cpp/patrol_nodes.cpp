@@ -128,10 +128,29 @@ BT::NodeStatus AdvancePatrolPointAction::tick()
   return BT::NodeStatus::SUCCESS;
 }
 
+AggressivePatrolRequestedCondition::AggressivePatrolRequestedCondition(
+  const std::string & name, const BT::NodeConfig & config)
+: BT::ConditionNode(name, config)
+{
+}
+
+BT::PortsList AggressivePatrolRequestedCondition::providedPorts()
+{
+  return {BT::InputPort<bool>("requested", false, "Use the aggressive patrol route")};
+}
+
+BT::NodeStatus AggressivePatrolRequestedCondition::tick()
+{
+  const auto requested = getInput<bool>("requested");
+  return requested && requested.value() ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
 void registerPatrolNodes(BT::BehaviorTreeFactory & factory)
 {
   factory.registerNodeType<SelectPatrolPointAction>("SelectPatrolPoint");
   factory.registerNodeType<AdvancePatrolPointAction>("AdvancePatrolPoint");
+  factory.registerNodeType<AggressivePatrolRequestedCondition>(
+    "AggressivePatrolRequested");
 }
 
 }  // namespace decision_process

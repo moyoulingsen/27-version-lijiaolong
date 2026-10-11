@@ -5,6 +5,7 @@
 
 #include "behaviortree_cpp/action_node.h"
 #include "behaviortree_cpp/bt_factory.h"
+#include "behaviortree_cpp/condition_node.h"
 
 namespace decision_process
 {
@@ -25,6 +26,17 @@ class AdvancePatrolPointAction : public BT::SyncActionNode
 {
 public:
   AdvancePatrolPointAction(const std::string & name, const BT::NodeConfig & config);
+
+  static BT::PortsList providedPorts();
+
+  BT::NodeStatus tick() override;
+};
+
+class AggressivePatrolRequestedCondition : public BT::ConditionNode
+{
+public:
+  AggressivePatrolRequestedCondition(
+    const std::string & name, const BT::NodeConfig & config);
 
   static BT::PortsList providedPorts();
 
