@@ -174,7 +174,8 @@ BT::PortsList HealthRecoveryNeededCondition::providedPorts()
     BT::InputPort<double>(
       "enhanced_threshold", 160.0, "Health threshold when the defense buff is active"),
     BT::InputPort<double>(
-      "enhanced_buff_threshold", 0.6, "Defense buff ratio that selects enhanced_threshold")};
+      "enhanced_buff_threshold", 0.6, "Defense buff ratio that selects enhanced_threshold"),
+    BT::InputPort<double>("full_health", 400.0, "Health required to finish recovery")};
 }
 
 BT::NodeStatus HealthRecoveryNeededCondition::tick()
@@ -184,21 +185,34 @@ BT::NodeStatus HealthRecoveryNeededCondition::tick()
   const auto normal_threshold = getInput<double>("normal_threshold");
   const auto enhanced_threshold = getInput<double>("enhanced_threshold");
   const auto enhanced_buff_threshold = getInput<double>("enhanced_buff_threshold");
+  const auto full_health = getInput<double>("full_health");
   if(!health || !defense_buff || !normal_threshold || !enhanced_threshold ||
-    !enhanced_buff_threshold || !std::isfinite(health.value()) ||
+    !enhanced_buff_threshold || !full_health || !std::isfinite(health.value()) ||
     !std::isfinite(defense_buff.value()) || !std::isfinite(normal_threshold.value()) ||
     !std::isfinite(enhanced_threshold.value()) ||
-    !std::isfinite(enhanced_buff_threshold.value()) || health.value() < 0.0 ||
+    !std::isfinite(enhanced_buff_threshold.value()) || !std::isfinite(full_health.value()) ||
+    health.value() < 0.0 ||
     defense_buff.value() < 0.0 || defense_buff.value() > 1.0 ||
     normal_threshold.value() < 0.0 || enhanced_threshold.value() < 0.0 ||
-    enhanced_buff_threshold.value() < 0.0 || enhanced_buff_threshold.value() > 1.0)
+    enhanced_buff_threshold.value() < 0.0 || enhanced_buff_threshold.value() > 1.0 ||
+    full_health.value() <= 0.0)
   {
+    return BT::NodeStatus::FAILURE;
+  }
+
+  if(health.value() >= full_health.value())
+  {
+    recovering_ = false;
     return BT::NodeStatus::FAILURE;
   }
 
   const double threshold = defense_buff.value() >= enhanced_buff_threshold.value() ?
                              enhanced_threshold.value() : normal_threshold.value();
-  return health.value() < threshold ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+  if(health.value() < threshold)
+  {
+    recovering_ = true;
+  }
+  return recovering_ ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
 void registerBulletNodes(BT::BehaviorTreeFactory & factory)

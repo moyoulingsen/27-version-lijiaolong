@@ -184,7 +184,7 @@ private:
     blackboard_->set("goal_frame_id", std::string{"map"});
     blackboard_->set("goal_enabled", false);
     blackboard_->set("posture_command", 3);
-    blackboard_->set("gyro_mode_command", 0.0);
+    blackboard_->set("gyro_mode_command", 0);
     blackboard_->set("gimbal_enabled", true);
     blackboard_->set("gimbal_rotate", true);
     blackboard_->set("target_lock", false);
@@ -451,9 +451,9 @@ private:
     {
       death_started_.reset();
     }
-    const double gyro = blackboardValue<double>(blackboard_, "gyro_mode_command", 0.0);
-    serial.spin_mode = referee_.game_period == 2U && referee_.hp_outpost == 0U ?
-      static_cast<uint8_t>(std::clamp(static_cast<int>(std::lround(gyro)), 1, 3)) : 0U;
+    const int gyro = blackboardValue<int>(blackboard_, "gyro_mode_command", 0);
+    serial.spin_mode = referee_.game_period == 2U ?
+      static_cast<uint8_t>(std::clamp(gyro, 0, 3)) : 0U;
     serial.shoot_mode = blackboardValue<bool>(blackboard_, "fire_command", false) ? 1U : 0U;
     serial.tripod_mode = blackboardValue<bool>(blackboard_, "target_lock", false) ? 0U : 1U;
     serial_pub_->publish(serial);

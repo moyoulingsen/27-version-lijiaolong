@@ -17,7 +17,7 @@
       <input_port name="target_lost_seconds" type="double" default="0.0"/>
       <input_port name="lost_timeout_seconds" type="double" default="5.0"/>
       <output_port name="posture_command" type="int"/>
-      <output_port name="gyro_mode_command" type="double"/>
+      <output_port name="gyro_mode_command" type="int"/>
       <output_port name="gimbal_enabled_command" type="bool"/>
       <output_port name="gimbal_rotate_command" type="bool"/>
       <output_port name="target_lock_command" type="bool"/>
@@ -39,26 +39,26 @@
     </Action>
     <Action ID="ConfigureAggressivePatrol">
       <input_port name="posture" type="int" default="2"/>
-      <input_port name="gyro_mode" type="double" default="2.2"/>
+      <input_port name="gyro_mode" type="int" default="1"/>
       <input_port name="gimbal_enabled" type="bool" default="true"/>
       <output_port name="posture_command" type="int"/>
-      <output_port name="gyro_mode_command" type="double"/>
+      <output_port name="gyro_mode_command" type="int"/>
       <output_port name="gimbal_enabled_command" type="bool"/>
     </Action>
     <Action ID="ConfigureAttack">
       <input_port name="posture" type="int" default="1"/>
-      <input_port name="gyro_mode" type="double" default="2.3"/>
+      <input_port name="gyro_mode" type="int" default="2"/>
       <input_port name="gimbal_enabled" type="bool" default="false"/>
       <output_port name="posture_command" type="int"/>
-      <output_port name="gyro_mode_command" type="double"/>
+      <output_port name="gyro_mode_command" type="int"/>
       <output_port name="gimbal_enabled_command" type="bool"/>
     </Action>
     <Action ID="ConfigureConservativePatrol">
       <input_port name="posture" type="int" default="2"/>
-      <input_port name="gyro_mode" type="double" default="2.4"/>
+      <input_port name="gyro_mode" type="int" default="3"/>
       <input_port name="gimbal_enabled" type="bool" default="false"/>
       <output_port name="posture_command" type="int"/>
-      <output_port name="gyro_mode_command" type="double"/>
+      <output_port name="gyro_mode_command" type="int"/>
       <output_port name="gimbal_enabled_command" type="bool"/>
     </Action>
     <Action ID="DisableGoal">
@@ -77,7 +77,7 @@
       <input_port name="retreat_trigger_distance" type="double" default="1.2"/>
       <input_port name="retreat_stop_distance" type="double" default="1.8"/>
       <output_port name="posture_command" type="int"/>
-      <output_port name="gyro_mode_command" type="double"/>
+      <output_port name="gyro_mode_command" type="int"/>
       <output_port name="gimbal_enabled_command" type="bool"/>
       <output_port name="pursuit_enabled_command" type="bool"/>
       <output_port name="pursuit_target_id" type="std::string"/>
@@ -109,6 +109,7 @@
       <input_port name="normal_threshold" type="double" default="200.0"/>
       <input_port name="enhanced_threshold" type="double" default="160.0"/>
       <input_port name="enhanced_buff_threshold" type="double" default="0.6"/>
+      <input_port name="full_health" type="double" default="400.0"/>
     </Condition>
     <Condition ID="MatchFinished">
       <input_port name="game_period" type="int" default="0"/>
@@ -184,6 +185,10 @@
       <input_port name="posture" type="int" default="3"/>
       <output_port name="posture_command" type="int"/>
     </Action>
+    <Action ID="SetGyroMode">
+      <input_port name="mode" type="int" default="0"/>
+      <output_port name="gyro_mode_command" type="int"/>
+    </Action>
   </TreeNodesModel>
 
   <!--
@@ -217,7 +222,8 @@
                goal_yaw="{goal_yaw}"
                goal_frame_id="{goal_frame_id}"
                goal_enabled="{goal_enabled}"
-               posture_command="{posture_command}"/>
+               posture_command="{posture_command}"
+               gyro_mode_command="{gyro_mode_command}"/>
 
       <!-- MatchStarted is a gate, not a motion action. Before phase 2 this
            branch returns FAILURE and therefore emits no playing commands. -->
@@ -289,13 +295,15 @@
                    goal_yaw="{goal_yaw}"
                    goal_frame_id="{goal_frame_id}"
                    goal_enabled="{goal_enabled}"
-                   posture_command="{posture_command}"/>
+                   posture_command="{posture_command}"
+                   gyro_mode_command="{gyro_mode_command}"/>
 
           <!-- No ammo is handled only after health recovery has declined. -->
           <ReactiveSequence name="NoAmmoPolicy">
             <Inverter>
               <HasAmmo ammo_count="{ammo_count}"/>
             </Inverter>
+            <SetGyroMode mode="0" gyro_mode_command="{gyro_mode_command}"/>
             <SubTree ID="BulletCheck"
                      ammo_count="{ammo_count}"
                      pickup_ammo_count="{pickup_ammo_count}"

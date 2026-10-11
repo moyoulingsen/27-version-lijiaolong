@@ -111,7 +111,7 @@ class SimulatorApp:
                         elif event.key == self.pg.K_ESCAPE:
                             running = False
                         elif event.key == self.pg.K_SPACE:
-                            self._manual_fire_held = self.sentry.manual_control
+                            self.task.toggle_pause()
                         elif event.key == self.pg.K_p:
                             self.task.toggle_pause()
                         elif event.key in (self.pg.K_0, self.pg.K_KP0):
@@ -137,8 +137,6 @@ class SimulatorApp:
                             self._switch_to_auto_control()
                         else:
                             self._handle_task_key(event.key)
-                    elif event.type == self.pg.KEYUP and event.key == self.pg.K_SPACE:
-                        self._manual_fire_held = False
                     elif event.type in (
                         self.pg.VIDEORESIZE,
                         self.pg.WINDOWSIZECHANGED,
@@ -151,7 +149,11 @@ class SimulatorApp:
                         if resized_surface is not None:
                             self.screen = resized_surface
                     elif event.type == self.pg.MOUSEBUTTONDOWN and event.button == 1:
-                        self._handle_mouse_click(event.pos)
+                        handled = self._handle_mouse_click(event.pos)
+                        if not handled:
+                            self._manual_fire_held = self.sentry.manual_control
+                    elif event.type == self.pg.MOUSEBUTTONUP and event.button == 1:
+                        self._manual_fire_held = False
 
                 viewport = self._viewport()
                 move_x, move_y = self._movement_input()
@@ -268,6 +270,7 @@ class SimulatorApp:
                 manual_y,
                 self.arena,
                 spin_enabled=decision.spin_mode > 0,
+                spin_speed_scale=self._spin_speed_scale(decision.spin_mode),
                 turret_enabled=not self._manual_fire_held,
             )
             return
@@ -291,8 +294,13 @@ class SimulatorApp:
             0.0,
             self.arena,
             spin_enabled=decision.spin_mode > 0,
+            spin_speed_scale=self._spin_speed_scale(decision.spin_mode),
             turret_enabled=decision.tripod_mode > 0 and not tracking,
         )
+
+    @staticmethod
+    def _spin_speed_scale(spin_mode: int) -> float:
+        return {1: 0.6, 2: 1.0, 3: 1.6}.get(spin_mode, 0.0)
 
     def _track_selected_target(
         self,
@@ -480,7 +488,7 @@ class SimulatorApp:
         elif key == self.pg.K_F10:
             self.task.reset_match_time()
 
-    def _handle_mouse_click(self, position: tuple[int, int]) -> None:
+    def _handle_mouse_click(self, position: tuple[int, int]) -> bool:
         for rect, action, target_id, direction in reversed(self.click_regions):
             if not rect.collidepoint(position):
                 continue
@@ -494,6 +502,8 @@ class SimulatorApp:
                 self.task.adjust_sentry_health(direction)
             elif action == "ammo":
                 self.task.adjust_ammo(direction)
+            elif action == "pending_ammo":
+                self.task.adjust_pending_ammo(direction)
             elif action == "defence_buff":
                 self.task.adjust_defence_buff(direction)
             elif action == "own_outpost_health":
@@ -508,7 +518,8 @@ class SimulatorApp:
                 self._save_snapshot()
             elif action == "load_snapshot":
                 self._load_snapshot(target_id)
-            return
+            return True
+        return False
 
     def _select_sentry(self) -> None:
         self.controlled_robot_id = None
@@ -619,7 +630,7 @@ class SimulatorApp:
         self.screen.blit(title, (34, 12))
 
         if self.sentry.manual_control:
-            mode = "人工控制｜己方哨兵 9｜空格射击"
+            mode = "人工控制｜己方哨兵 9｜鼠标左键射击"
             mode_color = (66, 208, 132)
         elif self.controlled_robot_id is not None:
             mode = f"人工控制｜蓝方 {self.controlled_robot_id} 号"
@@ -710,7 +721,7 @@ class SimulatorApp:
             x,
             y,
             "比赛状态",
-            "已暂停（P 继续）" if self.task.game_paused else "进行中（P 暂停）",
+            "已暂停（空格继续）" if self.task.game_paused else "进行中（空格暂停）",
             bar_width,
         )
         y = self._draw_key_value(
@@ -785,8 +796,17 @@ class SimulatorApp:
 
         y = self._draw_section_title(x, y + 3, "裁判与决策参数")
         y = self._draw_match_time_control(x, y, bar_width)
-        y = self._draw_key_value(
-            x, y, "待领弹药", str(self.task.pending_ammo), bar_width
+        y = self._draw_adjustable_progress_bar(
+            x,
+            y,
+            bar_width,
+            "待领弹药",
+            self.task.pending_ammo,
+            500,
+            (225, 166, 58),
+            0,
+            compact=True,
+            action="pending_ammo",
         )
         posture_name = {1: "进攻", 2: "防御", 3: "移动"}.get(
             self.decision.posture, "未知"
@@ -854,7 +874,9 @@ class SimulatorApp:
             x,
             y,
             "小陀螺",
-            "低速旋转" if self.decision.spin_mode else "关闭",
+            {0: "关闭", 1: "低速旋转", 2: "中速旋转", 3: "高速旋转"}.get(
+                self.decision.spin_mode, "未知模式"
+            ),
             bar_width,
         )
         y = self._draw_key_value(x, y, "射击状态", self._shooting_status(), bar_width)

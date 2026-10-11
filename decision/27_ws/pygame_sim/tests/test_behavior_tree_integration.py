@@ -70,8 +70,9 @@ def main() -> None:
             client,
             state,
             lambda output: output["autoaim"]["target"] == 6
-            and near_goal(output, (16.0, 11.0)),
-            "enemy outpost pursuit",
+            and near_goal(output, (16.0, 11.0))
+            and output["serial"]["spin_mode"] == 1,
+            "enemy outpost pursuit uses low-speed gyro",
         )
 
         state["x"], state["y"] = 13.65, 9.86
@@ -88,7 +89,8 @@ def main() -> None:
             client,
             state,
             lambda output: output["autoaim"]["target"] == 6
-            and output["serial"]["shoot_mode"] == 0,
+            and output["serial"]["shoot_mode"] == 0
+            and output["serial"]["spin_mode"] == 0,
             "at attack point without autoaim does not fire",
         )
 
@@ -98,7 +100,9 @@ def main() -> None:
             client,
             state,
             lambda output: output["autoaim"]["target"] == 6
-            and output["serial"]["shoot_mode"] == 1,
+            and output["serial"]["shoot_mode"] == 1
+            and output["serial"]["spin_mode"] == 0
+            and output["serial"]["posture"] == 1,
             "attack and fire at outpost",
         )
 
@@ -111,18 +115,30 @@ def main() -> None:
             "low-health recovery",
         )
 
+        state["hp_sentry"] = 250
+        wait_for(
+            client, state, lambda output: near_goal(output, (2.0, 1.0)),
+            "health recovery remains active above trigger threshold",
+        )
+
         state["hp_sentry"] = 400
         state["x"], state["y"] = 4.971, 7.5
         state["aggressive_patrol"] = False
         wait_for(
-            client, state, lambda output: near_goal(output, (5.0, 5.0)),
-            "conservative patrol",
+            client,
+            state,
+            lambda output: near_goal(output, (5.0, 5.0))
+            and output["serial"]["spin_mode"] == 3,
+            "conservative patrol uses high-speed gyro",
         )
 
         state["aggressive_patrol"] = True
         wait_for(
-            client, state, lambda output: near_goal(output, (12.0, 3.0)),
-            "aggressive patrol",
+            client,
+            state,
+            lambda output: near_goal(output, (12.0, 3.0))
+            and output["serial"]["spin_mode"] == 1,
+            "aggressive patrol uses low-speed gyro",
         )
 
         # Reproduce the UI sequence: clear carried ammunition first, allow the
@@ -148,8 +164,17 @@ def main() -> None:
         wait_for(
             client,
             state,
-            lambda output: output["serial"]["spin_mode"] > 0,
-            "small gyro after own outpost destruction",
+            lambda output: output["serial"]["spin_mode"] == 1,
+            "outpost destruction does not override aggressive patrol mode",
+        )
+
+        state["aggressive_patrol"] = False
+        wait_for(
+            client,
+            state,
+            lambda output: near_goal(output, (5.0, 5.0))
+            and output["serial"]["spin_mode"] == 3,
+            "outpost destruction does not override conservative patrol mode",
         )
 
         running = copy.deepcopy(state)

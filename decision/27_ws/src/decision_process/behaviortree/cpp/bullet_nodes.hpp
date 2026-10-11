@@ -75,7 +75,7 @@ public:
   BT::NodeStatus tick() override;
 };
 
-/** Returns SUCCESS while health is below the threshold selected by defense buff. */
+/** Latches recovery below the trigger threshold and releases only at full health. */
 class HealthRecoveryNeededCondition : public BT::ConditionNode
 {
 public:
@@ -84,6 +84,9 @@ public:
   static BT::PortsList providedPorts();
 
   BT::NodeStatus tick() override;
+
+private:
+  bool recovering_{false};
 };
 
 void registerBulletNodes(BT::BehaviorTreeFactory & factory);

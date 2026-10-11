@@ -6,8 +6,7 @@
   <!--
     Health is sampled on every tree tick. The branch is deliberately placed
     below Attack in MainTree, so an active engagement keeps priority. Once
-    this branch is running, it owns navigation until the health threshold is
-    reached again.
+    this branch is running, it owns navigation until health reaches 400.
 
     defense_buff is a ratio in [0, 1]. The supply point is configured by the
     parent subtree remapping (the current default is 0.0, 0.0).
@@ -18,8 +17,10 @@
                             defense_buff="{defense_buff}"
                             normal_threshold="200.0"
                             enhanced_threshold="160.0"
-                            enhanced_buff_threshold="0.6"/>
+                            enhanced_buff_threshold="0.6"
+                            full_health="400.0"/>
       <SetPosture posture="3" posture_command="{posture_command}"/>
+      <SetGyroMode mode="0" gyro_mode_command="{gyro_mode_command}"/>
 
       <ReactiveFallback name="GoToHealthSupplyAndWait">
         <Sequence name="AtHealthSupply">
@@ -34,9 +35,10 @@
           <KeepRunningUntilFailure>
             <HealthRecoveryNeeded health="{health}"
                                   defense_buff="{defense_buff}"
-                                  normal_threshold="200.0"
-                                  enhanced_threshold="160.0"
-                                  enhanced_buff_threshold="0.6"/>
+                                  normal_threshold="400.0"
+                                  enhanced_threshold="400.0"
+                                  enhanced_buff_threshold="0.6"
+                                  full_health="400.0"/>
           </KeepRunningUntilFailure>
         </Sequence>
 

@@ -4,7 +4,7 @@
 
   <!-- Aggressive route through the middle and enemy half. -->
   <BehaviorTree ID="AggressivePatrol">
-    <Sequence name="AggressivePatrolSequence">
+    <ReactiveSequence name="AggressivePatrolSequence">
       <!-- The specified high-platform strategy still uses defense posture. -->
       <ConfigureAggressivePatrol
         posture_command="{posture_command}"
@@ -47,6 +47,6 @@
                               next_index="{waypoint_index}"/>
         </Sequence>
       </KeepRunningUntilFailure>
-    </Sequence>
+    </ReactiveSequence>
   </BehaviorTree>
 </root>

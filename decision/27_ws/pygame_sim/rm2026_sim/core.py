@@ -112,14 +112,17 @@ class SentryState:
         arena: Arena,
         *,
         spin_enabled: bool = True,
+        spin_speed_scale: float = 1.0,
         turret_enabled: bool = True,
     ) -> None:
         if elapsed_seconds < 0.0:
             raise ValueError("elapsed_seconds must be non-negative")
+        if spin_speed_scale < 0.0:
+            raise ValueError("spin_speed_scale must be non-negative")
 
         if spin_enabled:
             self.spin_angle = normalize_angle(
-                self.spin_angle + self.spin_speed * elapsed_seconds
+                self.spin_angle + self.spin_speed * spin_speed_scale * elapsed_seconds
             )
         if turret_enabled:
             self.turret_angle = normalize_angle(

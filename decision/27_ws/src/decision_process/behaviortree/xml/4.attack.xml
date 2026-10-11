@@ -19,7 +19,7 @@
   <BehaviorTree ID="Attack">
     <ReactiveSequence name="AttackDecision">
       <ConfigureAttack posture="3"
-                        gyro_mode="2.3"
+                        gyro_mode="2"
                         gimbal_enabled="false"
                         posture_command="{posture_command}"
                         gyro_mode_command="{gyro_mode_command}"
@@ -42,7 +42,7 @@
                           no_damage_seconds="{no_damage_seconds}"
                           recovery_seconds="5.0"/>
           <!-- ConservativePatrol provides the evasive route: defense
-               posture, high-speed gyro 2.4, gimbal disabled. -->
+               posture, high-speed gyro mode 3, gimbal disabled. -->
           <SubTree ID="ConservativePatrol"
                    current_x="{current_x}"
                    current_y="{current_y}"
@@ -71,6 +71,8 @@
                                 selected_distance="{selected_distance}"
                                 selected_in_range="{selected_in_range}"
                                 target_selected="{target_selected}"/>
+            <SetPosture posture="1" posture_command="{posture_command}"/>
+            <SetGyroMode mode="0" gyro_mode_command="{gyro_mode_command}"/>
             <ReactiveFallback name="AttackUntilTargetLost">
               <AimAndFire target_id="{selected_target_id}"
                           target_visible="{target_visible}"
@@ -86,7 +88,7 @@
                           target_lock_command="{target_lock}"
                           fire_command="{fire_command}"/>
               <ConfigureAttack posture="3"
-                                gyro_mode="2.3"
+                                gyro_mode="2"
                                 gimbal_enabled="false"
                                 posture_command="{posture_command}"
                                 gyro_mode_command="{gyro_mode_command}"

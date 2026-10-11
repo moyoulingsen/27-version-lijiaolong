@@ -147,20 +147,20 @@ BT::PortsList ConfigureAttackAction::providedPorts()
 {
   return {
     BT::InputPort<int>("posture", 1, "Attack posture"),
-    BT::InputPort<double>("gyro_mode", 2.3, "Medium-speed small gyro mode"),
+    BT::InputPort<int>("gyro_mode", 2, "0 off, 1 low, 2 medium, 3 high"),
     BT::InputPort<bool>("gimbal_enabled", false, "Whether the gimbal is enabled"),
     BT::OutputPort<int>("posture_command"),
-    BT::OutputPort<double>("gyro_mode_command"),
+    BT::OutputPort<int>("gyro_mode_command"),
     BT::OutputPort<bool>("gimbal_enabled_command")};
 }
 
 BT::NodeStatus ConfigureAttackAction::tick()
 {
   const auto posture = getInput<int>("posture");
-  const auto gyro_mode = getInput<double>("gyro_mode");
+  const auto gyro_mode = getInput<int>("gyro_mode");
   const auto gimbal_enabled = getInput<bool>("gimbal_enabled");
   if(!posture || !gyro_mode || !gimbal_enabled || posture.value() < 1 || posture.value() > 3 ||
-    !finite(gyro_mode.value()))
+    gyro_mode.value() < 0 || gyro_mode.value() > 3)
   {
     return BT::NodeStatus::FAILURE;
   }
@@ -414,7 +414,7 @@ BT::PortsList AimAndFireAction::providedPorts()
     BT::InputPort<double>("target_lost_seconds", 0.0, "Seconds since target was lost"),
     BT::InputPort<double>("lost_timeout_seconds", 5.0, "Target loss timeout"),
     BT::OutputPort<int>("posture_command"),
-    BT::OutputPort<double>("gyro_mode_command"),
+    BT::OutputPort<int>("gyro_mode_command"),
     BT::OutputPort<bool>("gimbal_enabled_command"),
     BT::OutputPort<bool>("gimbal_rotate_command"),
     BT::OutputPort<bool>("target_lock_command"),
@@ -424,7 +424,7 @@ BT::PortsList AimAndFireAction::providedPorts()
 void AimAndFireAction::publishSafeOutputs()
 {
   setOutput("posture_command", 1);
-  setOutput("gyro_mode_command", 0.0);
+  setOutput("gyro_mode_command", 0);
   setOutput("gimbal_enabled_command", false);
   setOutput("gimbal_rotate_command", false);
   setOutput("target_lock_command", false);
@@ -568,7 +568,7 @@ BT::PortsList PursueAction::providedPorts()
       "retreat_stop_distance", 1.8,
       "Stop retreating at or above this distance"),
     BT::OutputPort<int>("posture_command"),
-    BT::OutputPort<double>("gyro_mode_command"),
+    BT::OutputPort<int>("gyro_mode_command"),
     BT::OutputPort<bool>("gimbal_enabled_command"),
     BT::OutputPort<bool>("pursuit_enabled_command"),
     BT::OutputPort<std::string>("pursuit_target_id"),
@@ -589,7 +589,7 @@ void PursueAction::resetPursuitState()
 void PursueAction::publishSafeOutputs()
 {
   setOutput("posture_command", 3);
-  setOutput("gyro_mode_command", 1.0);
+  setOutput("gyro_mode_command", 1);
   setOutput("gimbal_enabled_command", false);
   setOutput("pursuit_enabled_command", false);
   setOutput("pursuit_target_id", std::string{});

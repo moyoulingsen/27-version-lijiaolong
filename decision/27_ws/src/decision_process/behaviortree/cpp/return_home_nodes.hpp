@@ -68,6 +68,17 @@ public:
   BT::NodeStatus tick() override;
 };
 
+/** Sets the requested small-gyro enum: 0 off, 1 low, 2 medium, 3 high. */
+class SetGyroModeAction : public BT::SyncActionNode
+{
+public:
+  SetGyroModeAction(const std::string & name, const BT::NodeConfig & config);
+
+  static BT::PortsList providedPorts();
+
+  BT::NodeStatus tick() override;
+};
+
 /** Clears the navigation-enable output when the target is already reached. */
 class DisableGoalAction : public BT::SyncActionNode
 {

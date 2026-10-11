@@ -13,6 +13,7 @@
     <ReactiveSequence name="ReturnHomeSequence">
       <MatchFinished game_period="{game_period}" time="{time}"/>
       <SetPosture posture="3" posture_command="{posture_command}"/>
+      <SetGyroMode mode="0" gyro_mode_command="{gyro_mode_command}"/>
 
       <ReactiveFallback name="ReturnHomeUntilReached">
         <Sequence name="AlreadyAtStart">

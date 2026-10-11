@@ -102,6 +102,7 @@ class TaskScenario:
     robot_hp: dict[int, float] = field(default_factory=_initial_robot_health)
     _last_minute: int = 7
     _ammo_shot_accumulator: float = field(default=0.0, repr=False)
+    _health_recovery_active: bool = field(default=False, repr=False)
 
     @property
     def health_threshold(self) -> int:
@@ -285,6 +286,11 @@ class TaskScenario:
         self.ammo = max(0, min(1000, self.ammo + 20 * direction))
         self._set_event(f"当前弹量已调整为 {self.ammo}")
 
+    def adjust_pending_ammo(self, direction: int) -> None:
+        self._validate_adjustment_direction(direction)
+        self.pending_ammo = max(0, min(500, self.pending_ammo + 25 * direction))
+        self._set_event(f"待领弹药已调整为 {self.pending_ammo}")
+
     def adjust_defence_buff(self, direction: int) -> None:
         self._validate_adjustment_direction(direction)
         self.defence_buff = max(0, min(100, self.defence_buff + 10 * direction))
@@ -319,6 +325,8 @@ class TaskScenario:
     ) -> DecisionView:
         if elapsed_seconds < 0.0:
             raise ValueError("elapsed_seconds must be non-negative")
+        self.pending_ammo = max(0, min(500, self.pending_ammo))
+        self._finish_if_base_destroyed()
         simulation_elapsed = 0.0 if self.game_paused else elapsed_seconds
         self.event_message_remaining = max(
             0.0,
@@ -329,7 +337,10 @@ class TaskScenario:
             self.remaining_time = max(0.0, self.remaining_time - simulation_elapsed)
             current_minute = math.ceil(self.remaining_time / 60.0)
             if current_minute < self._last_minute:
-                self.pending_ammo += 100 * (self._last_minute - current_minute)
+                self.pending_ammo = min(
+                    500,
+                    self.pending_ammo + 100 * (self._last_minute - current_minute),
+                )
                 self._last_minute = current_minute
 
         if not self.game_paused:
@@ -362,11 +373,26 @@ class TaskScenario:
             self.enemy_base_hp = max(0.0, self.enemy_base_hp - damage)
         elif target_id in self.robot_hp:
             self.robot_hp[target_id] = max(0.0, self.robot_hp[target_id] - damage)
+        self._finish_if_base_destroyed()
+
+    def _finish_if_base_destroyed(self) -> bool:
+        if self.game_finished:
+            return True
+        if self.own_base_hp <= 0:
+            self.finish_game("己方基地被摧毁，比赛结束")
+            return True
+        if self.enemy_base_hp <= 0:
+            self.finish_game("敌方基地被摧毁，比赛结束")
+            return True
+        return False
 
     def evaluate(self, sentry: SentryState) -> DecisionView:
-        spin_mode = int(
-            self.game_running and self.sentry_hp > 0.0 and self.own_outpost_hp == 0
-        )
+        if self.sentry_hp >= 400.0:
+            self._health_recovery_active = False
+        elif self.sentry_hp < self.health_threshold:
+            self._health_recovery_active = True
+
+        spin_mode = 0
         behavior = "巡逻"
         posture = 3
         goal: tuple[float, float] | None = self.patrol_points[self.patrol_index]
@@ -383,7 +409,7 @@ class TaskScenario:
             )
         elif self.respawn_fire_locked:
             behavior, goal = "复活后补给解锁", SUPPLY
-        elif self.sentry_hp < self.health_threshold:
+        elif self._health_recovery_active:
             behavior, goal = "低血量回血", SUPPLY
         elif self.enemy_outpost_hp > 0.0:
             behavior, posture, goal, target = "攻击敌方前哨", 1, ATTACK, 6
@@ -394,6 +420,14 @@ class TaskScenario:
             goal = SUPPLY if self.pending_ammo > 0 else HOME
         elif self.dodge_remaining > 0.0 and self.dodge_goal is not None:
             behavior, goal = "视野外受伤躲避", self.dodge_goal
+
+        if self.game_running and self.sentry_hp > 0.0:
+            if "巡逻" in behavior:
+                spin_mode = 1 if self.aggressive_patrol else 3
+            elif behavior == "视野外受伤躲避":
+                spin_mode = 3
+            elif target > 0:
+                spin_mode = 0 if shoot_mode else 1
 
         tripod_mode = int(shoot_mode == 0)
         return DecisionView(
@@ -438,12 +472,12 @@ class TaskScenario:
         self.sentry_hp = 150.0
         self._set_event("血量设为 150，验证防御增益回血阈值")
 
-    def finish_game(self) -> None:
+    def finish_game(self, reason: str = "比赛结束，返回启动点") -> None:
         self.game_running = False
         self.game_finished = True
         self.game_paused = False
         self.remaining_time = 0.0
-        self._set_event("比赛结束，返回启动点")
+        self._set_event(reason)
 
     def kill_sentry(self) -> None:
         self.sentry_hp = 0.0

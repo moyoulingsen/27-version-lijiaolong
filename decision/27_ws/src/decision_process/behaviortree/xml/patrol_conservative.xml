@@ -4,7 +4,7 @@
 
   <!-- Conservative route on the friendly half of the arena. -->
   <BehaviorTree ID="ConservativePatrol">
-    <Sequence name="ConservativePatrolSequence">
+    <ReactiveSequence name="ConservativePatrolSequence">
       <ConfigureConservativePatrol
         posture_command="{posture_command}"
         gyro_mode_command="{gyro_mode_command}"
@@ -46,6 +46,6 @@
                               next_index="{waypoint_index}"/>
         </Sequence>
       </KeepRunningUntilFailure>
-    </Sequence>
+    </ReactiveSequence>
   </BehaviorTree>
 </root>

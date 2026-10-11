@@ -147,6 +147,30 @@ BT::NodeStatus SetPostureAction::tick()
   return BT::NodeStatus::SUCCESS;
 }
 
+SetGyroModeAction::SetGyroModeAction(
+  const std::string & name, const BT::NodeConfig & config)
+: BT::SyncActionNode(name, config)
+{
+}
+
+BT::PortsList SetGyroModeAction::providedPorts()
+{
+  return {
+    BT::InputPort<int>("mode", 0, "0 off, 1 low, 2 medium, 3 high"),
+    BT::OutputPort<int>("gyro_mode_command")};
+}
+
+BT::NodeStatus SetGyroModeAction::tick()
+{
+  const auto mode = getInput<int>("mode");
+  if(!mode || mode.value() < 0 || mode.value() > 3)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+  setOutput("gyro_mode_command", mode.value());
+  return BT::NodeStatus::SUCCESS;
+}
+
 DisableGoalAction::DisableGoalAction(
   const std::string & name, const BT::NodeConfig & config)
 : BT::SyncActionNode(name, config)
@@ -246,6 +270,7 @@ void registerNavigationNodes(BT::BehaviorTreeFactory & factory)
 {
   factory.registerNodeType<PositionReachedCondition>("PositionReached");
   factory.registerNodeType<SetPostureAction>("SetPosture");
+  factory.registerNodeType<SetGyroModeAction>("SetGyroMode");
   factory.registerNodeType<DisableGoalAction>("DisableGoal");
   factory.registerNodeType<SendGoalPoseAction>("SendGoalPose");
 }
