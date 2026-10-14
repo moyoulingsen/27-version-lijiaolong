@@ -223,10 +223,10 @@ def main() -> None:
         wait_for(
             client,
             state,
-            lambda output: near_goal(output, (5.0, 5.0))
-            and output["serial"]["spin_mode"] == 3
-            and output["serial"]["tripod_mode"] == 0,
-            "low economy selects conservative patrol and closes gimbal",
+            lambda output: near_goal(output, (12.0, 3.0))
+            and output["serial"]["spin_mode"] == 1
+            and output["serial"]["tripod_mode"] == 1,
+            "low economy alone keeps aggressive patrol",
         )
 
         state["economy"] = 400
@@ -236,7 +236,7 @@ def main() -> None:
             lambda output: near_goal(output, (12.0, 3.0))
             and output["serial"]["spin_mode"] == 1
             and output["serial"]["tripod_mode"] == 1,
-            "sufficient economy selects aggressive patrol and opens gimbal",
+            "economy boundary keeps aggressive patrol",
         )
 
         # One 25 HP hit remains below the accumulated significant-damage threshold.
@@ -352,10 +352,20 @@ def main() -> None:
         wait_for(
             client,
             state,
-            lambda output: near_goal(output, (5.0, 5.0))
-            and output["serial"]["spin_mode"] == 3,
-            "outpost destruction does not override conservative patrol mode",
+            lambda output: near_goal(output, (12.0, 3.0))
+            and output["serial"]["spin_mode"] == 1,
+            "low economy alone remains aggressive after outpost destruction",
         )
+
+        state["hp_sentry"] = 149
+        wait_for(
+            client,
+            state,
+            lambda output: near_goal(output, (2.0, 1.0))
+            and output["serial"]["spin_mode"] == 0,
+            "both-low patrol boundary remains below health-recovery priority",
+        )
+        state["hp_sentry"] = 400
 
         running = copy.deepcopy(state)
         running["time"] = 10

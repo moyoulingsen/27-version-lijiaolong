@@ -154,7 +154,7 @@ BT::NodeStatus ResourcesLowCondition::tick()
     return BT::NodeStatus::FAILURE;
   }
 
-  return health.value() < health_threshold.value() ||
+  return health.value() < health_threshold.value() &&
              economy.value() < economy_threshold.value() ?
            BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }

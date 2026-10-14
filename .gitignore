@@ -62,3 +62,6 @@ data/
 /decision/27_ws/pygame_sim/scenario_saves.json
 
 /decision/docx/rmuc_2026_region_dataset.sqlite
+
+# 本地提交材料，仅保留在本机
+/提交文档/

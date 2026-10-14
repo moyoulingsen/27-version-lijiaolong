@@ -33,7 +33,7 @@ EVADE_OFFSETS = (
 )
 SUPPLY_ZONE = (0.5, 3.7, 0.2, 2.4)
 CONSERVATIVE_PATROL_POINTS = ((5.0, 5.0), (9.0, 5.0), (9.0, 9.0))
-AGGRESSIVE_PATROL_POINTS = ((12.0, 3.0), (16.0, 7.5), (12.0, 12.0))
+AGGRESSIVE_PATROL_POINTS = ((12.0, 3.0), (16.0, 7.5), (12.3, 11.7))
 PATROL_POINTS = CONSERVATIVE_PATROL_POINTS
 
 
@@ -133,7 +133,7 @@ class TaskScenario:
 
     @property
     def resources_low_for_patrol(self) -> bool:
-        return self.sentry_hp < 150.0 or self.economy < 400.0
+        return self.sentry_hp < 150.0 and self.economy < 400.0
 
     @property
     def patrol_is_aggressive(self) -> bool:
@@ -236,8 +236,12 @@ class TaskScenario:
 
     def toggle_patrol_mode(self) -> None:
         if self.patrol_is_aggressive:
+            self.sentry_hp = min(self.sentry_hp, 125.0)
             self.economy = 350
         else:
+            # Return above both possible recovery thresholds so the F9 helper
+            # demonstrates aggressive patrol instead of remaining in recovery.
+            self.sentry_hp = max(self.sentry_hp, 200.0)
             self.economy = 400
         self.patrol_index = 0
         self._set_event(f"已按资源边界切换为{self.patrol_name}")

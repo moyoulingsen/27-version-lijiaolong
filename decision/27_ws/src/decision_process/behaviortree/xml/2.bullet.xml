@@ -62,8 +62,8 @@
 
   <!--
     Patrol boundary from the task specification:
-      health < 150 OR economy < 400 -> conservative patrol;
-      otherwise                    -> aggressive patrol.
+      health < 150 AND economy < 400 -> conservative patrol;
+      health >= 150 OR economy >= 400 -> aggressive patrol.
     Economy is an independent referee/simulator attribute.
   -->
   <BehaviorTree ID="NoAmmoPatrolDecision">

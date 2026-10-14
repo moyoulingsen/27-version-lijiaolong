@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .core import Arena, SentryState, Viewport
 from .map_asset import load_p5_pgm
+from .navigation import ASTAR_PLANNING_RADIUS, AStarNavigator, OccupancyGrid
 from .ros_bridge import BehaviorTreeBridgeClient
 from .scenario_store import (
     ScenarioStore,
@@ -75,7 +76,15 @@ class SimulatorApp:
         self.small_font = self.pg.font.Font(_font_path(False), 21)
         self.panel_title_font = self.pg.font.Font(_font_path(True), 28)
         self.panel_label_font = self.pg.font.Font(_font_path(False), 20)
-        self.map_surface = self._load_map_surface()
+        map_image = load_p5_pgm(MAP_PATH)
+        self.map_surface = self._load_map_surface(map_image)
+        self.collision_grid = OccupancyGrid.from_pgm(map_image, self.arena)
+        self.planning_grid = OccupancyGrid.from_pgm(
+            map_image,
+            self.arena,
+            collision_radius=ASTAR_PLANNING_RADIUS,
+        )
+        self.navigator = AStarNavigator(self.planning_grid)
         self.scaled_map = None
         self.scaled_map_size = None
         self.click_regions: list[tuple[object, str, int, int]] = []
@@ -84,8 +93,7 @@ class SimulatorApp:
         self._manual_fire_held = False
         self._restart_signal_remaining = 0.0
 
-    def _load_map_surface(self):
-        image = load_p5_pgm(MAP_PATH)
+    def _load_map_surface(self, image):
         source = self.pg.image.frombytes(image.pixels, (image.width, image.height), "P")
         source.set_palette([(value, value, value) for value in range(256)])
         source = source.convert()
@@ -269,6 +277,7 @@ class SimulatorApp:
         decision: DecisionView,
     ) -> None:
         if self.sentry.manual_control:
+            start = (self.sentry.x, self.sentry.y)
             self.sentry.update(
                 elapsed_seconds,
                 manual_x,
@@ -278,18 +287,29 @@ class SimulatorApp:
                 spin_speed_scale=self._spin_speed_scale(decision.spin_mode),
                 turret_enabled=not self._manual_fire_held,
             )
+            self.sentry.x, self.sentry.y = self.collision_grid.move_with_collision(
+                start,
+                (self.sentry.x, self.sentry.y),
+            )
+            self.navigator.clear()
             return
 
-        if decision.goal is not None:
-            goal_x, goal_y = decision.goal
-            delta_x = goal_x - self.sentry.x
-            delta_y = goal_y - self.sentry.y
+        current = (self.sentry.x, self.sentry.y)
+        self.navigator.update_goal(current, decision.goal)
+        waypoint = self.navigator.next_waypoint(current)
+        if waypoint is not None:
+            delta_x = waypoint[0] - self.sentry.x
+            delta_y = waypoint[1] - self.sentry.y
             distance = math.hypot(delta_x, delta_y)
             if distance > 0.08:
                 travel = min(distance, self.sentry.movement_speed * elapsed_seconds)
-                self.sentry.x, self.sentry.y = self.arena.clamp(
+                proposed = self.arena.clamp(
                     self.sentry.x + delta_x / distance * travel,
                     self.sentry.y + delta_y / distance * travel,
+                )
+                self.sentry.x, self.sentry.y = self.collision_grid.move_with_collision(
+                    current,
+                    proposed,
                 )
 
         tracking = self._track_selected_target(decision, elapsed_seconds)
@@ -609,6 +629,7 @@ class SimulatorApp:
     def _select_sentry(self) -> None:
         self.controlled_robot_id = None
         self.sentry.enable_manual_control()
+        self.navigator.clear()
 
     def _select_enemy_robot(self, key: int) -> None:
         key_to_target = {
@@ -635,6 +656,7 @@ class SimulatorApp:
         self._manual_fire_held = False
         self.manual_fire_active = False
         self.sentry.cancel_manual_control()
+        self.navigator.clear()
         if notify:
             self.task.notify("已切换为自动控制")
 
@@ -648,6 +670,7 @@ class SimulatorApp:
         self.hit_target_id = None
         self._restart_signal_remaining = 0.20
         self.bridge.clear_output()
+        self.navigator.clear()
         self.decision = self.task.evaluate(self.sentry)
         self.task.notify("比赛时间、位置和全部属性已复位")
 
@@ -659,6 +682,7 @@ class SimulatorApp:
         self._restart_signal_remaining = 0.20
         self.hit_target_id = None
         self.bridge.clear_output()
+        self.navigator.clear()
         self.decision = self.task.evaluate(self.sentry)
         self.task.notify("验证已重新启动，行为树正在复位")
 
@@ -704,6 +728,7 @@ class SimulatorApp:
         self.hit_target_id = None
         self._restart_signal_remaining = 0.0
         self.bridge.clear_output()
+        self.navigator.clear()
         self.decision = self.task.evaluate(self.sentry)
         self.task.notify(
             f"已载入{self.snapshots[index].get('name', f'场景 {index + 1}')}"
@@ -1622,6 +1647,21 @@ class SimulatorApp:
     def _draw_navigation(self, viewport: Viewport) -> None:
         if self.decision.goal is None:
             return
+        path_points = [
+            viewport.world_to_screen(self.sentry.x, self.sentry.y),
+            *(
+                viewport.world_to_screen(x, y)
+                for x, y in self.navigator.remaining_path
+            ),
+        ]
+        if len(path_points) >= 2:
+            self.pg.draw.lines(
+                self.screen,
+                (245, 191, 70),
+                False,
+                path_points,
+                3,
+            )
         goal = self.pg.Vector2(viewport.world_to_screen(*self.decision.goal))
         diamond = (
             (goal.x, goal.y - 9),
@@ -1634,7 +1674,10 @@ class SimulatorApp:
 
     def _draw_sentry(self, viewport: Viewport) -> None:
         center = self.pg.Vector2(viewport.world_to_screen(self.sentry.x, self.sentry.y))
-        ring_radius = max(17, round(0.42 * viewport.scale))
+        ring_radius = max(
+            17,
+            round(self.collision_grid.collision_radius * viewport.scale),
+        )
         ring_color = (223, 139, 49) if self.decision.spin_mode else (128, 135, 138)
         self.pg.draw.circle(self.screen, (248, 248, 246), center, ring_radius + 3)
         self.pg.draw.circle(self.screen, ring_color, center, ring_radius, 3)

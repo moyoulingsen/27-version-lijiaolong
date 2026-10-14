@@ -64,7 +64,7 @@ public:
   BT::NodeStatus tick() override;
 };
 
-/** Returns SUCCESS when either health or economy is below its configured limit. */
+/** Returns SUCCESS only when health and economy are both below their limits. */
 class ResourcesLowCondition : public BT::ConditionNode
 {
 public:

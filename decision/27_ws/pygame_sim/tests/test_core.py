@@ -128,35 +128,38 @@ class TaskScenarioTests(unittest.TestCase):
     def test_behavior_selects_spin_mode_without_outpost_gate(self) -> None:
         scenario = TaskScenario()
         scenario.destroy_enemy_outpost()
-        self.assertEqual(scenario.evaluate(SentryState()).spin_mode, 3)
-        scenario.toggle_patrol_mode()
         self.assertEqual(scenario.evaluate(SentryState()).spin_mode, 1)
         self.assertEqual(scenario.evaluate(SentryState()).tripod_mode, 1)
+        scenario.toggle_patrol_mode()
+        self.assertEqual(scenario.patrol_name, "保守巡逻")
+        self.assertEqual(scenario.evaluate(SentryState()).behavior, "低血量回血")
 
-    def test_conservative_patrol_closes_gimbal_at_resource_boundary(self) -> None:
+    def test_patrol_boundary_requires_both_health_and_economy_low(self) -> None:
         scenario = TaskScenario(
             enemy_outpost_hp=0.0,
             sentry_hp=400.0,
             economy=399,
         )
         decision = scenario.evaluate(SentryState())
-        self.assertEqual(scenario.patrol_name, "保守巡逻")
-        self.assertEqual(decision.spin_mode, 3)
-        self.assertEqual(decision.tripod_mode, 0)
-
-        scenario.economy = 400
-        decision = scenario.evaluate(SentryState())
         self.assertEqual(scenario.patrol_name, "激进巡逻")
         self.assertEqual(decision.spin_mode, 1)
         self.assertEqual(decision.tripod_mode, 1)
 
         scenario.sentry_hp = 149
-        decision = scenario.evaluate(SentryState())
+        scenario.economy = 399
         self.assertEqual(scenario.patrol_name, "保守巡逻")
-        self.assertEqual(decision.behavior, "低血量回血")
+
+        scenario.economy = 400
+        self.assertEqual(scenario.patrol_name, "激进巡逻")
 
         scenario.sentry_hp = 150
+        scenario.economy = 399
         self.assertEqual(scenario.patrol_name, "激进巡逻")
+
+        scenario.sentry_hp = 149
+        scenario.economy = 399
+        decision = scenario.evaluate(SentryState())
+        self.assertEqual(decision.behavior, "低血量回血")
 
     def test_attack_lock_stops_gimbal_and_enables_shooting(self) -> None:
         scenario = TaskScenario()
@@ -334,17 +337,25 @@ class TaskScenarioTests(unittest.TestCase):
     def test_patrol_mode_switches_between_conservative_and_aggressive_routes(self) -> None:
         scenario = TaskScenario(enemy_outpost_hp=0.0)
         sentry = SentryState()
-        self.assertEqual(scenario.patrol_points, CONSERVATIVE_PATROL_POINTS)
-        self.assertEqual(scenario.evaluate(sentry).goal, CONSERVATIVE_PATROL_POINTS[0])
+        self.assertEqual(scenario.patrol_name, "激进巡逻")
+        self.assertEqual(scenario.patrol_points, AGGRESSIVE_PATROL_POINTS)
+        self.assertEqual(scenario.evaluate(sentry).goal, AGGRESSIVE_PATROL_POINTS[0])
 
         scenario.toggle_patrol_mode()
+        self.assertEqual(scenario.patrol_name, "保守巡逻")
+        self.assertEqual(scenario.patrol_points, CONSERVATIVE_PATROL_POINTS)
 
+        scenario.toggle_patrol_mode()
         self.assertEqual(scenario.patrol_name, "激进巡逻")
         self.assertEqual(scenario.patrol_points, AGGRESSIVE_PATROL_POINTS)
         self.assertEqual(scenario.evaluate(sentry).goal, AGGRESSIVE_PATROL_POINTS[0])
 
     def test_patrol_route_loops_from_last_point_back_to_first(self) -> None:
-        scenario = TaskScenario(enemy_outpost_hp=0.0)
+        scenario = TaskScenario(
+            enemy_outpost_hp=0.0,
+            sentry_hp=125.0,
+            economy=350,
+        )
         sentry = SentryState()
 
         for expected_index, point in enumerate(CONSERVATIVE_PATROL_POINTS):
@@ -355,7 +366,8 @@ class TaskScenarioTests(unittest.TestCase):
                 (expected_index + 1) % len(CONSERVATIVE_PATROL_POINTS),
             )
 
-        self.assertEqual(scenario.evaluate(sentry).goal, CONSERVATIVE_PATROL_POINTS[0])
+        self.assertEqual(scenario.patrol_name, "保守巡逻")
+        self.assertEqual(scenario.patrol_points[scenario.patrol_index], CONSERVATIVE_PATROL_POINTS[0])
 
     def test_match_time_reset_restores_complete_match_state(self) -> None:
         scenario = TaskScenario(
