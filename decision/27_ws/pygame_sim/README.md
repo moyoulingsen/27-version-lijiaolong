@@ -2,6 +2,10 @@
 
 这是一个与 ROS 2/Gazebo 解耦的轻量二维验证程序，用于先行确认哨兵坐标、任务场景输入、人工移动、小陀螺、云台和高层决策输出。
 
+## 启动
+cd "/home/lijiaolong/桌面/27-version-lijiaolong/decision/27_ws/pygame_sim"
+./run_behavior_tree_sim.sh
+
 ## 坐标和地图
 
 - 场地世界坐标为 `28 m x 15 m`，原点位于左下角，`x` 向右、`y` 向上。
