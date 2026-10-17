@@ -16,11 +16,10 @@ from .map_asset import PgmImage
 # the chassis spins, plus a small numerical clearance for the 0.05 m grid.
 ROBOT_COLLISION_LENGTH = 0.5200
 ROBOT_COLLISION_WIDTH = 0.5196
+ROBOT_FOOTPRINT_RADIUS = math.hypot(ROBOT_COLLISION_LENGTH, ROBOT_COLLISION_WIDTH) * 0.5
 ROBOT_COLLISION_CLEARANCE = 0.02
-ROBOT_COLLISION_RADIUS = (
-    math.hypot(ROBOT_COLLISION_LENGTH, ROBOT_COLLISION_WIDTH) * 0.5
-    + ROBOT_COLLISION_CLEARANCE
-)
+ROBOT_COLLISION_RADIUS = ROBOT_FOOTPRINT_RADIUS + ROBOT_COLLISION_CLEARANCE
+ROBOT_ENTITY_COLLISION_RADIUS = ROBOT_COLLISION_RADIUS
 
 # A* deliberately plans on a slightly larger virtual footprint than the real
 # collision checker.  This keeps route centers away from obstacle corners and
@@ -140,6 +139,39 @@ class OccupancyGrid:
         ):
             return False
         return self.is_free_cell(self.world_to_cell(x, y))
+
+    def with_dynamic_obstacles(
+        self,
+        bodies: tuple[tuple[float, float, float], ...],
+    ) -> "OccupancyGrid":
+        """Return a planning grid that also keeps robot centers apart."""
+        if not bodies:
+            return self
+        blocked = bytearray(self.blocked)
+        for body_x, body_y, body_radius in bodies:
+            if body_radius < 0.0:
+                raise ValueError("dynamic obstacle radius must be non-negative")
+            clearance = self.collision_radius + body_radius
+            radius_cells = math.ceil(clearance / self.arena.map_resolution)
+            center_row, center_column = self.world_to_cell(body_x, body_y)
+            for row in range(center_row - radius_cells, center_row + radius_cells + 1):
+                if not 0 <= row < self.height:
+                    continue
+                for column in range(
+                    center_column - radius_cells, center_column + radius_cells + 1
+                ):
+                    if not 0 <= column < self.width:
+                        continue
+                    world_x, world_y = self.cell_to_world((row, column))
+                    if math.hypot(world_x - body_x, world_y - body_y) <= clearance:
+                        blocked[row * self.width + column] = 1
+        return OccupancyGrid(
+            self.arena,
+            self.width,
+            self.height,
+            bytes(blocked),
+            self.collision_radius,
+        )
 
     def nearest_free_cell(self, cell: tuple[int, int]) -> tuple[int, int] | None:
         """Return the nearest grid cell that can contain the robot footprint."""
@@ -277,8 +309,13 @@ class OccupancyGrid:
         self,
         start: tuple[float, float],
         target: tuple[float, float],
+        *,
+        collision_bodies: tuple[tuple[float, float, float], ...] = (),
+        moving_radius: float = ROBOT_ENTITY_COLLISION_RADIUS,
     ) -> tuple[float, float]:
-        """Move toward a target until the swept collision volume is blocked."""
+        """Move until the map or another robot's swept collision body blocks it."""
+        if moving_radius < 0.0:
+            raise ValueError("moving_radius must be non-negative")
         delta_x = target[0] - start[0]
         delta_y = target[1] - start[1]
         distance = math.hypot(delta_x, delta_y)
@@ -293,7 +330,11 @@ class OccupancyGrid:
                 start[0] + delta_x * ratio,
                 start[1] + delta_y * ratio,
             )
-            if not self.is_free_world(*candidate):
+            if not self.is_free_world(*candidate) or any(
+                math.hypot(candidate[0] - body_x, candidate[1] - body_y)
+                < moving_radius + body_radius
+                for body_x, body_y, body_radius in collision_bodies
+            ):
                 break
             last_free = candidate
         return last_free
@@ -302,16 +343,44 @@ class OccupancyGrid:
         self,
         start: tuple[float, float],
         target: tuple[float, float],
+        *,
+        collision_bodies: tuple[tuple[float, float, float], ...] = (),
+        moving_radius: float = ROBOT_ENTITY_COLLISION_RADIUS,
     ) -> tuple[float, float]:
-        """Resolve direct movement, with axis sliding when a wall is hit."""
-        direct = self.trace_free_motion(start, target)
+        """Resolve movement against walls and other robots, with axis sliding."""
+        direct = self.trace_free_motion(
+            start,
+            target,
+            collision_bodies=collision_bodies,
+            moving_radius=moving_radius,
+        )
         if math.hypot(direct[0] - target[0], direct[1] - target[1]) <= 1e-6:
             return direct
 
-        x_first = self.trace_free_motion(start, (target[0], start[1]))
-        x_first = self.trace_free_motion(x_first, (x_first[0], target[1]))
-        y_first = self.trace_free_motion(start, (start[0], target[1]))
-        y_first = self.trace_free_motion(y_first, (target[0], y_first[1]))
+        x_first = self.trace_free_motion(
+            start,
+            (target[0], start[1]),
+            collision_bodies=collision_bodies,
+            moving_radius=moving_radius,
+        )
+        x_first = self.trace_free_motion(
+            x_first,
+            (x_first[0], target[1]),
+            collision_bodies=collision_bodies,
+            moving_radius=moving_radius,
+        )
+        y_first = self.trace_free_motion(
+            start,
+            (start[0], target[1]),
+            collision_bodies=collision_bodies,
+            moving_radius=moving_radius,
+        )
+        y_first = self.trace_free_motion(
+            y_first,
+            (target[0], y_first[1]),
+            collision_bodies=collision_bodies,
+            moving_radius=moving_radius,
+        )
         return min(
             (direct, x_first, y_first),
             key=lambda point: math.hypot(point[0] - target[0], point[1] - target[1]),

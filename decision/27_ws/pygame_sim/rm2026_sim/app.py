@@ -7,7 +7,12 @@ from pathlib import Path
 
 from .core import Arena, SentryState, Viewport
 from .map_asset import load_p5_pgm
-from .navigation import ASTAR_PLANNING_RADIUS, AStarNavigator, OccupancyGrid
+from .navigation import (
+    ASTAR_PLANNING_RADIUS,
+    ROBOT_ENTITY_COLLISION_RADIUS,
+    AStarNavigator,
+    OccupancyGrid,
+)
 from .ros_bridge import BehaviorTreeBridgeClient
 from .scenario_store import (
     ScenarioStore,
@@ -22,12 +27,18 @@ from .task_state import (
     CONSERVATIVE_PATROL_POINTS,
     DETECTION_RANGE,
     HOME,
-    RULE_DAMAGE_PER_SHOT,
     RULE_FIRE_RATE_MAX,
     SUPPLY,
     SUPPLY_ZONE,
+    ROBOT_PROFILES,
+    RULE_BASE_HP,
+    RULE_BASE_SHIELD,
+    RULE_DAMAGE_17MM,
+    RULE_DAMAGE_42MM,
+    RULE_OUTPOST_HP,
     DecisionView,
     FIELD_ENTITIES,
+    OWN_FIELD_ENTITIES,
     TaskScenario,
 )
 
@@ -38,6 +49,7 @@ SNAPSHOT_PATH = APP_ROOT / "scenario_saves.json"
 WINDOW_SIZE = (2240, 1260)
 HEADER_HEIGHT = 112
 SIDE_PANEL_WIDTH = 390
+RIGHT_PANEL_WIDTH = 520
 SNAPSHOT_BAR_HEIGHT = 62
 AUTOAIM_HALF_VIEW = math.radians(24.0)
 
@@ -65,6 +77,7 @@ class SimulatorApp:
         self.arena = Arena()
         self.sentry = SentryState()
         self.controlled_robot_id: int | None = None
+        self.controlled_robot_team: str | None = None
         self.task = TaskScenario()
         self.decision = self.task.evaluate(self.sentry)
         self.bridge = BehaviorTreeBridgeClient()
@@ -84,10 +97,18 @@ class SimulatorApp:
             self.arena,
             collision_radius=ASTAR_PLANNING_RADIUS,
         )
+        self.base_planning_grid = self.planning_grid
         self.navigator = AStarNavigator(self.planning_grid)
+        self._planning_robot_signature = None
+        self._normalize_robot_positions()
+        self._refresh_dynamic_planning_grid(force=True)
         self.scaled_map = None
         self.scaled_map_size = None
-        self.click_regions: list[tuple[object, str, int, int]] = []
+        self.click_regions: list[tuple[object, str, object, int]] = []
+        self.robot_property_regions: list[tuple[object, str, int]] = []
+        self.robot_property_team = "red"
+        self.hovered_robot_key: tuple[str, int] | None = None
+        self.pinned_robot_key: tuple[str, int] | None = None
         self.manual_fire_active = False
         self.hit_target_id: int | None = None
         self._manual_fire_held = False
@@ -130,6 +151,19 @@ class SimulatorApp:
                             self._switch_to_auto_control()
                         elif event.key == self.pg.K_r:
                             self._restart_validation()
+                        elif event.key in (
+                            self.pg.K_F1,
+                            self.pg.K_F2,
+                            self.pg.K_F3,
+                            self.pg.K_F4,
+                            self.pg.K_F5,
+                            self.pg.K_F6,
+                            self.pg.K_F7,
+                            self.pg.K_F8,
+                            self.pg.K_F9,
+                            self.pg.K_F10,
+                        ):
+                            self._select_own_robot_function_key(event.key)
                         elif event.key in (self.pg.K_9, self.pg.K_KP9):
                             self._select_sentry()
                         elif event.key in (
@@ -137,18 +171,21 @@ class SimulatorApp:
                             self.pg.K_2,
                             self.pg.K_3,
                             self.pg.K_4,
+                            self.pg.K_5,
                             self.pg.K_8,
                             self.pg.K_KP1,
                             self.pg.K_KP2,
                             self.pg.K_KP3,
                             self.pg.K_KP4,
+                            self.pg.K_KP5,
                             self.pg.K_KP8,
                         ):
-                            self._select_enemy_robot(event.key)
+                            if event.mod & self.pg.KMOD_CTRL:
+                                self._select_own_robot_key(event.key)
+                            else:
+                                self._select_enemy_robot(event.key)
                         elif event.key in (self.pg.K_LSHIFT, self.pg.K_RSHIFT):
                             self._switch_to_auto_control()
-                        else:
-                            self._handle_task_key(event.key)
                     elif event.type in (
                         self.pg.VIDEORESIZE,
                         self.pg.WINDOWSIZECHANGED,
@@ -179,13 +216,7 @@ class SimulatorApp:
                     else elapsed_seconds
                 )
                 if self.controlled_robot_id is not None:
-                    self.task.move_robot(
-                        self.controlled_robot_id,
-                        move_x,
-                        move_y,
-                        elapsed_seconds,
-                        self.arena,
-                    )
+                    self._move_controlled_robot(move_x, move_y, elapsed_seconds)
                 self._update_sentry_motion(
                     elapsed_seconds
                     if self.sentry.manual_control
@@ -218,6 +249,9 @@ class SimulatorApp:
                     decision_override=motion_decision,
                     fire_request=fire_request,
                     hit_target_id=self.hit_target_id,
+                    # Targets are point proxies in the 2-D scene. A confirmed
+                    # building hit therefore represents an aimed center hit.
+                    critical_zone=self.hit_target_id in (6, 7),
                 )
                 self.bridge.publish_state(self._bridge_state())
                 self._restart_signal_remaining = max(
@@ -239,7 +273,7 @@ class SimulatorApp:
     def _viewport(self) -> Viewport:
         width, height = self.screen.get_size()
         left = SIDE_PANEL_WIDTH + 24
-        right = width - SIDE_PANEL_WIDTH - 24
+        right = width - RIGHT_PANEL_WIDTH - 24
         top = HEADER_HEIGHT + 18
         bottom = height - SNAPSHOT_BAR_HEIGHT - 18
         available_width = max(1.0, right - left)
@@ -276,6 +310,7 @@ class SimulatorApp:
         manual_y: float,
         decision: DecisionView,
     ) -> None:
+        self._refresh_dynamic_planning_grid()
         if self.sentry.manual_control:
             start = (self.sentry.x, self.sentry.y)
             self.sentry.update(
@@ -290,6 +325,8 @@ class SimulatorApp:
             self.sentry.x, self.sentry.y = self.collision_grid.move_with_collision(
                 start,
                 (self.sentry.x, self.sentry.y),
+                collision_bodies=self._collision_bodies("sentry", 8),
+                moving_radius=ROBOT_ENTITY_COLLISION_RADIUS,
             )
             self.navigator.clear()
             return
@@ -310,6 +347,8 @@ class SimulatorApp:
                 self.sentry.x, self.sentry.y = self.collision_grid.move_with_collision(
                     current,
                     proposed,
+                    collision_bodies=self._collision_bodies("sentry", 8),
+                    moving_radius=ROBOT_ENTITY_COLLISION_RADIUS,
                 )
 
         tracking = self._track_selected_target(decision, elapsed_seconds)
@@ -322,6 +361,113 @@ class SimulatorApp:
             spin_speed_scale=self._spin_speed_scale(decision.spin_mode),
             turret_enabled=decision.tripod_mode > 0 and not tracking,
         )
+
+    def _normalize_robot_positions(self) -> None:
+        """Repair initial/legacy positions inside walls or overlapping robots."""
+        placed: list[tuple[float, float, float]] = []
+        entries = [
+            ("sentry", 8),
+            *(("blue", target_id) for target_id in self.task.robot_positions),
+            *(("red", target_id) for target_id in self.task.own_robot_positions),
+        ]
+        for team, target_id in entries:
+            position = (
+                (self.sentry.x, self.sentry.y)
+                if team == "sentry"
+                else self.task.robot_position(target_id, team=team)
+            )
+            overlaps = any(
+                math.hypot(position[0] - x, position[1] - y)
+                < ROBOT_ENTITY_COLLISION_RADIUS + radius
+                for x, y, radius in placed
+            )
+            if not self.collision_grid.is_free_world(*position) or overlaps:
+                grid = self.collision_grid.with_dynamic_obstacles(tuple(placed))
+                nearest = grid.nearest_free_cell(grid.world_to_cell(*position))
+                if nearest is not None:
+                    position = grid.cell_to_world(nearest)
+                    if team == "sentry":
+                        self.sentry.x, self.sentry.y = position
+                    else:
+                        self.task.set_robot_position(target_id, position, team=team)
+            placed.append((*position, ROBOT_ENTITY_COLLISION_RADIUS))
+
+    def _collision_bodies(
+        self, moving_team: str, moving_id: int
+    ) -> tuple[tuple[float, float, float], ...]:
+        bodies: list[tuple[float, float, float]] = []
+        for target_id in self.task.robot_positions:
+            if moving_team == "blue" and target_id == moving_id:
+                continue
+            x, y = self.task.robot_position(target_id, team="blue")
+            bodies.append((x, y, ROBOT_ENTITY_COLLISION_RADIUS))
+        for target_id in self.task.own_robot_positions:
+            if moving_team == "red" and target_id == moving_id:
+                continue
+            x, y = self.task.own_robot_position(target_id)
+            bodies.append((x, y, ROBOT_ENTITY_COLLISION_RADIUS))
+        if not (moving_team == "sentry" and moving_id == 8):
+            bodies.append(
+                (self.sentry.x, self.sentry.y, ROBOT_ENTITY_COLLISION_RADIUS)
+            )
+        return tuple(bodies)
+
+    def _dynamic_planning_bodies(self) -> tuple[tuple[float, float, float], ...]:
+        bodies = [
+            (x, y, ROBOT_ENTITY_COLLISION_RADIUS)
+            for target_id in self.task.robot_positions
+            for x, y in (self.task.robot_position(target_id, team="blue"),)
+        ]
+        bodies.extend(
+            (x, y, ROBOT_ENTITY_COLLISION_RADIUS)
+            for target_id in self.task.own_robot_positions
+            for x, y in (self.task.own_robot_position(target_id),)
+        )
+        return tuple(bodies)
+
+    def _refresh_dynamic_planning_grid(self, *, force: bool = False) -> None:
+        bodies = self._dynamic_planning_bodies()
+        signature = tuple(
+            (round(x, 1), round(y, 1), round(radius, 3))
+            for x, y, radius in bodies
+        )
+        if not force and signature == self._planning_robot_signature:
+            return
+        self._planning_robot_signature = signature
+        self.planning_grid = self.base_planning_grid.with_dynamic_obstacles(bodies)
+        self.navigator.grid = self.planning_grid
+        self.navigator.clear()
+
+    def _move_controlled_robot(
+        self, move_x: float, move_y: float, elapsed_seconds: float
+    ) -> None:
+        target_id = self.controlled_robot_id
+        team = self.controlled_robot_team
+        if target_id is None or team not in ("blue", "red"):
+            return
+        start = self.task.robot_position(target_id, team=team)
+        self.task.move_robot(
+            target_id,
+            move_x,
+            move_y,
+            elapsed_seconds,
+            self.arena,
+            team=team,
+        )
+        proposed = self.task.robot_position(target_id, team=team)
+        resolved = self.collision_grid.move_with_collision(
+            start,
+            proposed,
+            collision_bodies=self._collision_bodies(team, target_id),
+            moving_radius=ROBOT_ENTITY_COLLISION_RADIUS,
+        )
+        self.task.set_robot_position(target_id, resolved, team=team)
+        profile = ROBOT_PROFILES.get(target_id)
+        if profile is not None and profile.power_limit is not None:
+            movement = min(1.0, math.hypot(move_x, move_y))
+            power = movement * float(profile.power_limit)
+            power_map = self.task.robot_power if team == "blue" else self.task.own_robot_power
+            power_map[target_id] = power
 
     @staticmethod
     def _spin_speed_scale(spin_mode: int) -> float:
@@ -479,6 +625,9 @@ class SimulatorApp:
         ) <= tolerance
 
     def _bridge_state(self) -> dict:
+        # Deliberately publish only the existing sentry/enemy referee inputs.
+        # Other friendly robots are local visualization/collision entities and
+        # must not become behavior-tree or ROS decision inputs.
         enemy_hp = self._enemy_health_snapshot()
         radar_data: list[float] = []
         for target_id in (1, 2, 3, 4, 5, 8):
@@ -559,27 +708,19 @@ class SimulatorApp:
             "target_polar_angle": polar_angle,
         }
 
-    def _handle_task_key(self, key: int) -> None:
-        if key == self.pg.K_F1:
-            self._reset_entire_match()
-        elif key == self.pg.K_F2:
-            self.task.destroy_own_outpost()
-        elif key == self.pg.K_F3:
-            self.task.inject_unseen_damage(self.sentry)
-        elif key == self.pg.K_F4:
-            self.task.empty_ammo()
-        elif key == self.pg.K_F5:
-            self.task.destroy_enemy_outpost()
-        elif key == self.pg.K_F6:
-            self.task.set_low_health()
-        elif key == self.pg.K_F7:
-            self.task.finish_game()
-        elif key == self.pg.K_F8:
-            self.task.kill_sentry()
-        elif key == self.pg.K_F9:
-            self.task.toggle_patrol_mode()
-        elif key == self.pg.K_F10:
-            self._reset_entire_match()
+    def _select_own_robot_function_key(self, key: int) -> None:
+        """Select the friendly robot whose id matches the function key."""
+        key_to_target = {
+            self.pg.K_F1: 1,
+            self.pg.K_F2: 2,
+            self.pg.K_F3: 3,
+            self.pg.K_F4: 4,
+            self.pg.K_F5: 5,
+            self.pg.K_F8: 8,
+        }
+        target_id = key_to_target.get(key)
+        if target_id is not None:
+            self._select_own_robot(target_id)
 
     def _handle_mouse_click(self, position: tuple[int, int]) -> bool:
         for rect, action, target_id, direction in reversed(self.click_regions):
@@ -605,8 +746,24 @@ class SimulatorApp:
                 self.task.adjust_economy(direction)
             elif action == "fire_rate":
                 self.task.adjust_fire_rate(direction)
-            elif action == "damage_per_shot":
-                self.task.adjust_damage_per_shot(direction)
+            elif action == "own_robot_health":
+                if target_id == 8:
+                    self.task.adjust_sentry_health(
+                        direction,
+                        self.sentry,
+                        unseen_damage=direction < 0 and not self._self_detects_enemy(),
+                    )
+                else:
+                    self.task.adjust_own_robot_health(target_id, direction)
+            elif action == "own_robot_ammo":
+                self.task.adjust_own_robot_ammunition(target_id, direction)
+            elif action == "control_own_robot":
+                if target_id == 8:
+                    self._select_sentry()
+                else:
+                    self._select_own_robot(target_id)
+            elif action == "control_enemy_robot":
+                self._select_enemy_robot(getattr(self.pg, f"K_{target_id}"))
             elif action == "defence_buff":
                 self.task.adjust_defence_buff(direction)
             elif action == "own_outpost_health":
@@ -623,11 +780,23 @@ class SimulatorApp:
                 self._load_snapshot(target_id)
             elif action == "delete_snapshot":
                 self._delete_snapshot(target_id)
+            elif action == "robot_team_tab":
+                self.robot_property_team = target_id
+                self.hovered_robot_key = None
+                self.pinned_robot_key = None
+            elif action == "robot_property":
+                self.pinned_robot_key = tuple(target_id)
+            elif action == "unpin_robot_property":
+                self.pinned_robot_key = None
             return True
+        if getattr(self, "robot_property_popup_rect", None) is not None:
+            if self.robot_property_popup_rect.collidepoint(position):
+                return True
         return False
 
     def _select_sentry(self) -> None:
         self.controlled_robot_id = None
+        self.controlled_robot_team = None
         self.sentry.enable_manual_control()
         self.navigator.clear()
 
@@ -644,15 +813,50 @@ class SimulatorApp:
             self.pg.K_KP4: 4,
             self.pg.K_KP8: 8,
         }
-        self.controlled_robot_id = key_to_target[key]
+        target_id = key_to_target.get(key)
+        if target_id is None:
+            return
+        self.controlled_robot_id = target_id
+        self.controlled_robot_team = "blue"
         self._manual_fire_held = False
         self.sentry.cancel_manual_control()
+
+    def _select_own_robot(self, target_id: int) -> None:
+        if target_id == 8:
+            self._select_sentry()
+            return
+        if target_id not in self.task.own_robot_positions:
+            return
+        self.controlled_robot_id = target_id
+        self.controlled_robot_team = "red"
+        self._manual_fire_held = False
+        self.manual_fire_active = False
+        self.sentry.cancel_manual_control()
+        self.navigator.clear()
+
+    def _select_own_robot_key(self, key: int) -> None:
+        key_to_target = {
+            self.pg.K_1: 1,
+            self.pg.K_KP1: 1,
+            self.pg.K_2: 2,
+            self.pg.K_KP2: 2,
+            self.pg.K_3: 3,
+            self.pg.K_KP3: 3,
+            self.pg.K_4: 4,
+            self.pg.K_KP4: 4,
+            self.pg.K_5: 5,
+            self.pg.K_KP5: 5,
+            self.pg.K_8: 8,
+            self.pg.K_KP8: 8,
+        }
+        self._select_own_robot(key_to_target[key])
 
     def _release_manual_control(self) -> None:
         self._switch_to_auto_control()
 
     def _switch_to_auto_control(self, *, notify: bool = True) -> None:
         self.controlled_robot_id = None
+        self.controlled_robot_team = None
         self._manual_fire_held = False
         self.manual_fire_active = False
         self.sentry.cancel_manual_control()
@@ -664,6 +868,7 @@ class SimulatorApp:
         self.task.reset_match_time()
         self.sentry = SentryState()
         self.controlled_robot_id = None
+        self.controlled_robot_team = None
         self.active_snapshot_index = None
         self._manual_fire_held = False
         self.manual_fire_active = False
@@ -671,6 +876,9 @@ class SimulatorApp:
         self._restart_signal_remaining = 0.20
         self.bridge.clear_output()
         self.navigator.clear()
+        self._normalize_robot_positions()
+        self._planning_robot_signature = None
+        self._refresh_dynamic_planning_grid(force=True)
         self.decision = self.task.evaluate(self.sentry)
         self.task.notify("比赛时间、位置和全部属性已复位")
 
@@ -697,6 +905,7 @@ class SimulatorApp:
             self.task,
             self.sentry,
             self.controlled_robot_id,
+            self.controlled_robot_team,
         )
         self.snapshots.append(snapshot)
         self.active_snapshot_index = len(self.snapshots) - 1
@@ -722,6 +931,10 @@ class SimulatorApp:
         self.task = task
         self.sentry = sentry
         self.controlled_robot_id = controlled_robot_id
+        restored_team = self.snapshots[index].get("controlled_robot_team")
+        self.controlled_robot_team = (
+            str(restored_team) if restored_team in ("red", "blue") else "blue"
+        ) if controlled_robot_id is not None else None
         self.active_snapshot_index = index
         self._manual_fire_held = False
         self.manual_fire_active = False
@@ -729,6 +942,9 @@ class SimulatorApp:
         self._restart_signal_remaining = 0.0
         self.bridge.clear_output()
         self.navigator.clear()
+        self._normalize_robot_positions()
+        self._planning_robot_signature = None
+        self._refresh_dynamic_planning_grid(force=True)
         self.decision = self.task.evaluate(self.sentry)
         self.task.notify(
             f"已载入{self.snapshots[index].get('name', f'场景 {index + 1}')}"
@@ -756,11 +972,13 @@ class SimulatorApp:
 
     def _render(self, viewport: Viewport) -> None:
         self.click_regions.clear()
+        self.robot_property_regions.clear()
         self.screen.fill((22, 25, 28))
         self._draw_header()
         self._draw_side_panels()
         self._draw_arena(viewport)
         self._draw_snapshot_bar()
+        self._draw_robot_property_popup()
 
     def _draw_header(self) -> None:
         width, _ = self.screen.get_size()
@@ -780,8 +998,9 @@ class SimulatorApp:
             mode = "人工控制｜己方哨兵 9｜鼠标左键射击"
             mode_color = (66, 208, 132)
         elif self.controlled_robot_id is not None:
-            mode = f"人工控制｜蓝方 {self.controlled_robot_id} 号"
-            mode_color = (74, 143, 224)
+            team_name = "己方" if self.controlled_robot_team == "red" else "蓝方"
+            mode = f"人工控制｜{team_name} {self.controlled_robot_id} 号"
+            mode_color = (62, 184, 112) if self.controlled_robot_team == "red" else (74, 143, 224)
         else:
             mode = (
                 "行为树自动控制"
@@ -800,8 +1019,12 @@ class SimulatorApp:
             position_label = "己方哨兵"
             position_x, position_y = self.sentry.x, self.sentry.y
         else:
-            position_label = f"蓝方 {self.controlled_robot_id} 号"
-            position_x, position_y = self.task.robot_position(self.controlled_robot_id)
+            team_name = "己方" if self.controlled_robot_team == "red" else "蓝方"
+            position_label = f"{team_name} {self.controlled_robot_id} 号"
+            position_x, position_y = self.task.robot_position(
+                self.controlled_robot_id,
+                team=self.controlled_robot_team or "blue",
+            )
         position = self.data_font.render(
             f"{position_label}    横坐标 {position_x:06.3f} 米    纵坐标 {position_y:06.3f} 米",
             True,
@@ -824,9 +1047,9 @@ class SimulatorApp:
         panel_height = height - HEADER_HEIGHT - SNAPSHOT_BAR_HEIGHT
         left_rect = self.pg.Rect(0, HEADER_HEIGHT, SIDE_PANEL_WIDTH, panel_height)
         right_rect = self.pg.Rect(
-            width - SIDE_PANEL_WIDTH,
+            width - RIGHT_PANEL_WIDTH,
             HEADER_HEIGHT,
-            SIDE_PANEL_WIDTH,
+            RIGHT_PANEL_WIDTH,
             panel_height,
         )
         for rect in (left_rect, right_rect):
@@ -841,8 +1064,8 @@ class SimulatorApp:
         self.pg.draw.line(
             self.screen,
             (62, 70, 74),
-            (width - SIDE_PANEL_WIDTH - 1, HEADER_HEIGHT),
-            (width - SIDE_PANEL_WIDTH - 1, height - SNAPSHOT_BAR_HEIGHT),
+            (width - RIGHT_PANEL_WIDTH - 1, HEADER_HEIGHT),
+            (width - RIGHT_PANEL_WIDTH - 1, height - SNAPSHOT_BAR_HEIGHT),
             1,
         )
         self._draw_left_panel(left_rect)
@@ -906,6 +1129,24 @@ class SimulatorApp:
             0,
             action="ammo",
         )
+        y = self._draw_progress_bar(
+            x,
+            y,
+            bar_width,
+            "当前热量",
+            self.sentry.heat,
+            ROBOT_PROFILES[8].heat_capacity or 0,
+            (218, 92, 53),
+        )
+        y = self._draw_progress_bar(
+            x,
+            y,
+            bar_width,
+            "底盘功率",
+            self.sentry.chassis_power,
+            ROBOT_PROFILES[8].power_limit or 0,
+            (96, 151, 210),
+        )
         y = self._draw_adjustable_progress_bar(
             x,
             y,
@@ -918,29 +1159,6 @@ class SimulatorApp:
             suffix="%",
             action="defence_buff",
         )
-        y = self._draw_adjustable_progress_bar(
-            x,
-            y,
-            bar_width,
-            "己方前哨",
-            self.task.own_outpost_hp,
-            1000,
-            (205, 75, 82),
-            0,
-            action="own_outpost_health",
-        )
-        y = self._draw_adjustable_progress_bar(
-            x,
-            y,
-            bar_width,
-            "己方基地",
-            self.task.own_base_hp,
-            5000,
-            (177, 105, 190),
-            0,
-            action="own_base_health",
-        )
-
         y = self._draw_section_title(x, y + 3, "裁判与决策参数")
         y = self._draw_match_time_control(x, y, bar_width)
         y = self._draw_adjustable_progress_bar(
@@ -980,19 +1198,6 @@ class SimulatorApp:
             compact=True,
             action="fire_rate",
         )
-        y = self._draw_adjustable_progress_bar(
-            x,
-            y,
-            bar_width,
-            "单发伤害",
-            self.task.damage_per_shot,
-            RULE_DAMAGE_PER_SHOT,
-            (207, 80, 85),
-            0,
-            suffix=" HP",
-            compact=True,
-            action="damage_per_shot",
-        )
         posture_name = {1: "进攻", 2: "防御", 3: "移动"}.get(
             self.decision.posture, "未知"
         )
@@ -1003,6 +1208,345 @@ class SimulatorApp:
         self._draw_wrapped_status(x, y + 5, bar_width, "最近事件", self.task.event_message)
 
     def _draw_right_panel(self, rect) -> None:
+        self.robot_property_panel_rect = rect
+        x = rect.left + 14
+        width = rect.width - 28
+        y = rect.top + 14
+        y = self._draw_panel_title(x, y, "己方控制与机器人属性", width)
+
+        y = self._draw_section_title(x, y, "己方建筑血量（规则值）")
+        y = self._draw_adjustable_progress_bar(
+            x,
+            y,
+            width,
+            "己方前哨",
+            self.task.own_outpost_hp,
+            RULE_OUTPOST_HP,
+            (205, 75, 82),
+            6,
+            action="own_outpost_health",
+        )
+        y = self._draw_adjustable_progress_bar(
+            x,
+            y,
+            width,
+            "己方基地",
+            self.task.own_base_hp,
+            RULE_BASE_HP,
+            (177, 105, 190),
+            7,
+            action="own_base_health",
+        )
+        y = self._draw_key_value(
+            x,
+            y,
+            "基地虚拟护盾",
+            f"{round(self.task.own_base_shield)}/{RULE_BASE_SHIELD}",
+            width,
+        )
+
+        y = self._draw_section_title(x, y + 3, "机器人属性列表")
+        y = self._draw_robot_team_tabs(x, y, width)
+        y = self._draw_robot_property_list(x, y, width)
+        self._draw_wrapped_status(
+            x,
+            min(y + 4, rect.bottom - 52),
+            width,
+            "提示",
+            "悬停机器人名称查看属性；点击名称固定属性面板。己方其他机器人不接入决策。",
+        )
+
+    def _draw_robot_team_tabs(self, x: int, y: int, width: int) -> int:
+        gap = 6
+        tab_width = (width - gap) // 2
+        tab_height = 34
+        tabs = (("red", "己方"), ("blue", "敌方"))
+        for index, (team, label) in enumerate(tabs):
+            tab = self.pg.Rect(
+                x + index * (tab_width + gap),
+                y,
+                tab_width,
+                tab_height,
+            )
+            active = team == self.robot_property_team
+            background = (236, 240, 241) if active else (50, 58, 63)
+            border = (166, 180, 184) if active else (91, 101, 106)
+            color = (24, 111, 74) if active else (220, 228, 230)
+            self.pg.draw.rect(self.screen, background, tab, border_radius=3)
+            self.pg.draw.rect(self.screen, border, tab, 1, border_radius=3)
+            rendered = self.panel_label_font.render(label, True, color)
+            self.screen.blit(rendered, rendered.get_rect(center=tab.center))
+            self.click_regions.append((tab, "robot_team_tab", team, 0))
+        return y + tab_height + 8
+
+    def _draw_robot_property_list(self, x: int, y: int, width: int) -> int:
+        rows: list[tuple[str, int, str, float, float, tuple[int, int, int]]] = []
+        names = {1: "英雄", 2: "工程", 3: "步兵 3", 4: "步兵 4", 5: "空中", 8: "哨兵"}
+        team = self.robot_property_team
+        team_name = "己方" if team == "red" else "蓝方"
+        team_color = (62, 184, 112) if team == "red" else (68, 133, 217)
+        for target_id in (1, 2, 3, 4, 5, 8):
+            profile = ROBOT_PROFILES[target_id]
+            health = (
+                self.task.own_robot_health(target_id)
+                if team == "red"
+                else self.task.enemy_health(target_id)
+            )
+            rows.append(
+                (
+                    team,
+                    target_id,
+                    f"{team_name} {target_id}号 {names[target_id]}",
+                    health,
+                    profile.max_hp,
+                    team_color,
+                )
+            )
+        building_color = (193, 60, 67) if team == "red" else team_color
+        rows.extend(
+            (
+                team,
+                target_id,
+                label,
+                value,
+                maximum,
+                building_color,
+            )
+            for target_id, label, value, maximum in (
+                (
+                    6,
+                    f"{team_name}前哨",
+                    self.task.own_outpost_hp if team == "red" else self.task.enemy_health(6),
+                    RULE_OUTPOST_HP,
+                ),
+                (
+                    7,
+                    f"{team_name}基地",
+                    self.task.own_base_hp if team == "red" else self.task.enemy_health(7),
+                    RULE_BASE_HP,
+                ),
+            )
+        )
+        row_height = 49
+        for index, (team, target_id, label, value, maximum, color) in enumerate(rows):
+            row = self.pg.Rect(x, y + index * row_height, width, row_height - 3)
+            selected = self.pinned_robot_key == (team, target_id)
+            hovered = row.collidepoint(self.pg.mouse.get_pos())
+            background = (58, 68, 72) if selected else (42, 48, 52) if hovered else (32, 37, 40)
+            self.pg.draw.rect(self.screen, background, row, border_radius=3)
+            self.pg.draw.rect(self.screen, color, row, 1, border_radius=3)
+            self.robot_property_regions.append((row, team, target_id))
+            self.click_regions.append((row, "robot_property", (team, target_id), 0))
+            name_text = self.panel_label_font.render(label, True, color)
+            self.screen.blit(name_text, (row.left + 8, row.top + 3))
+            value_label = (
+                "不适用装甲扣血"
+                if target_id == 5
+                else f"{round(value)}/{round(maximum)}"
+            )
+            value_text = self.small_font.render(value_label, True, (220, 226, 228))
+            if target_id == 5:
+                value_right = row.right - 8
+            else:
+                plus_button = self.pg.Rect(row.right - 34, row.top + 2, 26, 26)
+                minus_button = self.pg.Rect(
+                    plus_button.left - 30, row.top + 2, 26, 26
+                )
+                self._draw_click_button(minus_button, "-")
+                self._draw_click_button(plus_button, "+")
+                adjustment_action = self._robot_health_adjustment_action(
+                    team, target_id
+                )
+                self.click_regions.append(
+                    (minus_button, adjustment_action, target_id, -1)
+                )
+                self.click_regions.append(
+                    (plus_button, adjustment_action, target_id, 1)
+                )
+                value_right = minus_button.left - 6
+            self.screen.blit(
+                value_text,
+                value_text.get_rect(topright=(value_right, row.top + 3)),
+            )
+            bar = self.pg.Rect(row.left + 8, row.top + 31, row.width - 16, 9)
+            self.pg.draw.rect(self.screen, (48, 54, 58), bar, border_radius=2)
+            if target_id != 5 and maximum > 0:
+                ratio = max(0.0, min(1.0, float(value) / float(maximum)))
+                if ratio > 0.0:
+                    self.pg.draw.rect(
+                        self.screen,
+                        color,
+                        (bar.left, bar.top, max(1, round(bar.width * ratio)), bar.height),
+                        border_radius=2,
+                    )
+        mouse_position = self.pg.mouse.get_pos()
+        self.hovered_robot_key = next(
+            (
+                (team, target_id)
+                for row, team, target_id in self.robot_property_regions
+                if row.collidepoint(mouse_position)
+            ),
+            None,
+        )
+        return y + len(rows) * row_height
+
+    @staticmethod
+    def _robot_health_adjustment_action(team: str, target_id: int) -> str:
+        if team == "blue":
+            return "enemy_health"
+        if target_id == 6:
+            return "own_outpost_health"
+        if target_id == 7:
+            return "own_base_health"
+        if target_id == 8:
+            return "sentry_health"
+        return "own_robot_health"
+
+    def _draw_robot_property_popup(self) -> None:
+        active = self.pinned_robot_key or self.hovered_robot_key
+        self.robot_property_popup_rect = None
+        if active is None:
+            return
+        team, target_id = active
+        if not hasattr(self, "robot_property_panel_rect"):
+            return
+        panel = self.robot_property_panel_rect
+        popup_width = min(430, max(330, panel.width - 20))
+        popup_height = 760 if target_id in ROBOT_PROFILES else 350
+        popup = self.pg.Rect(
+            max(8, panel.left - popup_width - 10),
+            max(HEADER_HEIGHT + 8, panel.top + 52),
+            popup_width,
+            min(popup_height, self.screen.get_height() - SNAPSHOT_BAR_HEIGHT - HEADER_HEIGHT - 16),
+        )
+        self.robot_property_popup_rect = popup
+        overlay = self.pg.Surface(popup.size, self.pg.SRCALPHA)
+        overlay.fill((20, 25, 28, 246))
+        self.screen.blit(overlay, popup)
+        self.pg.draw.rect(self.screen, (120, 137, 143), popup, 2, border_radius=6)
+        x = popup.left + 14
+        y = popup.top + 12
+        title, profile, health, maximum, ammo = self._property_target_values(team, target_id)
+        self.screen.blit(self.panel_title_font.render(title, True, (240, 243, 244)), (x, y))
+        y += 38
+        if profile is None:
+            y = self._draw_key_value(x, y, "类型", "场地建筑", popup.width - 28)
+            y = self._draw_key_value(x, y, "血量", f"{round(health)}/{round(maximum)}", popup.width - 28)
+            if target_id == 7:
+                shield = self.task.enemy_base_shield if team == "blue" else self.task.own_base_shield
+                y = self._draw_key_value(x, y, "虚拟护盾", f"{round(shield)}/{RULE_BASE_SHIELD}", popup.width - 28)
+                outpost = self.task.enemy_outpost_hp if team == "blue" else self.task.own_outpost_hp
+                y = self._draw_key_value(x, y, "无敌状态", "前哨存活，无敌" if outpost > 0 else "可受到伤害", popup.width - 28)
+            damage_label = "5（上方前装甲）/20" if target_id == 7 else "20"
+            y = self._draw_key_value(x, y, "17mm 原始伤害", damage_label, popup.width - 28)
+            y = self._draw_key_value(x, y, "42mm 原始伤害", str(RULE_DAMAGE_42MM), popup.width - 28)
+            y = self._draw_key_value(x, y, "中心区域攻击增益", "150%", popup.width - 28)
+        else:
+            configuration = {
+                1: "1级·远程优先", 2: "固定性能", 3: "1级·血量/冷却优先",
+                4: "1级·血量/冷却优先", 5: "1级", 8: "自动哨兵",
+            }[target_id]
+            y = self._draw_key_value(x, y, "规则配置", configuration, popup.width - 28)
+            y = self._draw_key_value(
+                x, y, "云台", "有" if profile.has_gimbal else "无", popup.width - 28
+            )
+            y = self._draw_key_value(
+                x, y, "小转盘", "有" if profile.has_turntable else "无", popup.width - 28
+            )
+            health_label = f"{round(health)}/{profile.max_hp}" if target_id != 5 else "不适用地面装甲扣血"
+            if target_id == 5:
+                y = self._draw_key_value(x, y, "血量", health_label, popup.width - 28)
+            else:
+                y = self._draw_adjustable_progress_bar(
+                    x, y, popup.width - 28, "血量", health, profile.max_hp,
+                    (62, 184, 112) if team == "red" else (68, 133, 217),
+                    target_id, compact=True,
+                    action="own_robot_health" if team == "red" else "enemy_health",
+                )
+            y = self._draw_key_value(x, y, "弹丸", profile.projectile, popup.width - 28)
+            y = self._draw_key_value(x, y, "初始允许发弹量", str(profile.initial_ammo), popup.width - 28)
+            y = self._draw_key_value(x, y, "射击初速度上限", self._format_rule_value(profile.muzzle_speed_limit, "m/s"), popup.width - 28)
+            power_limit = self._format_rule_value(profile.power_limit, "W")
+            heat_limit = self._format_rule_value(profile.heat_capacity, "")
+            current_power = (
+                self.task.robot_power_value(
+                    target_id,
+                    team=team,
+                    sentry=self.sentry if team == "red" and target_id == 8 else None,
+                )
+            )
+            current_heat = (
+                self.task.robot_heat_value(
+                    target_id,
+                    team=team,
+                    sentry=self.sentry if team == "red" and target_id == 8 else None,
+                )
+            )
+            y = self._draw_key_value(x, y, "底盘功率", f"{current_power:.1f} W / {power_limit}", popup.width - 28)
+            y = self._draw_key_value(x, y, "底盘功率上限", power_limit, popup.width - 28)
+            heat_value = "不适用" if profile.heat_capacity is None else f"{current_heat:.1f} / {heat_limit}"
+            y = self._draw_key_value(x, y, "当前热量", heat_value, popup.width - 28)
+            y = self._draw_key_value(x, y, "射击热量上限", heat_limit, popup.width - 28)
+            y = self._draw_key_value(x, y, "热量冷却", self._format_rule_value(profile.heat_cooling_per_second, "/秒"), popup.width - 28)
+            y = self._draw_key_value(x, y, "单发热量", self._format_rule_value(profile.heat_per_shot, ""), popup.width - 28)
+            y = self._draw_key_value(x, y, "弹丸单发原始伤害", str(profile.raw_projectile_damage or "—"), popup.width - 28)
+            y = self._draw_key_value(x, y, "撞击扣血", str(profile.collision_damage or "不适用"), popup.width - 28)
+            y = self._draw_key_value(x, y, "二维碰撞半径", f"{ROBOT_ENTITY_COLLISION_RADIUS:.2f} 米", popup.width - 28)
+            y = self._draw_key_value(x, y, "受攻击/撞击扣血", "适用" if profile.collision_applies else "不适用", popup.width - 28)
+            if ammo is not None:
+                if team == "red" and target_id != 2:
+                    y = self._draw_adjustable_progress_bar(
+                        x, y, popup.width - 28, "当前弹量", ammo,
+                        self.task.own_robot_ammunition_limit(target_id),
+                        (225, 166, 58), target_id, compact=True,
+                        action="own_robot_ammo",
+                    )
+                else:
+                    y = self._draw_key_value(x, y, "当前弹量", str(ammo), popup.width - 28)
+            position = self.task.robot_position(target_id) if team == "blue" else self.task.own_robot_position(target_id, self.sentry)
+            y = self._draw_key_value(x, y, "坐标（米）", f"{position[0]:.2f}，{position[1]:.2f}", popup.width - 28)
+            y = self._draw_key_value(x, y, "控制方式", "哨兵决策" if team == "red" and target_id == 8 else "场景手动控制", popup.width - 28)
+        button_y = popup.bottom - 42
+        if target_id in ROBOT_PROFILES and (team == "red" or target_id != 5):
+            drive = self.pg.Rect(x, button_y, 86, 30)
+            self._draw_click_button(drive, "驾驶")
+            action = "control_own_robot" if team == "red" else "control_enemy_robot"
+            self.click_regions.append((drive, action, target_id, 0))
+        elif target_id in (6, 7):
+            health_action = (
+                "enemy_health" if team == "blue" else
+                "own_outpost_health" if target_id == 6 else "own_base_health"
+            )
+            for index, direction in enumerate((-1, 1)):
+                button = self.pg.Rect(x + index * 80, button_y, 72, 30)
+                self._draw_click_button(button, "血量 −" if direction < 0 else "血量 +")
+                self.click_regions.append((button, health_action, target_id, direction))
+        unpin = self.pg.Rect(popup.right - 102, button_y, 88, 30)
+        pinned = self.pinned_robot_key is not None
+        self._draw_click_button(unpin, "取消固定" if pinned else "固定")
+        self.click_regions.append((unpin, "unpin_robot_property" if pinned else "robot_property", active, 0))
+
+    def _property_target_values(self, team: str, target_id: int):
+        if target_id in ROBOT_PROFILES:
+            profile = ROBOT_PROFILES[target_id]
+            health = (
+                self.task.enemy_health(target_id)
+                if team == "blue"
+                else self.task.own_robot_health(target_id)
+            )
+            ammo = self.task.robot_ammunition(target_id, team=team)
+            side = "蓝方" if team == "blue" else "己方"
+            return f"{side} {target_id}号 {profile.role}", profile, health, profile.max_hp, ammo
+        side = "蓝方" if team == "blue" else "己方"
+        if target_id == 6:
+            return f"{side}前哨", None, self.task.enemy_health(6) if team == "blue" else self.task.own_outpost_hp, RULE_OUTPOST_HP, None
+        return f"{side}基地", None, self.task.enemy_health(7) if team == "blue" else self.task.own_base_hp, RULE_BASE_HP, None
+
+    @staticmethod
+    def _format_rule_value(value, suffix: str) -> str:
+        return "不适用" if value is None else f"{value}{suffix}"
+
+    def _draw_enemy_panel(self, rect) -> None:
         x = rect.left + 16
         bar_width = rect.width - 32
         y = rect.top + 15
@@ -1010,7 +1554,7 @@ class SimulatorApp:
 
         y = self._draw_section_title(x, y, "敌方建筑")
         y = self._draw_adjustable_progress_bar(
-            x, y, bar_width, "蓝方前哨", self.task.enemy_health(6), 1000, (57, 124, 210), 6
+            x, y, bar_width, "蓝方前哨", self.task.enemy_health(6), RULE_OUTPOST_HP, (57, 124, 210), 6
         )
         y = self._draw_adjustable_progress_bar(
             x, y, bar_width, "蓝方基地", self.task.enemy_health(7), 5000, (74, 145, 222), 7
@@ -1026,7 +1570,10 @@ class SimulatorApp:
             8: "哨兵",
         }
         for entity in (item for item in FIELD_ENTITIES if item.kind == "robot"):
-            selected = entity.target_id == self.controlled_robot_id
+            selected = (
+                self.controlled_robot_team == "blue"
+                and entity.target_id == self.controlled_robot_id
+            )
             color = (238, 183, 61) if selected else (68, 133, 217)
             y = self._draw_adjustable_progress_bar(
                 x,
@@ -1076,11 +1623,126 @@ class SimulatorApp:
             x,
             y,
             "人工控制",
-            f"蓝方 {self.controlled_robot_id} 号"
+            f"{('己方' if self.controlled_robot_team == 'red' else '蓝方')} "
+            f"{self.controlled_robot_id} 号"
             if self.controlled_robot_id is not None
             else "未选择",
             bar_width,
         )
+
+    def _draw_own_panel(self, rect) -> None:
+        x = rect.left + 14
+        width = rect.width - 28
+        y = rect.top + 15
+        y = self._draw_panel_title(x, y, "己方机器人属性与控制", width)
+        y = self._draw_section_title(x, y, "血量、弹量、位置")
+
+        names = {1: "英雄", 2: "工程", 3: "步兵", 4: "步兵", 5: "空中", 8: "哨兵"}
+        for target_id in (1, 2, 3, 4, 5, 8):
+            y = self._draw_own_robot_card(
+                x,
+                y,
+                width,
+                target_id,
+                names[target_id],
+            )
+
+        y = self._draw_section_title(x, y + 2, "碰撞与操作")
+        y = self._draw_key_value(
+            x,
+            y,
+            "底盘碰撞半径",
+            f"{ROBOT_ENTITY_COLLISION_RADIUS:.2f} 米",
+            width,
+        )
+        y = self._draw_key_value(
+            x,
+            y,
+            "当前驾驶",
+            self._control_name(),
+            width,
+        )
+        self._draw_wrapped_status(
+            x,
+            y + 2,
+            width,
+            "移动",
+            "选择单位后使用 W/A/S/D 或方向键；碰撞场地障碍和其他机器人",
+        )
+
+    def _draw_own_robot_card(
+        self, x: int, y: int, width: int, target_id: int, name: str
+    ) -> int:
+        selected = (
+            self.sentry.manual_control and target_id == 8
+        ) or (
+            self.controlled_robot_team == "red"
+            and self.controlled_robot_id == target_id
+        )
+        color = (244, 190, 67) if selected else (62, 184, 112)
+        label = self.panel_label_font.render(
+            f"{target_id} 号 {name}", True, color
+        )
+        self.screen.blit(label, (x, y))
+
+        control_button = self.pg.Rect(x + width - 66, y - 1, 66, 25)
+        self._draw_click_button(control_button, "驾驶中" if selected else "驾驶")
+        self.click_regions.append((control_button, "control_own_robot", target_id, 0))
+
+        health = self.task.own_robot_health(target_id)
+        maximum = next(
+            entity.max_hp
+            for entity in OWN_FIELD_ENTITIES
+            if entity.target_id == target_id
+        )
+        ammo = self.task.own_robot_ammunition(target_id)
+        ammo_maximum = self.task.own_robot_ammunition_limit(target_id)
+        stat_y = y + 26
+        self.screen.blit(
+            self.panel_label_font.render(
+                f"血量 {round(health)}/{maximum}", True, (214, 220, 222)
+            ),
+            (x, stat_y),
+        )
+        health_minus = self.pg.Rect(x + width - 58, stat_y - 1, 24, 23)
+        health_plus = self.pg.Rect(x + width - 30, stat_y - 1, 24, 23)
+        self._draw_click_button(health_minus, "−")
+        self._draw_click_button(health_plus, "+")
+        self.click_regions.append((health_minus, "own_robot_health", target_id, -1))
+        self.click_regions.append((health_plus, "own_robot_health", target_id, 1))
+
+        ammo_y = stat_y + 36
+        ammo_minus = self.pg.Rect(x + width - 58, ammo_y - 1, 24, 23)
+        ammo_plus = self.pg.Rect(x + width - 30, ammo_y - 1, 24, 23)
+        self._draw_click_button(ammo_minus, "−")
+        self._draw_click_button(ammo_plus, "+")
+        self.click_regions.append((ammo_minus, "own_robot_ammo", target_id, -1))
+        self.click_regions.append((ammo_plus, "own_robot_ammo", target_id, 1))
+
+        ratio = max(0.0, min(1.0, health / maximum if maximum else 0.0))
+        bar = self.pg.Rect(x, stat_y + 29, width, 4)
+        self.pg.draw.rect(self.screen, (48, 54, 58), bar)
+        if ratio:
+            self.pg.draw.rect(
+                self.screen,
+                color,
+                (bar.x, bar.y, max(1, round(bar.width * ratio)), bar.height),
+            )
+        self.screen.blit(
+            self.panel_label_font.render(
+                f"弹量 {ammo}/{ammo_maximum}", True, (178, 188, 192)
+            ),
+            (x, ammo_y),
+        )
+
+        position = self.task.own_robot_position(target_id, self.sentry)
+        position_text = self.small_font.render(
+            f"坐标 {position[0]:05.2f}，{position[1]:05.2f}",
+            True,
+            (151, 164, 169),
+        )
+        self.screen.blit(position_text, (x, stat_y + 66))
+        return y + 126
 
     def _draw_panel_title(self, x: int, y: int, text: str, width: int) -> int:
         rendered = self.panel_title_font.render(text, True, (239, 242, 243))
@@ -1344,7 +2006,8 @@ class SimulatorApp:
         if self.sentry.manual_control:
             return "己方哨兵"
         if self.controlled_robot_id is not None:
-            return f"蓝方 {self.controlled_robot_id} 号"
+            team_name = "己方" if self.controlled_robot_team == "red" else "蓝方"
+            return f"{team_name} {self.controlled_robot_id} 号"
         return "决策自动"
 
     def _shooting_status(self) -> str:
@@ -1614,9 +2277,38 @@ class SimulatorApp:
                 self.pg.draw.circle(self.screen, (247, 249, 249), center, 11)
                 self.pg.draw.circle(self.screen, color, center, 9, 3)
             else:
-                if entity.target_id == self.controlled_robot_id:
-                    self.pg.draw.circle(self.screen, (35, 39, 42), center, 12)
-                    self.pg.draw.circle(self.screen, (244, 190, 67), center, 11, 3)
+                collider_radius = max(
+                    8,
+                    round(ROBOT_ENTITY_COLLISION_RADIUS * viewport.scale),
+                )
+                profile = ROBOT_PROFILES.get(entity.target_id)
+                if profile is not None:
+                    self._draw_robot_mechanism(
+                        viewport,
+                        center,
+                        collider_radius,
+                        profile,
+                        entity.target_id,
+                        entity.team,
+                    )
+                self.pg.draw.circle(self.screen, (247, 249, 249), center, collider_radius)
+                self.pg.draw.circle(
+                    self.screen,
+                    (92, 105, 111),
+                    center,
+                    collider_radius,
+                    1,
+                )
+                if (
+                    self.controlled_robot_team == "blue"
+                    and entity.target_id == self.controlled_robot_id
+                ):
+                    self.pg.draw.circle(
+                        self.screen, (35, 39, 42), center, collider_radius + 4
+                    )
+                    self.pg.draw.circle(
+                        self.screen, (244, 190, 67), center, collider_radius + 3, 3
+                    )
                 self.pg.draw.circle(self.screen, (247, 249, 249), center, 8)
                 self.pg.draw.circle(self.screen, color, center, 7, 2)
                 number = self.small_font.render(str(entity.target_id), True, color)
@@ -1624,6 +2316,52 @@ class SimulatorApp:
                 robot_labels.append(
                     (center, robot_names.get(entity.target_id, entity.name), color)
                 )
+
+        for entity in OWN_FIELD_ENTITIES:
+            if entity.target_id == 8:
+                continue
+            entity_x, entity_y = self.task.own_robot_position(entity.target_id)
+            center = self.pg.Vector2(viewport.world_to_screen(entity_x, entity_y))
+            color = (193, 60, 67)
+            if self.task.own_robot_health(entity.target_id) <= 0:
+                color = (116, 121, 124)
+            collider_radius = max(
+                8,
+                round(ROBOT_ENTITY_COLLISION_RADIUS * viewport.scale),
+            )
+            self._draw_robot_mechanism(
+                viewport,
+                center,
+                collider_radius,
+                ROBOT_PROFILES[entity.target_id],
+                entity.target_id,
+                "red",
+            )
+            self.pg.draw.circle(self.screen, (247, 249, 249), center, collider_radius)
+            self.pg.draw.circle(
+                self.screen,
+                (92, 105, 111),
+                center,
+                collider_radius,
+                1,
+            )
+            if (
+                self.controlled_robot_team == "red"
+                and entity.target_id == self.controlled_robot_id
+            ):
+                self.pg.draw.circle(
+                    self.screen, (35, 39, 42), center, collider_radius + 4
+                )
+                self.pg.draw.circle(
+                    self.screen, (244, 190, 67), center, collider_radius + 3, 3
+                )
+            self.pg.draw.circle(self.screen, (247, 249, 249), center, 8)
+            self.pg.draw.circle(self.screen, color, center, 7, 2)
+            number = self.small_font.render(str(entity.target_id), True, color)
+            self.screen.blit(number, number.get_rect(center=center))
+            robot_labels.append(
+                (center, f"己方 {robot_names[entity.target_id]}", color)
+            )
 
         occupied = []
         for center, name, color in robot_labels:
@@ -1643,6 +2381,56 @@ class SimulatorApp:
             self.pg.draw.rect(self.screen, color, background, 1, border_radius=4)
             self.screen.blit(rendered, label_rect)
             occupied.append(background)
+
+    def _draw_robot_mechanism(
+        self,
+        viewport: Viewport,
+        center,
+        collider_radius: int,
+        profile,
+        target_id: int,
+        team: str,
+    ) -> None:
+        """Draw the reusable chassis turntable and weapon/camera gimbal.
+
+        The full 3-D mechanisms are intentionally represented as compact
+        top-down cues: a rotating outer platform, a gimbal ring, and a barrel
+        direction.  This keeps every robot legible at the map zoom while
+        preserving the rulebook distinction between chassis and gimbal motion.
+        """
+        if not (profile.has_gimbal or profile.has_turntable):
+            return
+        phase = (self.task.remaining_time * 0.18) + target_id * 0.73
+        if team == "red":
+            phase += math.pi
+        if profile.has_turntable:
+            ring_color = (184, 65, 70) if team == "red" else (48, 105, 185)
+            self.pg.draw.circle(self.screen, ring_color, center, collider_radius + 2, 2)
+            for offset in (0.0, math.tau / 3.0, 2.0 * math.tau / 3.0):
+                angle = phase + offset
+                marker = center + self.pg.Vector2(
+                    math.cos(angle) * (collider_radius + 1),
+                    -math.sin(angle) * (collider_radius + 1),
+                )
+                self.pg.draw.circle(self.screen, ring_color, marker, 2)
+        if profile.has_gimbal:
+            gimbal_angle = phase * 0.35 + target_id * 0.21
+            direction = self.pg.Vector2(math.cos(gimbal_angle), -math.sin(gimbal_angle))
+            perpendicular = self.pg.Vector2(-direction.y, direction.x)
+            mount_radius = max(4, collider_radius // 3)
+            self.pg.draw.circle(self.screen, (38, 45, 50), center, mount_radius + 2)
+            self.pg.draw.circle(self.screen, (232, 179, 65), center, mount_radius, 1)
+            barrel_start = center + direction * (mount_radius * 0.35)
+            barrel_end = center + direction * max(13, collider_radius + 7)
+            self.pg.draw.line(self.screen, (36, 50, 57), barrel_start, barrel_end, 4)
+            self.pg.draw.line(self.screen, (224, 228, 223), barrel_start, barrel_end, 1)
+            self.pg.draw.line(
+                self.screen,
+                (232, 179, 65),
+                center - perpendicular * mount_radius,
+                center + perpendicular * mount_radius,
+                1,
+            )
 
     def _draw_navigation(self, viewport: Viewport) -> None:
         if self.decision.goal is None:

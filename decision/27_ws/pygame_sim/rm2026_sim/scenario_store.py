@@ -16,12 +16,14 @@ def capture_snapshot(
     task: TaskScenario,
     sentry: SentryState,
     controlled_robot_id: int | None,
+    controlled_robot_team: str | None = None,
 ) -> dict[str, Any]:
     return {
         "name": name,
         "task": asdict(task),
         "sentry": asdict(sentry),
         "controlled_robot_id": controlled_robot_id,
+        "controlled_robot_team": controlled_robot_team,
     }
 
 
@@ -44,6 +46,39 @@ def restore_snapshot(
             int(target_id): float(health)
             for target_id, health in (task_data.get("robot_hp") or {}).items()
         }
+    if "robot_ammo" in task_data:
+        task_data["robot_ammo"] = {
+            int(target_id): int(ammo)
+            for target_id, ammo in (task_data.get("robot_ammo") or {}).items()
+        }
+    if "own_robot_positions" in task_data:
+        task_data["own_robot_positions"] = {
+            int(target_id): [float(position[0]), float(position[1])]
+            for target_id, position in (
+                task_data.get("own_robot_positions") or {}
+            ).items()
+        }
+    if "own_robot_hp" in task_data:
+        task_data["own_robot_hp"] = {
+            int(target_id): float(health)
+            for target_id, health in (task_data.get("own_robot_hp") or {}).items()
+        }
+    if "own_robot_ammo" in task_data:
+        task_data["own_robot_ammo"] = {
+            int(target_id): int(ammo)
+            for target_id, ammo in (task_data.get("own_robot_ammo") or {}).items()
+        }
+    for resource_name in (
+        "robot_heat",
+        "own_robot_heat",
+        "robot_power",
+        "own_robot_power",
+    ):
+        if resource_name in task_data:
+            task_data[resource_name] = {
+                int(target_id): float(value)
+                for target_id, value in (task_data.get(resource_name) or {}).items()
+            }
     if task_data.get("dodge_goal") is not None:
         task_data["dodge_goal"] = tuple(task_data["dodge_goal"])
 

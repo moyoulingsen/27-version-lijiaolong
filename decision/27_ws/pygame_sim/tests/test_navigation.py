@@ -93,6 +93,34 @@ class OccupancyGridTests(unittest.TestCase):
         self.assertNotEqual(reached, target)
         self.assertTrue(self.grid.is_free_world(*reached))
 
+    def test_swept_collision_stops_before_another_robot(self) -> None:
+        arena = Arena(width=2.0, height=2.0, map_resolution=0.05)
+        grid = OccupancyGrid(arena, 40, 40, bytes(40 * 40), 0.1)
+        body = (1.0, 1.0, 0.1)
+        moving_radius = 0.1
+        reached = grid.move_with_collision(
+            (0.3, 1.0),
+            (1.7, 1.0),
+            collision_bodies=(body,),
+            moving_radius=moving_radius,
+        )
+
+        self.assertLessEqual(reached[0], body[0] - moving_radius - body[2])
+        self.assertGreater(reached[0], 0.7)
+
+    def test_dynamic_robot_obstacle_blocks_route_without_mutating_base_grid(self) -> None:
+        arena = Arena(width=2.0, height=2.0, map_resolution=0.05)
+        base_grid = OccupancyGrid(arena, 40, 40, bytes(40 * 40), 0.1)
+        robot = (1.0, 1.0, 0.1)
+        planning_grid = base_grid.with_dynamic_obstacles((robot,))
+
+        self.assertTrue(base_grid.is_free_world(robot[0], robot[1]))
+        self.assertFalse(planning_grid.is_free_world(robot[0], robot[1]))
+        path = planning_grid.find_path((0.3, 1.0), (1.7, 1.0))
+        self.assertTrue(path)
+        for x, y in path:
+            self.assertGreaterEqual(math.hypot(x - robot[0], y - robot[1]), 0.2)
+
 
 class AStarNavigatorTests(unittest.TestCase):
     @classmethod

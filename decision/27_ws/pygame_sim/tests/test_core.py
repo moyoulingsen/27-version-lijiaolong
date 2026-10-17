@@ -21,6 +21,10 @@ from rm2026_sim.task_state import (
     DETECTION_RANGE,
     HOME,
     PATROL_POINTS,
+    ROBOT_PROFILES,
+    RULE_BASE_HP,
+    RULE_BASE_SHIELD,
+    RULE_OUTPOST_HP,
     RULE_DAMAGE_PER_SHOT,
     RULE_FIRE_RATE_MAX,
     SUPPLY,
@@ -117,6 +121,34 @@ class TaskScenarioTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             scenario.move_robot(5, 1.0, 0.0, 1.0, Arena())
 
+    def test_friendly_robots_have_independent_positions_health_and_ammo(self) -> None:
+        scenario = TaskScenario()
+        self.assertEqual(scenario.robot_position(1, team="red"), (2.5, 5.0))
+        self.assertEqual(scenario.own_robot_health(1), 200.0)
+        self.assertEqual(scenario.own_robot_ammunition(1), 0)
+        self.assertEqual(scenario.own_robot_ammunition(2), 0)
+
+        scenario.move_robot(1, 1.0, 0.0, 0.5, Arena(), team="red")
+        self.assertEqual(scenario.robot_position(1, team="red"), (4.0, 5.0))
+        scenario.adjust_own_robot_health(1, -1)
+        scenario.adjust_own_robot_ammunition(1, 1)
+        self.assertEqual(scenario.own_robot_health(1), 180.0)
+        self.assertEqual(scenario.own_robot_ammunition(1), 20)
+
+    def test_friendly_aerial_robot_can_move_in_the_2d_simulation(self) -> None:
+        scenario = TaskScenario()
+        scenario.move_robot(5, 1.0, 0.0, 0.5, Arena(), team="red")
+        self.assertEqual(scenario.robot_position(5, team="red"), (4.5, 3.0))
+
+    def test_other_friendly_robots_do_not_change_decision_output(self) -> None:
+        scenario = TaskScenario()
+        sentry = SentryState()
+        before = scenario.evaluate(sentry)
+        scenario.own_robot_positions[1] = [17.0, 10.0]
+        scenario.own_robot_hp[1] = 1.0
+        scenario.own_robot_ammo[1] = 0
+        self.assertEqual(scenario.evaluate(sentry), before)
+
     def test_initial_priority_is_attack_outpost(self) -> None:
         decision = TaskScenario().evaluate(SentryState())
         self.assertEqual(decision.behavior, "攻击敌方前哨")
@@ -183,7 +215,7 @@ class TaskScenarioTests(unittest.TestCase):
         )
 
         self.assertEqual(scenario.enemy_outpost_hp, original_health)
-        self.assertLess(scenario.ammo, 120)
+        self.assertEqual(scenario.ammo, 290)
 
     def test_detection_range_can_select_target_before_attack_range(self) -> None:
         scenario = TaskScenario(enemy_outpost_hp=0.0)
@@ -218,7 +250,7 @@ class TaskScenarioTests(unittest.TestCase):
         )
 
         self.assertEqual(hit_target, 6)
-        self.assertEqual(scenario.enemy_outpost_hp, 800.0)
+        self.assertEqual(scenario.enemy_outpost_hp, 1200.0)
 
     def test_manual_fire_hits_enemy_under_barrel_without_bt_target(self) -> None:
         scenario = TaskScenario()
@@ -236,9 +268,9 @@ class TaskScenarioTests(unittest.TestCase):
         )
 
         self.assertEqual(hit_target, 6)
-        self.assertEqual(scenario.enemy_outpost_hp, 900.0)
+        self.assertEqual(scenario.enemy_outpost_hp, 1350.0)
 
-    def test_fire_rate_and_damage_follow_configured_17mm_values(self) -> None:
+    def test_live_fire_uses_rule_damage_even_with_legacy_debug_value(self) -> None:
         scenario = TaskScenario(fire_rate=10, damage_per_shot=7, ammo=20)
         target_x, target_y = scenario.target_position(6)
         sentry = SentryState(x=ATTACK[0], y=ATTACK[1])
@@ -253,7 +285,7 @@ class TaskScenarioTests(unittest.TestCase):
         )
 
         self.assertEqual(scenario.ammo, 15)
-        self.assertEqual(scenario.enemy_outpost_hp, 965.0)
+        self.assertEqual(scenario.enemy_outpost_hp, 1400.0)
 
     def test_fire_rate_and_damage_adjustments_are_rule_clamped(self) -> None:
         scenario = TaskScenario()
@@ -268,6 +300,80 @@ class TaskScenarioTests(unittest.TestCase):
             scenario.adjust_damage_per_shot(-1)
         self.assertEqual(scenario.fire_rate, 1)
         self.assertEqual(scenario.damage_per_shot, 1)
+
+    def test_rule_damage_matches_v220_armor_and_buff_examples(self) -> None:
+        scenario = TaskScenario()
+        self.assertEqual(scenario.rule_damage("17mm", 1), 20)
+        self.assertEqual(scenario.rule_damage("42mm", 1), 200)
+        self.assertEqual(scenario.rule_damage("17mm", 7, armor_zone="upper_front"), 5)
+        self.assertEqual(scenario.rule_damage("17mm", 6, critical_zone=True), 30)
+        self.assertEqual(scenario.rule_damage("42mm", 6, critical_zone=True), 300)
+        # Same-type attack gains take the maximum, rather than multiplying.
+        self.assertEqual(
+            scenario.rule_damage("42mm", 7, attack_buff=2, critical_zone=True), 400
+        )
+        # Rulebook page 109: 25% defense offset by 15% vulnerability.
+        self.assertEqual(
+            scenario.rule_damage("42mm", 1, attack_buff=2, defence_buff=0.10), 360
+        )
+        self.assertEqual(
+            scenario.rule_damage("42mm", 1, attack_buff=2, defence_buff=-0.15), 460
+        )
+        self.assertEqual(
+            scenario.rule_damage("17mm", 7, armor_zone="upper_front", critical_zone=True), 8
+        )
+        self.assertEqual(scenario.rule_damage("collision", 1, attack_buff=2), 2)
+        self.assertEqual(scenario.rule_damage("collision", 1, defence_buff=0.25), 2)
+        self.assertEqual(scenario.rule_damage("17mm", 5), 0)
+        self.assertEqual(scenario.rule_damage("collision", 5), 0)
+        self.assertEqual(scenario.rule_damage("collision", 7), 0)
+        self.assertEqual(scenario.rule_damage("17mm", 1, defence_buff=1), 0)
+
+    def test_base_virtual_shield_is_consumed_before_hp_for_both_teams(self) -> None:
+        for team in ("red", "blue"):
+            with self.subTest(team=team):
+                scenario = TaskScenario(own_outpost_hp=0, enemy_outpost_hp=0)
+                scenario.apply_attack_damage(7, "17mm", shots=7, team=team)
+                self.assertEqual(getattr(scenario, "own_base_shield" if team == "red" else "enemy_base_shield"), 10)
+                self.assertEqual(getattr(scenario, "own_base_hp" if team == "red" else "enemy_base_hp"), 5000)
+                scenario.apply_attack_damage(7, "42mm", team=team)
+                self.assertEqual(getattr(scenario, "own_base_shield" if team == "red" else "enemy_base_shield"), 0)
+                self.assertEqual(getattr(scenario, "own_base_hp" if team == "red" else "enemy_base_hp"), 4810)
+
+    def test_rule_damage_rounds_each_hit_before_accumulating(self) -> None:
+        scenario = TaskScenario(enemy_outpost_hp=0)
+        damage = scenario.apply_attack_damage(
+            7, "17mm", armor_zone="upper_front", critical_zone=True, shots=2
+        )
+        self.assertEqual(damage, 16)
+        self.assertEqual(scenario.enemy_base_shield, 134)
+
+    def test_rule_damage_can_update_local_friendly_hp_and_sentry_death(self) -> None:
+        scenario = TaskScenario()
+        scenario.apply_attack_damage(1, "17mm", team="red")
+        self.assertEqual(scenario.own_robot_health(1), 180)
+        scenario.apply_attack_damage(8, "42mm", shots=2, team="red")
+        self.assertEqual(scenario.sentry_hp, 0)
+        self.assertEqual(scenario.death_elapsed, 0)
+        self.assertEqual(scenario.own_robot_health(3), 200)
+
+    def test_live_fire_uses_target_armor_and_defence_settings(self) -> None:
+        scenario = TaskScenario(enemy_outpost_hp=0)
+        scenario.update(
+            0.05, SentryState(), fire_request=True, hit_target_id=7,
+            critical_zone=True, target_armor_zone="upper_front", target_defence_buff=0.25,
+        )
+        self.assertEqual(scenario.ammo, 299)
+        self.assertEqual(scenario.enemy_base_shield, 144)
+
+    def test_base_is_invulnerable_while_its_outpost_survives(self) -> None:
+        scenario = TaskScenario()
+        for team in ("red", "blue"):
+            self.assertEqual(scenario.apply_attack_damage(7, "42mm", team=team), 0)
+        self.assertEqual(scenario.enemy_base_shield, 150)
+        self.assertEqual(scenario.own_base_shield, 150)
+        self.assertEqual(scenario.enemy_base_hp, 5000)
+        self.assertEqual(scenario.own_base_hp, 5000)
 
     def test_defence_buff_uses_lower_recovery_threshold(self) -> None:
         scenario = TaskScenario(defence_buff=60, sentry_hp=170.0)
@@ -393,14 +499,14 @@ class TaskScenarioTests(unittest.TestCase):
         self.assertFalse(scenario.game_finished)
         self.assertFalse(scenario.game_paused)
         self.assertEqual(scenario.sentry_hp, 400.0)
-        self.assertEqual(scenario.ammo, 120)
+        self.assertEqual(scenario.ammo, 300)
         self.assertEqual(scenario.pending_ammo, 0)
         self.assertEqual(scenario.economy, 300)
         self.assertEqual(scenario.fire_rate, RULE_FIRE_RATE_MAX)
         self.assertEqual(scenario.damage_per_shot, RULE_DAMAGE_PER_SHOT)
-        self.assertEqual(scenario.own_outpost_hp, 1000)
+        self.assertEqual(scenario.own_outpost_hp, 1500)
         self.assertEqual(scenario.own_base_hp, 5000)
-        self.assertEqual(scenario.enemy_outpost_hp, 1000.0)
+        self.assertEqual(scenario.enemy_outpost_hp, 1500.0)
         self.assertEqual(scenario.enemy_base_hp, 5000.0)
         self.assertNotEqual(scenario.robot_position(3), (18.0, 9.0))
 
@@ -452,8 +558,8 @@ class TaskScenarioTests(unittest.TestCase):
 
         self.assertTrue(scenario.game_paused)
         self.assertEqual(scenario.remaining_time, 200.0)
-        self.assertEqual(scenario.ammo, 120)
-        self.assertEqual(scenario.enemy_outpost_hp, 1000.0)
+        self.assertEqual(scenario.ammo, 300)
+        self.assertEqual(scenario.enemy_outpost_hp, 1500.0)
 
         scenario.toggle_pause()
         scenario.update(
@@ -465,8 +571,8 @@ class TaskScenarioTests(unittest.TestCase):
         )
         self.assertFalse(scenario.game_paused)
         self.assertEqual(scenario.remaining_time, 199.0)
-        self.assertEqual(scenario.ammo, 100)
-        self.assertEqual(scenario.enemy_outpost_hp, 600.0)
+        self.assertEqual(scenario.ammo, 280)
+        self.assertEqual(scenario.enemy_outpost_hp, 1100.0)
 
     def test_enemy_health_adjustment_is_clamped(self) -> None:
         scenario = TaskScenario(enemy_outpost_hp=0.0)
@@ -592,6 +698,9 @@ class ScenarioStoreTests(unittest.TestCase):
         )
         scenario.robot_positions[3] = [17.2, 6.4]
         scenario.robot_hp[3] = 135.0
+        scenario.own_robot_positions[3] = [7.2, 6.4]
+        scenario.own_robot_hp[3] = 85.0
+        scenario.own_robot_ammo[3] = 125
         sentry = SentryState(
             x=12.3,
             y=8.7,
@@ -599,7 +708,7 @@ class ScenarioStoreTests(unittest.TestCase):
             spin_angle=0.6,
             turret_angle=-0.4,
         )
-        snapshot = capture_snapshot("场景 1", scenario, sentry, 3)
+        snapshot = capture_snapshot("场景 1", scenario, sentry, 3, "red")
 
         with TemporaryDirectory() as directory:
             save_path = Path(directory) / "scenarios.json"
@@ -612,6 +721,9 @@ class ScenarioStoreTests(unittest.TestCase):
         self.assertEqual(restored_task.remaining_time, 188.0)
         self.assertEqual(restored_task.robot_position(3), (17.2, 6.4))
         self.assertEqual(restored_task.robot_hp[3], 135.0)
+        self.assertEqual(restored_task.robot_position(3, team="red"), (7.2, 6.4))
+        self.assertEqual(restored_task.own_robot_hp[3], 85.0)
+        self.assertEqual(restored_task.own_robot_ammo[3], 125)
         self.assertEqual(restored_task.economy, 650)
         self.assertEqual(restored_task.fire_rate, 12)
         self.assertEqual(restored_task.damage_per_shot, 18)
@@ -620,6 +732,7 @@ class ScenarioStoreTests(unittest.TestCase):
         self.assertEqual((restored_sentry.x, restored_sentry.y), (12.3, 8.7))
         self.assertAlmostEqual(restored_sentry.turret_angle, -0.4)
         self.assertEqual(controlled, 3)
+        self.assertEqual(loaded[0]["controlled_robot_team"], "red")
 
     def test_delete_snapshot_removes_only_selected_entry(self) -> None:
         snapshots = [
