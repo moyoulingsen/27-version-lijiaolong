@@ -144,6 +144,45 @@ ConfigureAttackAction::ConfigureAttackAction(
 {
 }
 
+ApplyMechanismPolicyAction::ApplyMechanismPolicyAction(
+  const std::string & name, const BT::NodeConfig & config)
+: BT::SyncActionNode(name, config)
+{
+}
+
+BT::PortsList ApplyMechanismPolicyAction::providedPorts()
+{
+  return {
+    BT::InputPort<int>("posture", 3, "1 attack, 2 defense, 3 movement"),
+    BT::InputPort<int>("gyro_mode", -1, "-1 selects the posture default"),
+    BT::InputPort<bool>("gimbal_enabled", true, "Enable the shared gimbal policy"),
+    BT::InputPort<bool>("gimbal_rotate", true, "Allow the shared gimbal policy to rotate"),
+    BT::OutputPort<int>("posture_command"),
+    BT::OutputPort<int>("gyro_mode_command"),
+    BT::OutputPort<bool>("gimbal_enabled_command"),
+    BT::OutputPort<bool>("gimbal_rotate_command")};
+}
+
+BT::NodeStatus ApplyMechanismPolicyAction::tick()
+{
+  const auto posture = getInput<int>("posture");
+  const auto gyro_mode = getInput<int>("gyro_mode");
+  const auto gimbal_enabled = getInput<bool>("gimbal_enabled");
+  const auto gimbal_rotate = getInput<bool>("gimbal_rotate");
+  if(!posture || !gyro_mode || !gimbal_enabled || !gimbal_rotate || posture.value() < 1 ||
+    posture.value() > 3 || gyro_mode.value() < -1 || gyro_mode.value() > 3)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+
+  const int posture_default_gyro = posture.value() == 1 ? 0 : posture.value() == 2 ? 3 : 1;
+  setOutput("posture_command", posture.value());
+  setOutput("gyro_mode_command", gyro_mode.value() < 0 ? posture_default_gyro : gyro_mode.value());
+  setOutput("gimbal_enabled_command", gimbal_enabled.value());
+  setOutput("gimbal_rotate_command", gimbal_enabled.value() && gimbal_rotate.value());
+  return BT::NodeStatus::SUCCESS;
+}
+
 BT::PortsList ConfigureAttackAction::providedPorts()
 {
   return {
@@ -268,6 +307,7 @@ BT::PortsList SelectAttackTargetAction::providedPorts()
     BT::InputPort<bool>("require_in_range", true, "Only select targets in weapon range"),
     BT::InputPort<bool>("require_low_health", false, "Only select targets below the threshold"),
     BT::InputPort<bool>("require_observed", false, "Only select currently observed non-persistent targets"),
+    BT::InputPort<bool>("persistent_only", false, "Only select persistent targets"),
     BT::OutputPort<std::string>("selected_target_id"),
     BT::OutputPort<double>("selected_health"),
     BT::OutputPort<double>("selected_distance"),
@@ -281,7 +321,9 @@ BT::NodeStatus SelectAttackTargetAction::tick()
   const auto require_in_range = getInput<bool>("require_in_range");
   const auto require_low_health = getInput<bool>("require_low_health");
   const auto require_observed = getInput<bool>("require_observed");
+  const auto persistent_only = getInput<bool>("persistent_only");
   if(!threshold || !require_in_range || !require_low_health || !require_observed ||
+    !persistent_only ||
     !finite(threshold.value()) || threshold.value() < 0.0)
   {
     return BT::NodeStatus::FAILURE;
@@ -297,7 +339,8 @@ BT::NodeStatus SelectAttackTargetAction::tick()
   {
     if(target.invincible || (require_in_range.value() && !target.in_range) ||
       (require_low_health.value() && target.health >= threshold.value()) ||
-      (require_observed.value() && target.persistent))
+      (require_observed.value() && target.persistent) ||
+      (persistent_only.value() && !target.persistent))
     {
       continue;
     }
@@ -866,6 +909,7 @@ void PursueAction::onHalted()
 void registerAttackNodes(BT::BehaviorTreeFactory & factory)
 {
   factory.registerNodeType<ConfigureAttackAction>("ConfigureAttack");
+  factory.registerNodeType<ApplyMechanismPolicyAction>("ApplyMechanismPolicy");
   factory.registerNodeType<BuildAttackTargetListAction>("BuildAttackTargetList");
   factory.registerNodeType<SelectAttackTargetAction>("SelectAttackTarget");
   factory.registerNodeType<HasAttackTargetsCondition>("HasAttackTargets");

@@ -1,15 +1,21 @@
 <?xml version="1.0"?>
 <root BTCPP_format="4">
   <include path="common_position.xml"/>
+  <include path="mechanism_policy.xml"/>
 
   <!-- Aggressive route through the middle and enemy half. -->
   <BehaviorTree ID="AggressivePatrol">
     <ReactiveSequence name="AggressivePatrolSequence">
       <!-- The specified high-platform strategy still uses defense posture. -->
-      <ConfigureAggressivePatrol
-        posture_command="{posture_command}"
-        gyro_mode_command="{gyro_mode_command}"
-        gimbal_enabled_command="{gimbal_enabled}"/>
+      <SubTree ID="MechanismPolicy"
+               posture="2"
+               gyro_mode="1"
+               gimbal_enabled="true"
+               gimbal_rotate="true"
+               posture_command="{posture_command}"
+               gyro_mode_command="{gyro_mode_command}"
+               gimbal_enabled_command="{gimbal_enabled}"
+               gimbal_rotate_command="{gimbal_rotate}"/>
 
       <KeepRunningUntilFailure name="AggressivePatrolLoop">
         <Sequence name="AggressivePatrolPoint">

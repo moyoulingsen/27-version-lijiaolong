@@ -3,6 +3,7 @@
   <!-- Shared by return-home, bullet, and patrol trees. -->
   <include path="tree_nodes_model.xml"/>
   <include path="common_position.xml"/>
+  <include path="mechanism_policy.xml"/>
 
   <!--
     MatchFinished latches after either playing time reaches zero or the
@@ -12,8 +13,15 @@
   <BehaviorTree ID="ReturnHome">
     <ReactiveSequence name="ReturnHomeSequence">
       <MatchFinished game_period="{game_period}" time="{time}"/>
-      <SetPosture posture="3" posture_command="{posture_command}"/>
-      <SetGyroMode mode="0" gyro_mode_command="{gyro_mode_command}"/>
+      <SubTree ID="MechanismPolicy"
+               posture="3"
+               gyro_mode="-1"
+               gimbal_enabled="true"
+               gimbal_rotate="true"
+               posture_command="{posture_command}"
+               gyro_mode_command="{gyro_mode_command}"
+               gimbal_enabled_command="{gimbal_enabled}"
+               gimbal_rotate_command="{gimbal_rotate}"/>
 
       <ReactiveFallback name="ReturnHomeUntilReached">
         <Sequence name="AlreadyAtStart">

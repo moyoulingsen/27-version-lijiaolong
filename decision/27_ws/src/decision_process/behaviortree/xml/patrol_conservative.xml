@@ -1,14 +1,20 @@
 <?xml version="1.0"?>
 <root BTCPP_format="4">
   <include path="common_position.xml"/>
+  <include path="mechanism_policy.xml"/>
 
   <!-- Conservative route on the friendly half of the arena. -->
   <BehaviorTree ID="ConservativePatrol">
     <ReactiveSequence name="ConservativePatrolSequence">
-      <ConfigureConservativePatrol
-        posture_command="{posture_command}"
-        gyro_mode_command="{gyro_mode_command}"
-        gimbal_enabled_command="{gimbal_enabled}"/>
+      <SubTree ID="MechanismPolicy"
+               posture="2"
+               gyro_mode="3"
+               gimbal_enabled="false"
+               gimbal_rotate="false"
+               posture_command="{posture_command}"
+               gyro_mode_command="{gyro_mode_command}"
+               gimbal_enabled_command="{gimbal_enabled}"
+               gimbal_rotate_command="{gimbal_rotate}"/>
 
       <KeepRunningUntilFailure name="ConservativePatrolLoop">
         <Sequence name="ConservativePatrolPoint">

@@ -55,6 +55,16 @@
       <output_port name="gyro_mode_command" type="int"/>
       <output_port name="gimbal_enabled_command" type="bool"/>
     </Action>
+    <Action ID="ApplyMechanismPolicy">
+      <input_port name="posture" type="int" default="3"/>
+      <input_port name="gyro_mode" type="int" default="-1"/>
+      <input_port name="gimbal_enabled" type="bool" default="true"/>
+      <input_port name="gimbal_rotate" type="bool" default="true"/>
+      <output_port name="posture_command" type="int"/>
+      <output_port name="gyro_mode_command" type="int"/>
+      <output_port name="gimbal_enabled_command" type="bool"/>
+      <output_port name="gimbal_rotate_command" type="bool"/>
+    </Action>
     <Action ID="ConfigureConservativePatrol">
       <input_port name="posture" type="int" default="2"/>
       <input_port name="gyro_mode" type="int" default="3"/>
@@ -182,6 +192,7 @@
       <input_port name="require_in_range" type="bool" default="true"/>
       <input_port name="require_low_health" type="bool" default="false"/>
       <input_port name="require_observed" type="bool" default="false"/>
+      <input_port name="persistent_only" type="bool" default="false"/>
       <output_port name="selected_target_id" type="std::string"/>
       <output_port name="selected_health" type="double"/>
       <output_port name="selected_distance" type="double"/>

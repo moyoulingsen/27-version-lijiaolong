@@ -21,6 +21,17 @@ public:
   BT::NodeStatus tick() override;
 };
 
+/** Applies the shared three-posture mechanism policy. */
+class ApplyMechanismPolicyAction : public BT::SyncActionNode
+{
+public:
+  ApplyMechanismPolicyAction(const std::string & name, const BT::NodeConfig & config);
+
+  static BT::PortsList providedPorts();
+
+  BT::NodeStatus tick() override;
+};
+
 /**
  * Filters observed and persistent targets.
  *

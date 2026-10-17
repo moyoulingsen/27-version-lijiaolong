@@ -39,6 +39,8 @@ namespace
 constexpr double kAttackRange = 4.0;
 constexpr double kOutpostAttackX = 17.0;
 constexpr double kOutpostAttackY = 10.0;
+constexpr uint32_t kMatchDurationSeconds = 420U;
+constexpr uint32_t kOpeningOutpostSeconds = 300U;
 constexpr uint32_t kSignificantDamageThreshold = 30U;
 constexpr auto kDamageBurstWindow = 1s;
 
@@ -374,6 +376,15 @@ private:
 
   std::string persistentTargets() const
   {
+    // referee_.time is the remaining match time. Keep the opening outpost in
+    // the attack list for the first 300 seconds, then let normal target
+    // selection take over. At exactly 300 seconds elapsed, the opening phase
+    // has ended.
+    const uint32_t opening_cutoff = kMatchDurationSeconds - kOpeningOutpostSeconds;
+    if(referee_.time <= opening_cutoff)
+    {
+      return {};
+    }
     const uint16_t health = targetHealth(6);
     if(health == 0U)
     {

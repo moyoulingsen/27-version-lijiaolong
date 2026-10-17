@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<root BTCPP_format="4">
+  <include path="tree_nodes_model.xml"/>
+
+  <!--
+    Shared mechanism policy. The behavior subtrees select only one of the
+    three chassis postures: 1 attack, 2 defense, 3 movement. Gyro and gimbal
+    outputs are centralized here so changes to posture-triggered mechanisms
+    do not have to be duplicated in every task subtree.
+  -->
+  <BehaviorTree ID="MechanismPolicy">
+    <ApplyMechanismPolicy posture="{posture}"
+                          gyro_mode="{gyro_mode}"
+                          gimbal_enabled="{gimbal_enabled}"
+                          gimbal_rotate="{gimbal_rotate}"
+                          posture_command="{posture_command}"
+                          gyro_mode_command="{gyro_mode_command}"
+                          gimbal_enabled_command="{gimbal_enabled_command}"
+                          gimbal_rotate_command="{gimbal_rotate_command}"/>
+  </BehaviorTree>
+</root>
