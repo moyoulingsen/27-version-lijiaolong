@@ -446,7 +446,7 @@ class TaskScenarioTests(unittest.TestCase):
             pending_ammo=100,
             respawn_fire_locked=True,
         )
-        sentry = SentryState(x=3.8, y=2.0)
+        sentry = SentryState(x=4.1, y=2.0)
 
         scenario.update(0.5, sentry)
 

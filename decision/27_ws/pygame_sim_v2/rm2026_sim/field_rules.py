@@ -1,9 +1,10 @@
 """Field gain-point zones and energy-rune rule data for the 2-D validator.
 
-The rulebook's cropped text version does not include the field-geometry pages,
-so these rectangles are a 2-D approximation anchored to the official PGM and
-the visible field layout.  They are deliberately data-only: changing a zone
-does not change the ROS/behaviour-tree interface.
+The rulebook's cropped text version does not include all field-geometry pages,
+so these areas are anchored to the official PGM and the visible field layout.
+Rectangles are used where a module is axis-aligned; traced polygons are used
+for the supply area and central highland.  The data remains deliberately
+separate from the ROS/behaviour-tree interface.
 """
 
 from __future__ import annotations
@@ -17,25 +18,32 @@ from .field_geometry import (
     BLUE_FLY_SLOPE,
     BLUE_FORT,
     BLUE_FORT_POLYGON,
+    BLUE_FLY_SLOPE_POLYGON,
     BLUE_OUTPOST_GAIN,
     BLUE_ROAD,
     BLUE_ROAD_CROSSING_CARDS,
+    BLUE_SUPPLY_POLYGON,
     BLUE_SUPPLY_ZONE,
     BLUE_TERRAIN_HIGHLAND,
     BLUE_TRAPEZOID_HIGHLAND,
+    BLUE_TRAPEZOID_HIGHLAND_POLYGON,
     BLUE_TUNNEL,
     CENTRAL_HIGHLAND,
+    CENTRAL_HIGHLAND_POLYGON,
     RED_ASSEMBLY,
     RED_BASE_GAIN,
     RED_FLY_SLOPE,
     RED_FORT,
     RED_FORT_POLYGON,
+    RED_FLY_SLOPE_POLYGON,
     RED_OUTPOST_GAIN,
     RED_ROAD,
     RED_ROAD_CROSSING_CARDS,
+    RED_SUPPLY_POLYGON,
     RED_SUPPLY_ZONE,
     RED_TERRAIN_HIGHLAND,
     RED_TRAPEZOID_HIGHLAND,
+    RED_TRAPEZOID_HIGHLAND_POLYGON,
     RED_TUNNEL,
     RUNE_POSITIONS,
 )
@@ -100,10 +108,12 @@ FIELD_ZONES: tuple[FieldZone, ...] = (
     FieldZone(
         "red_supply", "supply", RED_SUPPLY_ZONE[0], RED_SUPPLY_ZONE[2], RED_SUPPLY_ZONE[1], RED_SUPPLY_ZONE[3], "red",
         color=(45, 174, 99), label="己方补给区",
+        polygon=RED_SUPPLY_POLYGON,
     ),
     FieldZone(
         "blue_supply", "supply", BLUE_SUPPLY_ZONE[0], BLUE_SUPPLY_ZONE[2], BLUE_SUPPLY_ZONE[1], BLUE_SUPPLY_ZONE[3], "blue",
         color=(45, 130, 220), label="敌方补给区",
+        polygon=BLUE_SUPPLY_POLYGON,
     ),
     FieldZone(
         "red_base_gain", "base_gain", RED_BASE_GAIN[0], RED_BASE_GAIN[2], RED_BASE_GAIN[1], RED_BASE_GAIN[3], "red",
@@ -119,16 +129,19 @@ FIELD_ZONES: tuple[FieldZone, ...] = (
         "central_highland", "central_highland", CENTRAL_HIGHLAND[0], CENTRAL_HIGHLAND[2], CENTRAL_HIGHLAND[1], CENTRAL_HIGHLAND[3], None,
         buffs=(("defence", 0.25, 0.5),),
         color=(160, 110, 220), label="中央高地",
+        polygon=CENTRAL_HIGHLAND_POLYGON,
     ),
     FieldZone(
         "red_trapezoid", "trapezoid_highland", RED_TRAPEZOID_HIGHLAND[0], RED_TRAPEZOID_HIGHLAND[2], RED_TRAPEZOID_HIGHLAND[1], RED_TRAPEZOID_HIGHLAND[3], "red",
         buffs=(("defence", 0.50, 0.5),),
         color=(222, 148, 62), label="己方梯形高地",
+        polygon=RED_TRAPEZOID_HIGHLAND_POLYGON,
     ),
     FieldZone(
         "blue_trapezoid", "trapezoid_highland", BLUE_TRAPEZOID_HIGHLAND[0], BLUE_TRAPEZOID_HIGHLAND[2], BLUE_TRAPEZOID_HIGHLAND[1], BLUE_TRAPEZOID_HIGHLAND[3], "blue",
         buffs=(("defence", 0.50, 0.5),),
         color=(222, 148, 62), label="敌方梯形高地",
+        polygon=BLUE_TRAPEZOID_HIGHLAND_POLYGON,
     ),
     FieldZone(
         "red_road", "terrain_road", RED_ROAD[0], RED_ROAD[2], RED_ROAD[1], RED_ROAD[3], "red",
@@ -154,11 +167,13 @@ FIELD_ZONES: tuple[FieldZone, ...] = (
         "red_fly_slope", "terrain_fly_slope", RED_FLY_SLOPE[0], RED_FLY_SLOPE[2], RED_FLY_SLOPE[1], RED_FLY_SLOPE[3], "red",
         buffs=(("defence", 0.25, 30.0),), mode="trigger", cooldown=30.0,
         color=(120, 190, 160), label="飞坡",
+        polygon=RED_FLY_SLOPE_POLYGON,
     ),
     FieldZone(
         "blue_fly_slope", "terrain_fly_slope", BLUE_FLY_SLOPE[0], BLUE_FLY_SLOPE[2], BLUE_FLY_SLOPE[1], BLUE_FLY_SLOPE[3], "blue",
         buffs=(("defence", 0.25, 30.0),), mode="trigger", cooldown=30.0,
         color=(120, 190, 160), label="飞坡",
+        polygon=BLUE_FLY_SLOPE_POLYGON,
     ),
     FieldZone(
         "red_tunnel", "terrain_tunnel", RED_TUNNEL[0], RED_TUNNEL[2], RED_TUNNEL[1], RED_TUNNEL[3], "red",

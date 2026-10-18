@@ -50,7 +50,6 @@ from .task_state import (
     PENDING_AMMO_CAP,
     RULE_FIRE_RATE_MAX,
     SUPPLY,
-    SUPPLY_ZONE,
     ROBOT_PROFILES,
     RULE_BASE_HP,
     RULE_BASE_SHIELD,
@@ -75,6 +74,33 @@ SIDE_PANEL_WIDTH = 390
 RIGHT_PANEL_WIDTH = 520
 SNAPSHOT_BAR_HEIGHT = 62
 AUTOAIM_HALF_VIEW = math.radians(24.0)
+MAP_LAYER_PANEL_COLLAPSED_HEIGHT = 42
+MAP_LAYER_PANEL_EXPANDED_HEIGHT = 206
+
+# These labels are also the stable order used by the bottom map-layer panel.
+# Field zones are grouped by their rulebook type so one button controls both
+# the red and blue copy of a region (for example, both roads).
+FIELD_ZONE_KIND_LABELS = (
+    ("supply", "补给区"),
+    ("base_gain", "基地增益"),
+    ("outpost_gain", "前哨增益"),
+    ("central_highland", "中央高地"),
+    ("trapezoid_highland", "梯形高地"),
+    ("terrain_road", "公路"),
+    ("terrain_highland", "高地跨越"),
+    ("terrain_fly_slope", "飞坡"),
+    ("terrain_tunnel", "隧道"),
+    ("assembly", "装配区"),
+    ("fort", "堡垒"),
+)
+MAP_OVERLAY_LABELS = (
+    ("patrol_route", "巡逻路线"),
+    ("energy_rune", "能量机关"),
+    ("sensor_view", "传感器视野"),
+    ("collision_volumes", "碰撞体"),
+    ("objectives", "目标点"),
+    ("navigation", "导航路径"),
+)
 # The v1/C++ behaviour tree still sends this pre-LOS outpost goal.  v2 maps it
 # to the LOS-clear firing point so ROS-online mode does not stop behind a wall.
 LEGACY_ATTACK_POINT = (17.0, 10.0)
@@ -181,8 +207,20 @@ class SimulatorApp:
         self._manual_fire_held = False
         self._restart_signal_remaining = 0.0
         self._collision_damage_cooldown = 0.0
-        self.show_collision_volumes = True
-        self.show_field_zones = True
+        # Map overlays are opt-in.  The map, grid, robots and sentry remain
+        # visible; every optional region/route layer starts hidden and is
+        # controlled from the bottom folded panel.
+        self.map_layers_panel_open = False
+        self.map_layer_visibility = {
+            f"zone:{kind}": False for kind, _ in FIELD_ZONE_KIND_LABELS
+        }
+        self.map_layer_visibility.update(
+            {name: False for name, _ in MAP_OVERLAY_LABELS}
+        )
+        # Keep the old attributes as compatibility aliases for callers that
+        # inspect them directly.
+        self.show_collision_volumes = False
+        self.show_field_zones = False
         self.subsystem_panel_open = False
         # Replay state lives in the original SimulatorApp.  It never invokes
         # live movement/fire/update paths, and it never writes to SQLite.
@@ -661,7 +699,7 @@ class SimulatorApp:
         left = SIDE_PANEL_WIDTH + 24
         right = width - RIGHT_PANEL_WIDTH - 24
         top = HEADER_HEIGHT + 18
-        bottom = height - SNAPSHOT_BAR_HEIGHT - 18
+        bottom = height - SNAPSHOT_BAR_HEIGHT - 18 - self._map_layer_panel_height()
         available_width = max(1.0, right - left)
         available_height = max(1.0, bottom - top)
         scale = min(
@@ -677,6 +715,19 @@ class SimulatorApp:
             map_height,
             self.arena,
         )
+
+    def _map_layer_panel_height(self) -> int:
+        """Return the bottom panel height reserved outside the map viewport."""
+        if not self.map_layers_panel_open:
+            return MAP_LAYER_PANEL_COLLAPSED_HEIGHT
+        width = max(
+            280,
+            self.screen.get_width() - SIDE_PANEL_WIDTH - RIGHT_PANEL_WIDTH - 16,
+        )
+        columns = max(2, min(8, width // 150))
+        button_count = 2 + len(FIELD_ZONE_KIND_LABELS) + len(MAP_OVERLAY_LABELS)
+        rows = math.ceil(button_count / columns)
+        return max(MAP_LAYER_PANEL_EXPANDED_HEIGHT, 58 + rows * 38)
 
     def _movement_input(self) -> tuple[float, float]:
         keys = self.pg.key.get_pressed()
@@ -696,6 +747,8 @@ class SimulatorApp:
         manual_y: float,
         decision: DecisionView,
     ) -> None:
+        if getattr(self, "replay_mode", False):
+            return
         self._refresh_dynamic_planning_grid()
         power_cut = self.task.sentry_chassis_power_cut
         if self.sentry.manual_control:
@@ -950,6 +1003,8 @@ class SimulatorApp:
     def _move_controlled_robot(
         self, move_x: float, move_y: float, elapsed_seconds: float
     ) -> None:
+        if getattr(self, "replay_mode", False):
+            return
         target_id = self.controlled_robot_id
         team = self.controlled_robot_team
         if target_id is None or team not in ("blue", "red"):
@@ -1278,6 +1333,32 @@ class SimulatorApp:
         if target_id is not None:
             self._select_own_robot(target_id)
 
+    def _toggle_map_layer(self, layer: str) -> None:
+        """Toggle one map overlay and keep legacy flags in sync."""
+        if layer not in self.map_layer_visibility:
+            return
+        visible = not self.map_layer_visibility[layer]
+        self.map_layer_visibility[layer] = visible
+        if layer == "collision_volumes":
+            self.show_collision_volumes = visible
+        if layer.startswith("zone:"):
+            self.show_field_zones = any(
+                self.map_layer_visibility.get(f"zone:{kind}", False)
+                for kind, _ in FIELD_ZONE_KIND_LABELS
+            )
+
+    def _set_all_map_layers(self, visible: bool) -> None:
+        for layer in self.map_layer_visibility:
+            self.map_layer_visibility[layer] = visible
+        self.show_collision_volumes = visible
+        self.show_field_zones = visible
+
+    def _toggle_all_field_zones(self) -> None:
+        show_zones = not self.show_field_zones
+        for kind, _ in FIELD_ZONE_KIND_LABELS:
+            self.map_layer_visibility[f"zone:{kind}"] = show_zones
+        self.show_field_zones = show_zones
+
     def _handle_mouse_click(self, position: tuple[int, int]) -> bool:
         for rect, action, target_id, direction in reversed(self.click_regions):
             if not rect.collidepoint(position):
@@ -1292,6 +1373,10 @@ class SimulatorApp:
                 "toggle_subsystem_panel",
                 "close_subsystem",
                 "subsystem_modal",
+                "toggle_map_layers_panel",
+                "toggle_map_layer",
+                "show_all_map_layers",
+                "hide_all_map_layers",
             }:
                 # Historical state is read-only.  Selection and modal
                 # navigation remain interactive; referee adjustment buttons do
@@ -1340,9 +1425,17 @@ class SimulatorApp:
             elif action == "cycle_infantry_launcher":
                 self.task.cycle_infantry_launcher()
             elif action == "toggle_collision_volumes":
-                self.show_collision_volumes = not self.show_collision_volumes
+                self._toggle_map_layer("collision_volumes")
             elif action == "toggle_field_zones":
-                self.show_field_zones = not self.show_field_zones
+                self._toggle_all_field_zones()
+            elif action == "toggle_map_layers_panel":
+                self.map_layers_panel_open = not self.map_layers_panel_open
+            elif action == "toggle_map_layer":
+                self._toggle_map_layer(target_id)
+            elif action == "show_all_map_layers":
+                self._set_all_map_layers(True)
+            elif action == "hide_all_map_layers":
+                self._set_all_map_layers(False)
             elif action == "toggle_subsystem_panel":
                 self.subsystem_panel_open = not self.subsystem_panel_open
             elif action == "close_subsystem":
@@ -1617,6 +1710,7 @@ class SimulatorApp:
         self._draw_side_panels()
         self._draw_arena(viewport)
         self._draw_snapshot_bar()
+        self._draw_map_layer_panel()
         self._draw_robot_property_popup()
         self._draw_subsystem_panel()
 
@@ -2095,14 +2189,7 @@ class SimulatorApp:
             )
             self._draw_click_button(rect, label)
             self.click_regions.append((rect, action, 0, 0))
-        y += button_height + 6
-        collision_rect = self.pg.Rect(x, y, width, button_height)
-        self._draw_click_button(
-            collision_rect,
-            "碰撞体显示：开" if self.show_collision_volumes else "碰撞体显示：关",
-        )
-        self.click_regions.append((collision_rect, "toggle_collision_volumes", 0, 0))
-        return y + button_height + 8
+        return y + button_height + 14
 
     def _buff_summary(self) -> str:
         values: dict[str, float] = {}
@@ -2382,6 +2469,94 @@ class SimulatorApp:
         if target_id == 8:
             return "sentry_health"
         return "own_robot_health"
+
+    def _draw_map_layer_panel(self) -> None:
+        """Draw the foldable, bottom-aligned controls for map overlays."""
+        screen_width, screen_height = self.screen.get_size()
+        panel_width = max(
+            280,
+            screen_width - SIDE_PANEL_WIDTH - RIGHT_PANEL_WIDTH - 16,
+        )
+        panel_left = SIDE_PANEL_WIDTH + 8
+        panel_bottom = screen_height - SNAPSHOT_BAR_HEIGHT
+        panel_height = self._map_layer_panel_height()
+        panel = self.pg.Rect(
+            panel_left,
+            panel_bottom - panel_height,
+            panel_width,
+            panel_height,
+        )
+        self.pg.draw.rect(self.screen, (25, 31, 35), panel)
+        self.pg.draw.rect(self.screen, (109, 123, 129), panel, 1)
+
+        header = self.pg.Rect(panel.left + 10, panel.top + 7, panel.width - 20, 30)
+        title = self.panel_title_font.render("地图区域显示", True, (236, 241, 242))
+        self.screen.blit(title, (header.left, header.top - 1))
+        toggle_width = 74
+        toggle = self.pg.Rect(header.right - toggle_width, header.top, toggle_width, header.height)
+        self._draw_click_button(toggle, "收起" if self.map_layers_panel_open else "展开")
+        self.click_regions.append((toggle, "toggle_map_layers_panel", 0, 0))
+
+        if not self.map_layers_panel_open:
+            visible_count = sum(self.map_layer_visibility.values())
+            hint = self.small_font.render(
+                f"已显示 {visible_count} 项｜点击“展开”选择地图区域和路线",
+                True,
+                (170, 181, 185),
+            )
+            self.screen.blit(hint, hint.get_rect(midright=(toggle.left - 12, toggle.centery)))
+            return
+
+        entries = [
+            ("show_all_map_layers", "全部显示", True),
+            ("hide_all_map_layers", "全部隐藏", False),
+        ]
+        entries.extend(
+            ("toggle_map_layer", label, self.map_layer_visibility[f"zone:{kind}"])
+            for kind, label in FIELD_ZONE_KIND_LABELS
+        )
+        entries.extend(
+            ("toggle_map_layer", label, self.map_layer_visibility[name])
+            for name, label in MAP_OVERLAY_LABELS
+        )
+
+        content_top = panel.top + 45
+        gap = 6
+        columns = max(2, min(8, panel.width // 150))
+        button_width = (panel.width - 20 - gap * (columns - 1)) // columns
+        button_height = 30
+        for index, (action, label, active) in enumerate(entries):
+            row, column = divmod(index, columns)
+            rect = self.pg.Rect(
+                panel.left + 10 + column * (button_width + gap),
+                content_top + row * (button_height + 6),
+                button_width,
+                button_height,
+            )
+            if action == "toggle_map_layer":
+                if index < 2 + len(FIELD_ZONE_KIND_LABELS):
+                    target = (
+                        f"zone:{FIELD_ZONE_KIND_LABELS[index - 2][0]}"
+                        if index >= 2
+                        else ""
+                    )
+                else:
+                    target = MAP_OVERLAY_LABELS[index - 2 - len(FIELD_ZONE_KIND_LABELS)][0]
+            else:
+                target = 0
+            hovered = rect.collidepoint(self.pg.mouse.get_pos())
+            if action == "toggle_map_layer":
+                background = (40, 117, 87) if active else (50, 58, 63)
+                if hovered:
+                    background = (54, 137, 103) if active else (75, 86, 92)
+                self.pg.draw.rect(self.screen, background, rect)
+                self.pg.draw.rect(self.screen, (104, 117, 123), rect, 1)
+                button_label = f"{label}：{'开' if active else '关'}"
+                rendered = self.panel_label_font.render(button_label, True, (236, 239, 240))
+                self.screen.blit(rendered, rendered.get_rect(center=rect.center))
+            else:
+                self._draw_click_button(rect, label)
+            self.click_regions.append((rect, action, target, 0))
 
     def _draw_subsystem_panel(self) -> None:
         if not self.subsystem_panel_open:
@@ -3343,15 +3518,19 @@ class SimulatorApp:
         previous_clip = self.screen.get_clip()
         self.screen.set_clip(rect)
         self._draw_grid(viewport)
-        self._draw_supply_zone(viewport)
         self._draw_field_zones(viewport)
-        self._draw_energy_rune(viewport)
-        self._draw_sensor_view(viewport)
-        self._draw_patrol_route(viewport)
+        if self.map_layer_visibility["energy_rune"]:
+            self._draw_energy_rune(viewport)
+        if self.map_layer_visibility["sensor_view"]:
+            self._draw_sensor_view(viewport)
+        if self.map_layer_visibility["patrol_route"]:
+            self._draw_patrol_route(viewport)
         self._draw_entities(viewport)
         self._draw_collision_volumes(viewport)
-        self._draw_objectives(viewport)
-        self._draw_navigation(viewport)
+        if self.map_layer_visibility["objectives"]:
+            self._draw_objectives(viewport)
+        if self.map_layer_visibility["navigation"]:
+            self._draw_navigation(viewport)
         self._draw_sentry(viewport)
         self.screen.set_clip(previous_clip)
 
@@ -3381,32 +3560,45 @@ class SimulatorApp:
             self.screen.blit(label, label.get_rect(midright=(round(screen_x) - 7, round(screen_y))))
 
     def _draw_supply_zone(self, viewport: Viewport) -> None:
-        minimum_x, maximum_x, minimum_y, maximum_y = SUPPLY_ZONE
-        left, top = viewport.world_to_screen(minimum_x, maximum_y)
-        right, bottom = viewport.world_to_screen(maximum_x, minimum_y)
-        zone_rect = self.pg.Rect(
-            round(left),
-            round(top),
-            max(1, round(right - left)),
-            max(1, round(bottom - top)),
+        zone = next(item for item in FIELD_ZONES if item.name == "red_supply")
+        points = [
+            tuple(round(value) for value in viewport.world_to_screen(x, y))
+            for x, y in zone.polygon
+        ]
+        overlay = self.pg.Surface(self.screen.get_size(), self.pg.SRCALPHA)
+        self.pg.draw.polygon(overlay, (*zone.color, 58), points)
+        self.screen.blit(overlay, (0, 0))
+        self.pg.draw.polygon(self.screen, zone.color, points, 2)
+
+        bounds = self.pg.Rect(
+            min(point[0] for point in points),
+            min(point[1] for point in points),
+            max(point[0] for point in points) - min(point[0] for point in points),
+            max(point[1] for point in points) - min(point[1] for point in points),
         )
-
-        overlay = self.pg.Surface(zone_rect.size, self.pg.SRCALPHA)
-        overlay.fill((37, 174, 99, 58))
-        self.screen.blit(overlay, zone_rect)
-        self.pg.draw.rect(self.screen, (35, 165, 93), zone_rect, 2)
-
         label = self.small_font.render("补给区", True, (20, 112, 62))
-        label_background = label.get_rect(topleft=(zone_rect.left + 5, zone_rect.top + 4)).inflate(8, 4)
+        label_background = label.get_rect(
+            midtop=(bounds.centerx, bounds.top + 4)
+        ).inflate(8, 4)
         self.pg.draw.rect(self.screen, (231, 247, 237), label_background)
-        self.screen.blit(label, (zone_rect.left + 9, zone_rect.top + 6))
+        self.screen.blit(label, label.get_rect(midtop=(bounds.centerx, bounds.top + 6)))
 
     def _draw_field_zones(self, viewport: Viewport) -> None:
-        if not self.show_field_zones:
+        visible_kinds = {
+            kind
+            for kind, _ in FIELD_ZONE_KIND_LABELS
+            if self.map_layer_visibility.get(f"zone:{kind}", False)
+        }
+        if self.show_field_zones and not visible_kinds:
+            # Preserve the old public flag for callers that set it directly.
+            visible_kinds = {kind for kind, _ in FIELD_ZONE_KIND_LABELS}
+        if not visible_kinds:
             return
         overlay = self.pg.Surface(self.screen.get_size(), self.pg.SRCALPHA)
         regions: list[tuple[object, object, list[tuple[int, int]]]] = []
         for zone in FIELD_ZONES:
+            if zone.kind not in visible_kinds:
+                continue
             if zone.polygon:
                 points = [
                     tuple(round(value) for value in viewport.world_to_screen(x, y))
@@ -3486,7 +3678,10 @@ class SimulatorApp:
             )
 
     def _draw_collision_volumes(self, viewport: Viewport) -> None:
-        if not self.show_collision_volumes:
+        if (
+            not self.map_layer_visibility.get("collision_volumes", False)
+            and not self.show_collision_volumes
+        ):
             return
         outline = (236, 196, 82)
         overlay = self.pg.Surface(self.screen.get_size(), self.pg.SRCALPHA)

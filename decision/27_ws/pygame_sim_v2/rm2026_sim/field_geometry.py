@@ -59,14 +59,100 @@ OUTPOST_ATTACK_POINT = (18.225, 10.675)
 CONSERVATIVE_PATROL_POINTS = ((5.0, 5.0), (9.0, 5.0), (9.0, 9.0))
 AGGRESSIVE_PATROL_POINTS = ((12.0, 3.0), (14.0, 7.5), (12.3, 11.7))
 
-# Functional areas.  These are axis-aligned approximations of the rulebook
-# modules on the 28 x 15 dataset frame; their centres are stable even where
-# the physical boundary is sloped or polygonal.
-RED_SUPPLY_ZONE = (0.5, 3.7, 0.2, 2.4)
-BLUE_SUPPLY_ZONE = (24.3, 27.5, 12.6, 14.8)
-CENTRAL_HIGHLAND = (9.2, 18.8, 4.4, 10.6)
-RED_TRAPEZOID_HIGHLAND = (4.8, 8.3, 3.5, 6.4)
-BLUE_TRAPEZOID_HIGHLAND = (19.7, 23.2, 8.6, 11.5)
+# Functional areas.  Bounds are retained for broad-phase checks and backwards
+# compatibility; the renderer and rule checks use the traced vector polygons
+# below for the actual area membership.
+#
+# The supply polygons follow the lower striped rectangle in the field layout
+# (the upper striped rectangle is a separate field module).  Coordinates are
+# mapped from the checked-in vector-derived layout image to the 28 x 15 m
+# arena frame, including the two small left-side chamfers.
+RED_SUPPLY_POLYGON = (
+    (2.046, 2.171),
+    (3.912, 2.171),
+    (3.912, 0.578),
+    (2.046, 0.578),
+    (1.895, 0.673),
+    (1.895, 2.061),
+)
+BLUE_SUPPLY_POLYGON = tuple(
+    (FIELD_WIDTH - x, FIELD_HEIGHT - y) for x, y in RED_SUPPLY_POLYGON
+)
+RED_SUPPLY_ZONE = (
+    min(x for x, _ in RED_SUPPLY_POLYGON),
+    max(x for x, _ in RED_SUPPLY_POLYGON),
+    min(y for _, y in RED_SUPPLY_POLYGON),
+    max(y for _, y in RED_SUPPLY_POLYGON),
+)
+BLUE_SUPPLY_ZONE = (
+    min(x for x, _ in BLUE_SUPPLY_POLYGON),
+    max(x for x, _ in BLUE_SUPPLY_POLYGON),
+    min(y for _, y in BLUE_SUPPLY_POLYGON),
+    max(y for _, y in BLUE_SUPPLY_POLYGON),
+)
+
+# The central highland is the irregular walkable region enclosed by the field
+# walls.  It includes the side shelves and lower ramp visible in the vector
+# layout, rather than the former axis-aligned 9.2..18.8 x 4.4..10.6 box.
+CENTRAL_HIGHLAND_POLYGON = (
+    (12.65, 12.58),
+    (18.02, 12.42),
+    (17.34, 11.84),
+    (17.32, 11.24),
+    (17.76, 10.68),
+    (17.76, 9.00),
+    (19.38, 9.00),
+    (19.38, 6.34),
+    (17.50, 6.34),
+    (17.12, 5.42),
+    (15.65, 2.80),
+    (10.40, 2.80),
+    (10.75, 3.34),
+    (10.75, 4.45),
+    (10.25, 5.00),
+    (10.25, 6.34),
+    (8.65, 6.34),
+    (8.65, 8.65),
+    (10.25, 8.65),
+    (10.28, 9.52),
+)
+CENTRAL_HIGHLAND = (
+    min(x for x, _ in CENTRAL_HIGHLAND_POLYGON),
+    max(x for x, _ in CENTRAL_HIGHLAND_POLYGON),
+    min(y for _, y in CENTRAL_HIGHLAND_POLYGON),
+    max(y for _, y in CENTRAL_HIGHLAND_POLYGON),
+)
+
+# The trapezoid-highland modules are T-shaped in the vector layout.  The
+# blue-side outline is traced from the lower-right module; the red side is its
+# exact field-centred mirror.
+BLUE_TRAPEZOID_HIGHLAND_POLYGON = (
+    (20.44, 4.58),
+    (22.58, 4.58),
+    (21.93, 3.21),
+    (24.68, 3.21),
+    (24.44, 0.91),
+    (16.97, 0.91),
+    (16.75, 1.46),
+    (18.11, 1.61),
+    (18.52, 1.87),
+)
+RED_TRAPEZOID_HIGHLAND_POLYGON = tuple(
+    (FIELD_WIDTH - x, FIELD_HEIGHT - y)
+    for x, y in BLUE_TRAPEZOID_HIGHLAND_POLYGON
+)
+RED_TRAPEZOID_HIGHLAND = (
+    min(x for x, _ in RED_TRAPEZOID_HIGHLAND_POLYGON),
+    max(x for x, _ in RED_TRAPEZOID_HIGHLAND_POLYGON),
+    min(y for _, y in RED_TRAPEZOID_HIGHLAND_POLYGON),
+    max(y for _, y in RED_TRAPEZOID_HIGHLAND_POLYGON),
+)
+BLUE_TRAPEZOID_HIGHLAND = (
+    min(x for x, _ in BLUE_TRAPEZOID_HIGHLAND_POLYGON),
+    max(x for x, _ in BLUE_TRAPEZOID_HIGHLAND_POLYGON),
+    min(y for _, y in BLUE_TRAPEZOID_HIGHLAND_POLYGON),
+    max(y for _, y in BLUE_TRAPEZOID_HIGHLAND_POLYGON),
+)
 # Road gain cards sit near the lower red / upper blue field edges.  These
 # tighter rectangles cover the card pair and the dataset's activation cluster,
 # rather than painting the surrounding roadway as one large gain area.
@@ -78,8 +164,34 @@ RED_ROAD_CROSSING_CARDS = ((8.25, 2.0), (8.25, 2.5))
 BLUE_ROAD_CROSSING_CARDS = ((19.75, 13.0), (19.75, 12.5))
 RED_TERRAIN_HIGHLAND = (6.0, 7.8, 5.8, 7.6)
 BLUE_TERRAIN_HIGHLAND = (20.2, 22.0, 7.4, 9.2)
-RED_FLY_SLOPE = (13.0, 16.3, 0.0, 1.2)
-BLUE_FLY_SLOPE = (12.0, 15.3, 13.8, 15.0)
+# Fly slopes are the two long horizontal modules marked at the lower and
+# upper field edges.  Their vector outlines are slightly skewed rather than
+# axis-aligned rectangles; the red and blue sides are kept as independent
+# traces because the surrounding wall offsets are not pixel-identical.
+RED_FLY_SLOPE_POLYGON = (
+    (10.18, 1.57),
+    (16.64, 1.48),
+    (16.77, 0.45),
+    (10.31, 0.49),
+)
+BLUE_FLY_SLOPE_POLYGON = (
+    (10.99, 14.52),
+    (17.91, 14.67),
+    (17.93, 13.43),
+    (11.29, 13.54),
+)
+RED_FLY_SLOPE = (
+    min(x for x, _ in RED_FLY_SLOPE_POLYGON),
+    max(x for x, _ in RED_FLY_SLOPE_POLYGON),
+    min(y for _, y in RED_FLY_SLOPE_POLYGON),
+    max(y for _, y in RED_FLY_SLOPE_POLYGON),
+)
+BLUE_FLY_SLOPE = (
+    min(x for x, _ in BLUE_FLY_SLOPE_POLYGON),
+    max(x for x, _ in BLUE_FLY_SLOPE_POLYGON),
+    min(y for _, y in BLUE_FLY_SLOPE_POLYGON),
+    max(y for _, y in BLUE_FLY_SLOPE_POLYGON),
+)
 RED_TUNNEL = (2.8, 4.5, 9.8, 11.7)
 BLUE_TUNNEL = (23.5, 25.2, 3.3, 5.2)
 RED_BASE_GAIN = (1.8, 3.4, 6.3, 8.7)

@@ -124,6 +124,36 @@ class RobotPropertyUITests(unittest.TestCase):
             all(team == "blue" for _, team, _ in self.app.robot_property_regions)
         )
 
+    def test_map_region_layers_are_hidden_until_selected_in_bottom_panel(self) -> None:
+        self.render_at((0, 0))
+        self.assertFalse(self.app.map_layers_panel_open)
+        self.assertTrue(
+            all(not visible for visible in self.app.map_layer_visibility.values())
+        )
+
+        expand = next(
+            rect for rect, action, _, _ in self.app.click_regions
+            if action == "toggle_map_layers_panel"
+        )
+        self.app._handle_mouse_click(expand.center)
+        self.render_at((0, 0))
+        self.assertTrue(self.app.map_layers_panel_open)
+
+        road = next(
+            rect for rect, action, target, _ in self.app.click_regions
+            if action == "toggle_map_layer" and target == "zone:terrain_road"
+        )
+        self.app._handle_mouse_click(road.center)
+        self.assertTrue(self.app.map_layer_visibility["zone:terrain_road"])
+        self.assertTrue(self.app.show_field_zones)
+
+        collapse = next(
+            rect for rect, action, _, _ in self.app.click_regions
+            if action == "toggle_map_layers_panel"
+        )
+        self.app._handle_mouse_click(collapse.center)
+        self.assertFalse(self.app.map_layers_panel_open)
+
     def test_replay_property_panels_use_dataset_health_and_heat_limits(self) -> None:
         self.app.bridge.close()
         match = MatchRecord(

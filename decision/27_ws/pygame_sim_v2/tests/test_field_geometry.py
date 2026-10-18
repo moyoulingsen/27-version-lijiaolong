@@ -10,11 +10,18 @@ import statistics
 from rm2026_sim.field_geometry import (
     BLUE_START_POSITIONS,
     BLUE_OUTPOST,
+    BLUE_FLY_SLOPE_POLYGON,
+    BLUE_SUPPLY_POLYGON,
+    BLUE_TRAPEZOID_HIGHLAND_POLYGON,
+    CENTRAL_HIGHLAND_POLYGON,
     FIELD_HEIGHT,
     FIELD_WIDTH,
     RED_OUTPOST,
     RED_HOME,
     RED_START_POSITIONS,
+    RED_FLY_SLOPE_POLYGON,
+    RED_SUPPLY_POLYGON,
+    RED_TRAPEZOID_HIGHLAND_POLYGON,
     RUNE_POSITIONS,
 )
 from rm2026_sim.field_rules import FIELD_ZONES
@@ -180,6 +187,57 @@ class FieldGeometryTests(unittest.TestCase):
         central = next(zone for zone in FIELD_ZONES if zone.name == "central_highland")
         self.assertTrue(central.contains(red_x, red_y))
         self.assertTrue(central.contains(blue_x, blue_y))
+
+    def test_supply_and_central_highland_follow_vector_polygons(self) -> None:
+        zones = {zone.name: zone for zone in FIELD_ZONES}
+        red_supply = zones["red_supply"]
+        blue_supply = zones["blue_supply"]
+        central = zones["central_highland"]
+
+        self.assertEqual(red_supply.polygon, RED_SUPPLY_POLYGON)
+        self.assertEqual(blue_supply.polygon, BLUE_SUPPLY_POLYGON)
+        self.assertEqual(len(red_supply.polygon), 6)
+        self.assertTrue(red_supply.contains(2.10, 1.30))
+        self.assertFalse(red_supply.contains(1.20, 1.30))
+        self.assertFalse(red_supply.contains(4.10, 2.00))
+        self.assertEqual(
+            {(round(FIELD_WIDTH - x, 3), round(FIELD_HEIGHT - y, 3)) for x, y in red_supply.polygon},
+            {(round(x, 3), round(y, 3)) for x, y in blue_supply.polygon},
+        )
+
+        self.assertEqual(central.polygon, CENTRAL_HIGHLAND_POLYGON)
+        self.assertGreaterEqual(len(central.polygon), 12)
+        self.assertTrue(central.contains(14.0, 7.5))
+        self.assertTrue(central.contains(13.5, 12.0))
+        self.assertFalse(central.contains(14.0, 1.80))
+        self.assertFalse(central.contains(20.0, 8.0))
+
+        blue_trapezoid = zones["blue_trapezoid"]
+        red_trapezoid = zones["red_trapezoid"]
+        self.assertEqual(blue_trapezoid.polygon, BLUE_TRAPEZOID_HIGHLAND_POLYGON)
+        self.assertEqual(red_trapezoid.polygon, RED_TRAPEZOID_HIGHLAND_POLYGON)
+        self.assertEqual(len(blue_trapezoid.polygon), 9)
+        self.assertTrue(blue_trapezoid.contains(22.0, 4.0))
+        self.assertTrue(blue_trapezoid.contains(23.8, 2.0))
+        self.assertFalse(blue_trapezoid.contains(17.0, 2.0))
+        self.assertFalse(blue_trapezoid.contains(23.0, 4.5))
+        self.assertEqual(
+            {
+                (round(FIELD_WIDTH - x, 3), round(FIELD_HEIGHT - y, 3))
+                for x, y in blue_trapezoid.polygon
+            },
+            {(round(x, 3), round(y, 3)) for x, y in red_trapezoid.polygon},
+        )
+
+        red_fly = zones["red_fly_slope"]
+        blue_fly = zones["blue_fly_slope"]
+        self.assertEqual(red_fly.polygon, RED_FLY_SLOPE_POLYGON)
+        self.assertEqual(blue_fly.polygon, BLUE_FLY_SLOPE_POLYGON)
+        self.assertEqual(len(red_fly.polygon), 4)
+        self.assertTrue(red_fly.contains(15.0, 0.5))
+        self.assertTrue(blue_fly.contains(13.5, 14.5))
+        self.assertFalse(red_fly.contains(9.5, 1.0))
+        self.assertFalse(blue_fly.contains(18.5, 14.0))
 
 
 if __name__ == "__main__":

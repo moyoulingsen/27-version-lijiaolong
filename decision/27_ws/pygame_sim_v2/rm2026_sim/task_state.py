@@ -71,6 +71,7 @@ EVADE_OFFSETS = (
     (-0.85, 0.65),
 )
 SUPPLY_ZONE = RED_SUPPLY_ZONE
+SUPPLY_FIELD_ZONE = next(zone for zone in FIELD_ZONES if zone.name == "red_supply")
 PATROL_POINTS = CONSERVATIVE_PATROL_POINTS
 
 # v2 rule-fidelity constants.  The task-one sheet keeps the sentry in "task"
@@ -2587,5 +2588,4 @@ def _segment_zone_entry_time(
 
 
 def in_supply_zone(x: float, y: float) -> bool:
-    minimum_x, maximum_x, minimum_y, maximum_y = SUPPLY_ZONE
-    return minimum_x <= x <= maximum_x and minimum_y <= y <= maximum_y
+    return SUPPLY_FIELD_ZONE.contains(x, y)

@@ -414,7 +414,7 @@ class V2RuleTests(unittest.TestCase):
         scenario = TaskScenario(defence_buff=0)
         sentry = SentryState(x=low[0], y=low[1])
         scenario.update(0.0, sentry)
-        sentry.x, sentry.y = 7.0, 4.0
+        sentry.x, sentry.y = 2.1, 1.3
         scenario.update(0.5, sentry)
         sentry.x, sentry.y = high
         scenario.update(0.5, sentry)
