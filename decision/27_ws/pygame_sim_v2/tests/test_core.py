@@ -79,6 +79,28 @@ class SentryStateTests(unittest.TestCase):
         sentry.update(10.0, 1.0, 1.0, arena)
         self.assertEqual((sentry.x, sentry.y), (28.0, 15.0))
 
+    def test_manual_and_automatic_commands_share_gazebo_power_model(self) -> None:
+        arena = Arena()
+        manual = SentryState(manual_control=True)
+        automatic = SentryState()
+
+        for _ in range(20):
+            manual.update(
+                0.02, 1.0, 0.0, arena,
+                spin_enabled=False, turret_enabled=False,
+            )
+            automatic.update(
+                0.02, 0.0, 0.0, arena,
+                spin_enabled=False, turret_enabled=False,
+                chassis_move_x=1.0, chassis_move_y=0.0,
+            )
+
+        self.assertGreater(manual.chassis_power, 0.0)
+        self.assertAlmostEqual(manual.chassis_power, automatic.chassis_power)
+        self.assertAlmostEqual(
+            manual.chassis_velocity_x, automatic.chassis_velocity_x
+        )
+
     def test_turret_rotates_automatically_without_manual_control(self) -> None:
         sentry = SentryState(turret_speed=math.radians(90.0))
         sentry.update(1.0, 0.0, 0.0, Arena())
@@ -406,6 +428,12 @@ class TaskScenarioTests(unittest.TestCase):
         self.assertEqual(scenario.evaluate(SentryState()).behavior, "低血量回血")
         scenario.sentry_hp = 400.0
         self.assertEqual(scenario.evaluate(SentryState()).behavior, "巡逻")
+
+    def test_default_sentry_has_no_manual_defence_override(self) -> None:
+        scenario = TaskScenario()
+
+        self.assertEqual(scenario.defence_buff, 0)
+        self.assertAlmostEqual(scenario.effective_sentry_defence, -0.25)
 
     def test_respawn_requires_supply_before_firing_unlocks(self) -> None:
         scenario = TaskScenario(enemy_outpost_hp=0.0)

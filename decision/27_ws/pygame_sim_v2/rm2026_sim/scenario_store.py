@@ -81,6 +81,8 @@ def restore_snapshot(
         "own_robot_power",
         "robot_invincible_remaining",
         "own_robot_invincible_remaining",
+        "robot_out_of_combat_seconds",
+        "own_robot_out_of_combat_seconds",
         "robot_revive_progress",
         "own_robot_revive_progress",
         "robot_revive_required",
@@ -91,11 +93,27 @@ def restore_snapshot(
                 int(target_id): float(value)
                 for target_id, value in (task_data.get(resource_name) or {}).items()
             }
-    for flag_name in ("robot_weak_state", "own_robot_weak_state"):
+    for flag_name in (
+        "robot_weak_state",
+        "own_robot_weak_state",
+        "robot_heat_locked",
+        "own_robot_heat_locked",
+        "robot_heat_permanent_lock",
+        "own_robot_heat_permanent_lock",
+    ):
         if flag_name in task_data:
             task_data[flag_name] = {
                 int(target_id): bool(value)
                 for target_id, value in (task_data.get(flag_name) or {}).items()
+            }
+    for source_name in (
+        "robot_revive_invincibility_source",
+        "own_robot_revive_invincibility_source",
+    ):
+        if source_name in task_data:
+            task_data[source_name] = {
+                int(target_id): str(value)
+                for target_id, value in (task_data.get(source_name) or {}).items()
             }
     for timer_name in ("robot_death_elapsed", "own_robot_death_elapsed"):
         if timer_name in task_data:
@@ -133,15 +151,117 @@ def restore_snapshot(
             }
     if "zone_inside" in task_data:
         task_data["zone_inside"] = set(task_data.get("zone_inside") or [])
-    if "base_gain_occupants" in task_data:
+    for occupant_name in (
+        "base_gain_occupants",
+        "trapezoid_gain_occupants",
+        "central_highland_occupants",
+        "outpost_gain_occupants",
+        "assembly_gain_occupants",
+        "supply_gain_occupants",
+        "fort_own_occupants",
+        "fort_enemy_occupants",
+    ):
+        if occupant_name not in task_data:
+            continue
         restored_occupants = {
             team: [int(target_id) for target_id in (target_ids or [])]
-            for team, target_ids in (task_data.get("base_gain_occupants") or {}).items()
+            for team, target_ids in (task_data.get(occupant_name) or {}).items()
             if team in ("red", "blue")
         }
-        task_data["base_gain_occupants"] = {
+        task_data[occupant_name] = {
             "red": restored_occupants.get("red", []),
             "blue": restored_occupants.get("blue", []),
+        }
+    if "central_highland_owners" in task_data:
+        task_data["central_highland_owners"] = {
+            str(zone_id): str(owner)
+            for zone_id, owner in (task_data.get("central_highland_owners") or {}).items()
+            if owner in ("red", "blue")
+        }
+    if "central_highland_exit_grace" in task_data:
+        restored_grace: dict[str, dict[str, dict[int, float]]] = {}
+        for zone_id, teams in (
+            task_data.get("central_highland_exit_grace") or {}
+        ).items():
+            if not isinstance(teams, dict):
+                continue
+            restored_grace[str(zone_id)] = {
+                team: {
+                    int(target_id): max(0.0, float(value))
+                    for target_id, value in (teams.get(team) or {}).items()
+                }
+                for team in ("red", "blue")
+            }
+        task_data["central_highland_exit_grace"] = restored_grace
+    for fort_value_name in ("fort_reserve_ammo", "fort_reserve_capacity"):
+        if fort_value_name in task_data:
+            values = task_data.get(fort_value_name) or {}
+            task_data[fort_value_name] = {
+                "red": max(0, int(values.get("red", 0))),
+                "blue": max(0, int(values.get("blue", 0))),
+            }
+    for fort_timer_name in (
+        "fort_enemy_capture_elapsed",
+        "fort_enemy_capture_grace",
+    ):
+        if fort_timer_name in task_data:
+            timers = task_data.get(fort_timer_name) or {}
+            task_data[fort_timer_name] = {
+                team: {
+                    int(target_id): max(0.0, float(value))
+                    for target_id, value in (timers.get(team) or {}).items()
+                }
+                for team in ("red", "blue")
+            }
+    for terrain_value_name in (
+        "terrain_sequence_elapsed",
+        "terrain_standard_defence",
+        "terrain_standard_remaining",
+        "terrain_tunnel_defence_remaining",
+        "terrain_tunnel_cooling_remaining",
+        "terrain_road_cooldown",
+    ):
+        if terrain_value_name in task_data:
+            values = task_data.get(terrain_value_name) or {}
+            task_data[terrain_value_name] = {
+                team: {
+                    int(target_id): max(0.0, float(value))
+                    for target_id, value in (values.get(team) or {}).items()
+                }
+                for team in ("red", "blue")
+            }
+    for terrain_list_name in (
+        "terrain_sequence_cards",
+        "terrain_cards_inside",
+    ):
+        if terrain_list_name in task_data:
+            values = task_data.get(terrain_list_name) or {}
+            task_data[terrain_list_name] = {
+                team: {
+                    int(target_id): [str(card_id) for card_id in (card_ids or [])]
+                    for target_id, card_ids in (values.get(team) or {}).items()
+                }
+                for team in ("red", "blue")
+            }
+    if "terrain_last_positions" in task_data:
+        values = task_data.get("terrain_last_positions") or {}
+        task_data["terrain_last_positions"] = {
+            team: {
+                int(target_id): [float(position[0]), float(position[1])]
+                for target_id, position in (values.get(team) or {}).items()
+                if isinstance(position, (list, tuple)) and len(position) >= 2
+            }
+            for team in ("red", "blue")
+        }
+    if "assembly_gain_elapsed" in task_data:
+        restored_elapsed = {
+            team: max(0.0, float(value))
+            for team, value in (task_data.get("assembly_gain_elapsed") or {}).items()
+            if team in ("red", "blue")
+        }
+        task_data["assembly_gain_elapsed"] = {
+            "red": restored_elapsed.get("red", 0.0),
+            "blue": restored_elapsed.get("blue", 0.0),
         }
     if "assembly_completed" in task_data:
         task_data["assembly_completed"] = set(
@@ -173,11 +293,10 @@ def restore_snapshot(
 
     controlled = snapshot.get("controlled_robot_id")
     controlled_robot_id = int(controlled) if controlled is not None else None
-    return (
-        TaskScenario(**task_data),
-        SentryState(**sentry_data),
-        controlled_robot_id,
-    )
+    task = TaskScenario(**task_data)
+    task.set_central_highland_zones(task.central_highland_zones)
+    task.set_terrain_crossing_cards(task.terrain_crossing_cards)
+    return task, SentryState(**sentry_data), controlled_robot_id
 
 
 def delete_snapshot(

@@ -1,8 +1,7 @@
-"""Map annotation types and the independent energy-rune rule helpers.
+"""Map annotation types and independent field-rule helpers.
 
-The field annotations are deliberately geometry-only for now.  Their future
-effects are represented by empty ``FieldZone`` shells and are not applied by
-the task simulator until the user supplies the final polygons and attributes.
+The editor owns the geometry.  ``TaskScenario`` consumes configured polygons
+for gain-point occupancy and ordered terrain-crossing card detection.
 """
 
 from __future__ import annotations
@@ -20,16 +19,16 @@ from .field_geometry import RUNE_POSITIONS
 REGION_TYPES = (
     ("region_01_supply_red", "补给区增益点（红方）"),
     ("region_01_supply_blue", "补给区增益点（蓝方）"),
-    ("region_02_road", "地形跨越增益点（公路）"),
-    ("region_03_tunnel", "地形跨越增益点（隧道）"),
-    ("region_04_fly_slope", "地形跨越增益点（飞坡）"),
+    ("region_02_road", "地形跨越卡（公路，按低→高添加）"),
+    ("region_03_tunnel", "地形跨越卡（隧道，按端→中→端添加）"),
+    ("region_04_fly_slope", "地形跨越卡（飞坡，每两处一组）"),
     ("region_05_trapezoid_highland_red", "梯形高地增益点（红方）"),
     ("region_05_trapezoid_highland_blue", "梯形高地增益点（蓝方）"),
     ("region_06_base_red", "基地增益点（红方）"),
     ("region_06_base_blue", "基地增益点（蓝方）"),
     ("region_07_fort_red", "堡垒增益点（红方）"),
     ("region_07_fort_blue", "堡垒增益点（蓝方）"),
-    ("region_08_highland", "地形跨越增益点（高地）"),
+    ("region_08_highland", "地形跨越卡（高地，按低→高添加）"),
     ("region_09_outpost_red", "前哨站增益点（红方）"),
     ("region_09_outpost_blue", "前哨站增益点（蓝方）"),
     ("region_11_central_highland", "中央高地增益点兼地形跨越增益点（高地）"),

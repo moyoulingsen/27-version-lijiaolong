@@ -26,7 +26,7 @@ from .field_rules import (
     RUNE_POSITIONS,
     canonical_region_id,
 )
-from .field_geometry import BLUE_BASE, BLUE_OUTPOST
+from .field_geometry import BLUE_BASE, BLUE_OUTPOST, FIELD_WIDTH
 from .map_asset import load_p5_pgm
 from .map_regions import (
     geometry_payload,
@@ -177,6 +177,14 @@ class SimulatorApp:
             STATIC_COLLISION_RECTANGLES,
             inflation=ROBOT_ENTITY_COLLISION_RADIUS,
         )
+        self.los_grid = OccupancyGrid.from_pgm(
+            map_image,
+            self.arena,
+            collision_radius=0.0,
+        ).with_blocked_rectangles(
+            STATIC_COLLISION_RECTANGLES,
+            inflation=0.0,
+        )
         self.planning_grid = OccupancyGrid.from_pgm(
             map_image,
             self.arena,
@@ -197,6 +205,7 @@ class SimulatorApp:
         self.robot_property_team = "red"
         self.hovered_robot_key: tuple[str, int] | None = None
         self.pinned_robot_key: tuple[str, int] | None = None
+        self.pending_fire_shooter: tuple[str, int] | None = None
         self.manual_fire_active = False
         self.hit_target_id: int | None = None
         self._manual_fire_held = False
@@ -220,10 +229,14 @@ class SimulatorApp:
             if canonical_region_id(name) in {identifier for identifier, _ in REGION_TYPES}
         }
         self.custom_map_polygons: list[dict] = []
-        self._persistent_geometry_loaded = MAP_GEOMETRY_PATH.is_file()
+        # Keep persistence path on the fully initialized app instance.  Tests
+        # and lightweight helper objects created with ``__new__`` must never
+        # fall back to the user's real map_regions.json file.
+        self.map_geometry_path: Path | None = MAP_GEOMETRY_PATH
+        self._persistent_geometry_loaded = self.map_geometry_path.is_file()
         if self._persistent_geometry_loaded:
             self.map_zone_overrides, self.custom_map_polygons = load_geometry_file(
-                MAP_GEOMETRY_PATH
+                self.map_geometry_path
             )
         else:
             # Migrate geometry from the newest scene once.  Future edits are
@@ -245,7 +258,7 @@ class SimulatorApp:
                     self.custom_map_polygons = migrated_custom
                     try:
                         save_geometry_file(
-                            MAP_GEOMETRY_PATH,
+                            self.map_geometry_path,
                             self.map_zone_overrides,
                             self.custom_map_polygons,
                         )
@@ -506,6 +519,7 @@ class SimulatorApp:
         self.replay_heat_limits.clear()
         self.replay_sentry_heat_limit = None
         self.replay_sentry_vulnerable = False
+        self.pending_fire_shooter = None
         self.task.robot_shots_17mm = {target_id: None for target_id in self.task.robot_shots_17mm}
         self.task.robot_shots_42mm = {target_id: None for target_id in self.task.robot_shots_42mm}
         self.task.own_robot_shots_17mm = {target_id: None for target_id in self.task.own_robot_shots_17mm}
@@ -885,6 +899,12 @@ class SimulatorApp:
                 )
 
         tracking = self._track_selected_target(decision, elapsed_seconds)
+        auto_move_x = 0.0
+        auto_move_y = 0.0
+        command_distance = self.sentry.movement_speed * elapsed_seconds
+        if command_distance > 0.0:
+            auto_move_x = (proposed[0] - current[0]) / command_distance
+            auto_move_y = (proposed[1] - current[1]) / command_distance
         self.sentry.update(
             elapsed_seconds,
             0.0,
@@ -893,6 +913,8 @@ class SimulatorApp:
             spin_enabled=decision.spin_mode > 0 and not power_cut,
             spin_speed_scale=self._spin_speed_scale(decision.spin_mode),
             turret_enabled=decision.tripod_mode > 0 and not tracking,
+            chassis_move_x=auto_move_x,
+            chassis_move_y=auto_move_y,
         )
 
     def _normalize_robot_positions(self) -> None:
@@ -1097,9 +1119,14 @@ class SimulatorApp:
             moving_radius=robot_radius,
         )
         profile = ROBOT_PROFILES.get(target_id)
-        if profile is not None and profile.power_limit is not None:
+        power_limit = (
+            self.task.robot_power_limit(target_id, team=team)
+            if profile is not None
+            else None
+        )
+        if power_limit is not None:
             movement = min(1.0, math.hypot(move_x, move_y))
-            power = movement * float(profile.power_limit)
+            power = movement * float(power_limit)
             power_map = self.task.robot_power if team == "blue" else self.task.own_robot_power
             power_map[target_id] = power
 
@@ -1433,12 +1460,128 @@ class SimulatorApp:
             name: [[float(x), float(y)] for x, y in points]
             for name, points in self.map_zone_overrides.items()
         }
+        terrain_kinds = {
+            "region_02_road": "road",
+            "region_03_tunnel": "tunnel",
+            "region_04_fly_slope": "fly_slope",
+            "region_08_highland": "highland",
+            "region_11_central_highland": "highland",
+        }
+        raw_cards: list[dict] = []
+        for region_id, kind in terrain_kinds.items():
+            points = normalize_points(self.map_zone_overrides.get(region_id))
+            if validate_polygon(points) is None:
+                raw_cards.append(
+                    {
+                        "id": f"zone:{region_id}",
+                        "kind": kind,
+                        "source_region": region_id,
+                        "name": region_id,
+                        "points": points,
+                    }
+                )
+            for item in getattr(self, "custom_map_polygons", []):
+                if canonical_region_id(item.get("kind") or "") != region_id:
+                    continue
+                points = normalize_points(item.get("points"))
+                if validate_polygon(points) is not None:
+                    continue
+                raw_cards.append(
+                    {
+                        "id": f"custom:{item.get('id')}",
+                        "kind": kind,
+                        "source_region": region_id,
+                        "name": str(item.get("name") or ""),
+                        "points": points,
+                    }
+                )
+
+        grouped: dict[tuple[str, str], list[dict]] = {}
+        for card in raw_cards:
+            name = str(card.get("name") or "").lower()
+            if "红" in name or "red" in name:
+                field_team = "red"
+            elif "蓝" in name or "blue" in name:
+                field_team = "blue"
+            else:
+                average_x = sum(point[0] for point in card["points"]) / len(card["points"])
+                field_team = "red" if average_x < FIELD_WIDTH / 2.0 else "blue"
+            card["field_team"] = field_team
+            grouped.setdefault((str(card["kind"]), field_team), []).append(card)
+
+        central_zones = [
+            {"id": card["id"], "points": card["points"]}
+            for card in raw_cards
+            if card.get("source_region") == "region_11_central_highland"
+        ]
+        configure_central = getattr(self.task, "set_central_highland_zones", None)
+        if callable(configure_central):
+            configure_central(central_zones)
+
+        terrain_cards: list[dict] = []
+        card_counts = {"road": 2, "highland": 2, "fly_slope": 2, "tunnel": 3}
+        for (kind, field_team), cards in grouped.items():
+            if kind == "highland":
+                lower_cards = [
+                    card
+                    for card in cards
+                    if card.get("source_region") == "region_08_highland"
+                ]
+                upper_cards = [
+                    card
+                    for card in cards
+                    if card.get("source_region") == "region_11_central_highland"
+                ]
+                for route, card in enumerate(lower_cards):
+                    terrain_cards.append(
+                        {
+                            "id": card["id"],
+                            "kind": kind,
+                            "field_team": field_team,
+                            "route": route,
+                            "order": 0,
+                            "points": card["points"],
+                        }
+                    )
+                for route, card in enumerate(upper_cards):
+                    terrain_cards.append(
+                        {
+                            "id": card["id"],
+                            "kind": kind,
+                            "field_team": field_team,
+                            "route": route,
+                            "order": 1,
+                            "points": card["points"],
+                        }
+                    )
+                continue
+            required = card_counts[kind]
+            for index, card in enumerate(cards):
+                terrain_cards.append(
+                    {
+                        "id": card["id"],
+                        "kind": kind,
+                        "field_team": field_team,
+                        "route": index // required,
+                        "order": index % required,
+                        "points": card["points"],
+                    }
+                )
+        configure_cards = getattr(self.task, "set_terrain_crossing_cards", None)
+        if callable(configure_cards):
+            configure_cards(terrain_cards)
 
     def _save_persistent_geometry(self) -> bool:
         """Persist map annotations independently of the currently selected scene."""
+        path = getattr(self, "map_geometry_path", None)
+        if path is None:
+            # Deliberately refuse to guess the production path.  This protects
+            # the real annotations when unit tests construct a partial app via
+            # SimulatorApp.__new__(SimulatorApp).
+            return False
         try:
             save_geometry_file(
-                MAP_GEOMETRY_PATH,
+                path,
                 self.map_zone_overrides,
                 self.custom_map_polygons,
             )
@@ -1695,6 +1838,68 @@ class SimulatorApp:
     def _region_editor_release(self) -> None:
         self.region_edit_drag_index = None
 
+    def _fire_selected_robot_at(self, target_team: str, target_id: int) -> bool:
+        shooter = self.pending_fire_shooter
+        if shooter is None:
+            return False
+        shooter_team, shooter_id = shooter
+        if target_team == shooter_team:
+            self.task.notify("射击目标必须属于对方")
+            return True
+        try:
+            shooter_position = self.task.combatant_position(
+                shooter_team,
+                shooter_id,
+                sentry=self.sentry,
+            )
+            target_position = self.task.combatant_position(
+                target_team,
+                target_id,
+                sentry=self.sentry,
+            )
+        except ValueError as exc:
+            self.task.notify(str(exc))
+            self.pending_fire_shooter = None
+            return True
+        aim_angle = math.atan2(
+            target_position[1] - shooter_position[1],
+            target_position[0] - shooter_position[0],
+        )
+        result = self.task.execute_robot_fire(
+            shooter_id,
+            aim_angle,
+            team=shooter_team,
+            sentry=self.sentry,
+            preferred_target=target_id,
+            line_of_sight=self.los_grid.line_of_sight,
+            attack_buff=(
+                self.task.effective_attack_buff if shooter_team == "red" else 1.0
+            ),
+        )
+        self.pending_fire_shooter = None
+        if result.reason == "fired":
+            self.task.notify(
+                f"{shooter_team.upper()} {shooter_id} 号命中 "
+                f"{target_team.upper()} {target_id} 号，造成 {result.damage} 伤害"
+            )
+        elif result.reason == "fired_miss":
+            self.task.notify(
+                f"{shooter_team.upper()} {shooter_id} 号已发射，目标超距离、未对准或视线受阻"
+            )
+        else:
+            reason_labels = {
+                "no_launcher": "无发射机构",
+                "match_inactive": "比赛未进行",
+                "match_paused": "比赛已暂停",
+                "robot_destroyed": "机器人已损毁",
+                "weak_state": "机器人处于虚弱状态",
+                "respawn_fire_locked": "复活阶段禁止开火",
+                "heat_locked": "发射机构已被热量锁定",
+                "no_ammo": "允许发弹量不足",
+            }
+            self.task.notify(reason_labels.get(result.reason, "射击被裁判系统拒绝"))
+        return True
+
     def _handle_mouse_click(self, position: tuple[int, int]) -> bool:
         for rect, action, target_id, direction in reversed(self.click_regions):
             if not rect.collidepoint(position):
@@ -1805,10 +2010,14 @@ class SimulatorApp:
             elif action == "start_assembly":
                 self.task.start_assembly()
             elif action == "cancel_assembly":
-                self.task.cancel_assembly()
+                self.task.cancel_assembly(failed=True)
             elif action == "move_engineer_to_assembly":
-                self.task.own_robot_positions[2] = [2.5, 4.0]
-                self.task.notify("工程机器人已移到装配区")
+                position = self.task.assembly_zone_position("red")
+                if position is None:
+                    self.task.notify("请先在地图中标注己方装配区增益点")
+                else:
+                    self.task.own_robot_positions[2] = [position[0], position[1]]
+                    self.task.notify("工程机器人已移到装配区")
             elif action == "cycle_dart_target":
                 self.task.cycle_dart_target()
             elif action == "open_dart_gate":
@@ -1838,8 +2047,22 @@ class SimulatorApp:
                     self.task.adjust_own_robot_health(target_id, direction)
             elif action == "own_robot_ammo":
                 self.task.adjust_own_robot_ammunition(target_id, direction)
+            elif action == "enemy_robot_ammo":
+                self.task.adjust_robot_ammunition(
+                    target_id,
+                    direction,
+                    team="blue",
+                )
             elif action == "own_robot_exp":
                 self.task.adjust_own_robot_experience(target_id, 100.0)
+            elif action == "enemy_robot_exp":
+                self.task.award_experience(target_id, 100.0, team="blue")
+            elif action == "robot_fire":
+                team = "red" if direction > 0 else "blue"
+                self.pending_fire_shooter = (team, target_id)
+                self.task.notify(
+                    f"已选择 {team.upper()} {target_id} 号为射手，请点击对方目标"
+                )
             elif action == "control_own_robot":
                 if target_id == 8:
                     self._select_sentry()
@@ -1868,7 +2091,9 @@ class SimulatorApp:
                 self.hovered_robot_key = None
                 self.pinned_robot_key = None
             elif action == "robot_property":
-                self.pinned_robot_key = tuple(target_id)
+                target_key = tuple(target_id)
+                if not self._fire_selected_robot_at(*target_key):
+                    self.pinned_robot_key = target_key
             elif action == "unpin_robot_property":
                 self.pinned_robot_key = None
             return True
@@ -1956,6 +2181,7 @@ class SimulatorApp:
         self._manual_fire_held = False
         self.manual_fire_active = False
         self.hit_target_id = None
+        self.pending_fire_shooter = None
         self._restart_signal_remaining = 0.20
         self.bridge.clear_output()
         self.navigator.clear()
@@ -2038,12 +2264,18 @@ class SimulatorApp:
             return
         self.task = task
         self.sentry = sentry
+        self.pending_fire_shooter = None
         raw_geometry = self.snapshots[index].get("map_geometry")
-        if getattr(self, "_persistent_geometry_loaded", False) and MAP_GEOMETRY_PATH.is_file():
+        geometry_path = getattr(self, "map_geometry_path", None)
+        if (
+            getattr(self, "_persistent_geometry_loaded", False)
+            and geometry_path is not None
+            and geometry_path.is_file()
+        ):
             # Region annotations are global configuration, not per-scene
             # state. Loading a scene must not erase them.
             self.map_zone_overrides, self.custom_map_polygons = load_geometry_file(
-                MAP_GEOMETRY_PATH
+                geometry_path
             )
         elif isinstance(raw_geometry, dict) and raw_geometry:
             self.map_zone_overrides, self.custom_map_polygons = restore_geometry_payload(
@@ -2385,7 +2617,7 @@ class SimulatorApp:
             x,
             y,
             bar_width,
-            "底盘功率",
+            "底盘机械功率",
             self.sentry.chassis_power,
             self.task.effective_sentry_power_limit,
             (96, 151, 210),
@@ -2401,7 +2633,7 @@ class SimulatorApp:
             x,
             y,
             bar_width,
-            f"防御增益（有效 {self.task.effective_sentry_defence * 100:.0f}%）",
+            f"手动防御覆盖（有效 {self.task.effective_sentry_defence * 100:.0f}%）",
             self.task.defence_buff,
             100,
             (56, 169, 195),
@@ -2691,7 +2923,7 @@ class SimulatorApp:
             x,
             y,
             "基地虚拟护盾",
-            f"{round(self.task.own_base_shield)}/{RULE_BASE_SHIELD}",
+            f"{round(self.task.own_base_shield)}（开局 {RULE_BASE_SHIELD}）",
             width,
         )
 
@@ -3141,9 +3373,26 @@ class SimulatorApp:
             "装配状态",
             f"难度 {self.task.assembly_difficulty or '—'}｜{status}"
             f"｜等级上限 {self.task.level_cap}"
-            f"｜每10秒 +{self.task.assembly_bonus_per_10s} 金",
+            f"｜每10秒 +{self.task.assembly_bonus_per_10s} 金"
+            f"｜全队防御 {self.task.assembly_defence * 100:.0f}%",
             panel.width - 48,
         )
+        if self.task.assembly_outside_seconds > 0.0:
+            y = self._draw_key_value(
+                x,
+                y,
+                "装配区丢失",
+                f"{self.task.assembly_outside_seconds:.1f}/15.0 秒",
+                panel.width - 48,
+            )
+        if self.task.assembly_level4_cooldown_remaining > 0.0:
+            y = self._draw_key_value(
+                x,
+                y,
+                "四级失败冷却",
+                f"{self.task.assembly_level4_cooldown_remaining:.1f} 秒",
+                panel.width - 48,
+            )
         difficulty_width = (panel.width - 48 - 3 * 6) // 4
         for index in range(4):
             rect = self.pg.Rect(
@@ -3237,8 +3486,7 @@ class SimulatorApp:
         )
 
     def _engineer_in_assembly_zone(self) -> bool:
-        # Region attributes are intentionally not implemented yet.
-        return False
+        return self.task.assembly_engineer_in_zone("red")
 
     def _draw_robot_property_popup(self) -> None:
         active = self.pinned_robot_key or self.hovered_robot_key
@@ -3250,7 +3498,7 @@ class SimulatorApp:
             return
         panel = self.robot_property_panel_rect
         popup_width = min(430, max(330, panel.width - 20))
-        popup_height = 840 if target_id in ROBOT_PROFILES else 350
+        popup_height = 900 if target_id in ROBOT_PROFILES else 350
         popup = self.pg.Rect(
             max(8, panel.left - popup_width - 10),
             max(HEADER_HEIGHT + 8, panel.top + 52),
@@ -3270,9 +3518,19 @@ class SimulatorApp:
         if profile is None:
             y = self._draw_key_value(x, y, "类型", "场地建筑", popup.width - 28)
             y = self._draw_key_value(x, y, "血量", f"{round(health)}/{round(maximum)}", popup.width - 28)
+            y = self._draw_key_value(
+                x,
+                y,
+                "有效防御增益",
+                f"{self.task.building_effective_defence(target_id, team=team) * 100:.0f}%",
+                popup.width - 28,
+            )
             if target_id == 7:
                 shield = self.task.enemy_base_shield if team == "blue" else self.task.own_base_shield
-                y = self._draw_key_value(x, y, "虚拟护盾", f"{round(shield)}/{RULE_BASE_SHIELD}", popup.width - 28)
+                y = self._draw_key_value(
+                    x, y, "虚拟护盾",
+                    f"{round(shield)}（开局 {RULE_BASE_SHIELD}）", popup.width - 28,
+                )
                 outpost = self.task.enemy_outpost_hp if team == "blue" else self.task.own_outpost_hp
                 y = self._draw_key_value(x, y, "无敌状态", "前哨存活，无敌" if outpost > 0 else "可受到伤害", popup.width - 28)
             damage_label = "5（上方前装甲）/20" if target_id == 7 else "20"
@@ -3327,6 +3585,13 @@ class SimulatorApp:
                     target_id, compact=True,
                     action="own_robot_health" if team == "red" else "enemy_health",
                 )
+                y = self._draw_key_value(
+                    x,
+                    y,
+                    "有效防御增益",
+                    f"{self.task.robot_effective_defence(target_id, team=team) * 100:.0f}%",
+                    popup.width - 28,
+                )
             y = self._draw_key_value(x, y, "弹丸", profile.projectile, popup.width - 28)
             y = self._draw_key_value(x, y, "初始允许发弹量", str(profile.initial_ammo), popup.width - 28)
             if self.replay_mode:
@@ -3338,13 +3603,19 @@ class SimulatorApp:
                     x, y, "累计42mm发弹（SQLite）", self._shot_text(shots_42), popup.width - 28
                 )
             y = self._draw_key_value(x, y, "射击初速度上限", self._format_rule_value(profile.muzzle_speed_limit, "m/s"), popup.width - 28)
-            power_limit = self._format_rule_value(profile.power_limit, "W")
+            dynamic_power_limit = self.task.robot_power_limit(target_id, team=team)
+            power_limit = self._format_rule_value(dynamic_power_limit, "W")
             heat_capacity = (
-                self.replay_heat_limits.get((team, target_id), profile.heat_capacity)
+                self.replay_heat_limits.get(
+                    (team, target_id),
+                    self.task.robot_heat_limit(target_id, team=team),
+                )
                 if self.replay_mode
-                else profile.heat_capacity
+                else self.task.robot_heat_limit(target_id, team=team)
             )
             heat_limit = self._format_rule_value(heat_capacity, "")
+            q2_limit = self.task.robot_q2_limit(target_id, team=team)
+            cooling_rate = self.task.robot_heat_cooling_rate(target_id, team=team)
             current_power = (
                 self.task.robot_power_value(
                     target_id,
@@ -3359,12 +3630,16 @@ class SimulatorApp:
                     sentry=self.sentry if team == "red" and target_id == 8 else None,
                 )
             )
-            y = self._draw_key_value(x, y, "底盘功率", f"{current_power:.1f} W / {power_limit}", popup.width - 28)
+            y = self._draw_key_value(x, y, "底盘机械功率", f"{current_power:.1f} W / {power_limit}", popup.width - 28)
             y = self._draw_key_value(x, y, "底盘功率上限", power_limit, popup.width - 28)
             heat_value = "不适用" if heat_capacity is None else f"{current_heat:.1f} / {heat_limit}"
             y = self._draw_key_value(x, y, "当前热量", heat_value, popup.width - 28)
             y = self._draw_key_value(x, y, "射击热量上限", heat_limit, popup.width - 28)
-            y = self._draw_key_value(x, y, "热量冷却", self._format_rule_value(profile.heat_cooling_per_second, "/秒"), popup.width - 28)
+            y = self._draw_key_value(x, y, "Q2 永久锁定阈值", self._format_rule_value(q2_limit, ""), popup.width - 28)
+            lock_state = self.task.robot_heat_lock_state(target_id, team=team)
+            lock_label = {"normal": "正常", "q1": "Q1 锁定至热量为 0", "q2": "Q2 当局永久锁定"}[lock_state]
+            y = self._draw_key_value(x, y, "发射机构热量状态", lock_label, popup.width - 28)
+            y = self._draw_key_value(x, y, "热量冷却", self._format_rule_value(cooling_rate, "/秒（10Hz）"), popup.width - 28)
             y = self._draw_key_value(x, y, "单发热量", self._format_rule_value(profile.heat_per_shot, ""), popup.width - 28)
             y = self._draw_key_value(x, y, "弹丸单发原始伤害", str(profile.raw_projectile_damage or "—"), popup.width - 28)
             y = self._draw_key_value(x, y, "撞击扣血", str(profile.collision_damage or "不适用"), popup.width - 28)
@@ -3375,28 +3650,48 @@ class SimulatorApp:
                     x, y, "SQLite剩余弹量", "数据集未提供", popup.width - 28
                 )
             elif ammo is not None:
-                if team == "red" and target_id != 2:
+                if target_id != 2:
                     y = self._draw_adjustable_progress_bar(
                         x, y, popup.width - 28, "当前弹量", ammo,
-                        self.task.own_robot_ammunition_limit(target_id),
+                        self.task.robot_ammunition_limit(target_id),
                         (225, 166, 58), target_id, compact=True,
-                        action="own_robot_ammo",
+                        action="own_robot_ammo" if team == "red" else "enemy_robot_ammo",
                     )
                 else:
                     y = self._draw_key_value(x, y, "当前弹量", str(ammo), popup.width - 28)
+            if self.task.robot_in_own_fort_gain(team, target_id):
+                y = self._draw_key_value(
+                    x,
+                    y,
+                    "堡垒储备允许发弹量",
+                    f"{self.task.fort_reserve_ammo[team]}/"
+                    f"{self.task.fort_reserve_capacity[team]}",
+                    popup.width - 28,
+                )
             position = self.task.robot_position(target_id) if team == "blue" else self.task.own_robot_position(target_id, self.sentry)
             y = self._draw_key_value(x, y, "坐标（米）", f"{position[0]:.2f}，{position[1]:.2f}", popup.width - 28)
             y = self._draw_key_value(x, y, "控制方式", "哨兵决策" if team == "red" and target_id == 8 else "场景手动控制", popup.width - 28)
         button_y = popup.bottom - 42
-        if not self.replay_mode and target_id in ROBOT_PROFILES and (team == "red" or target_id != 5):
-            drive = self.pg.Rect(x, button_y, 86, 30)
-            self._draw_click_button(drive, "驾驶")
-            action = "control_own_robot" if team == "red" else "control_enemy_robot"
-            self.click_regions.append((drive, action, target_id, 0))
-            if team == "red" and target_id in (1, 3, 4, 5):
-                exp_button = self.pg.Rect(x + 92, button_y, 100, 30)
-                self._draw_click_button(exp_button, "经验 +100")
-                self.click_regions.append((exp_button, "own_robot_exp", target_id, 0))
+        if not self.replay_mode and target_id in ROBOT_PROFILES:
+            next_button_x = x
+            if team == "red" or target_id != 5:
+                drive = self.pg.Rect(next_button_x, button_y, 56, 30)
+                self._draw_click_button(drive, "驾驶")
+                action = "control_own_robot" if team == "red" else "control_enemy_robot"
+                self.click_regions.append((drive, action, target_id, 0))
+                next_button_x += 60
+            if profile is not None and profile.heat_per_shot is not None:
+                fire_button = self.pg.Rect(next_button_x, button_y, 72, 30)
+                self._draw_click_button(fire_button, "选择射击")
+                self.click_regions.append(
+                    (fire_button, "robot_fire", target_id, 1 if team == "red" else -1)
+                )
+                next_button_x += 76
+            if target_id in (1, 3, 4, 5):
+                exp_button = self.pg.Rect(next_button_x, button_y, 74, 30)
+                self._draw_click_button(exp_button, "经验+100")
+                exp_action = "own_robot_exp" if team == "red" else "enemy_robot_exp"
+                self.click_regions.append((exp_button, exp_action, target_id, 0))
         elif not self.replay_mode and target_id in (6, 7):
             health_action = (
                 "enemy_health" if team == "blue" else

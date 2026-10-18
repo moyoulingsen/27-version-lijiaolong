@@ -18,6 +18,7 @@ from rm2026_sim.scenario_store import capture_snapshot
 from rm2026_sim.task_state import (
     AGGRESSIVE_PATROL_POINTS,
     ATTACK,
+    DecisionView,
     HOME,
     SUPPLY,
     TaskScenario,
@@ -75,6 +76,37 @@ class RobotSimulationTests(unittest.TestCase):
             if math.dist(position, ATTACK) < 0.15:
                 break
         self.assertLess(math.dist(position, ATTACK), 0.15)
+
+    def test_automatic_motion_uses_same_chassis_power_limit_as_manual(self) -> None:
+        self.app.task.active_posture = 1
+        self.app.task.sentry_buffer_energy = 1.0
+        decision = DecisionView(
+            "自动移动测试",
+            1,
+            ATTACK,
+            1,
+            0,
+            0,
+            0,
+            0,
+            200,
+        )
+
+        peak_power = 0.0
+        for _ in range(20):
+            self.app._update_sentry_motion(0.1, 0.0, 0.0, decision)
+            peak_power = max(peak_power, self.app.sentry.chassis_power)
+            self.app.task.update(
+                0.1,
+                self.app.sentry,
+                decision_override=decision,
+                fire_request=False,
+            )
+            if self.app.task.sentry_chassis_power_cut:
+                break
+
+        self.assertGreater(peak_power, self.app.task.effective_sentry_power_limit)
+        self.assertTrue(self.app.task.sentry_chassis_power_cut)
 
     def test_manual_control_collides_with_either_team(self) -> None:
         for team in ("red", "blue"):

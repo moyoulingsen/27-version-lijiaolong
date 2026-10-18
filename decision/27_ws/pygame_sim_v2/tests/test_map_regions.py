@@ -126,6 +126,7 @@ class MapRegionGeometryTests(unittest.TestCase):
         }
         app.region_edit_target = None
         app.region_edit_custom_id = None
+        app.map_geometry_path = None
 
         app._delete_region(("custom", "custom_1"))
 
@@ -136,6 +137,15 @@ class MapRegionGeometryTests(unittest.TestCase):
         self.assertTrue(app.map_zone_overrides["region_01_supply_blue"])
         self.assertEqual(app.task.field_zone_overrides["region_01_supply_red"], [])
         self.assertTrue(messages)
+
+    def test_partial_app_cannot_overwrite_production_geometry(self) -> None:
+        app = SimulatorApp.__new__(SimulatorApp)
+        app.map_zone_overrides = {
+            "region_01_supply_red": (),
+        }
+        app.custom_map_polygons = []
+
+        self.assertFalse(app._save_persistent_geometry())
 
     def test_extra_polygon_can_replace_a_deleted_empty_slot(self) -> None:
         app = SimulatorApp.__new__(SimulatorApp)
@@ -174,6 +184,39 @@ class MapRegionGeometryTests(unittest.TestCase):
         self.assertEqual(restored_custom[0]["id"], "custom_7")
         self.assertEqual(restored_custom[0]["kind"], "region_01_supply_blue")
         self.assertTrue(restored_custom[0]["visible"])
+
+    def test_permanent_geometry_file_creates_backup_before_rewrite(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "map_regions.json"
+            original = {
+                "region_01_supply_red": (
+                    (1.0, 1.0),
+                    (2.0, 1.0),
+                    (2.0, 2.0),
+                )
+            }
+            replacement = {
+                "region_01_supply_blue": (
+                    (20.0, 1.0),
+                    (21.0, 1.0),
+                    (21.0, 2.0),
+                )
+            }
+            save_geometry_file(path, original, [])
+            save_geometry_file(path, replacement, [])
+
+            backups = list((Path(directory) / "map_regions_backups").glob("*.json"))
+            self.assertEqual(len(backups), 1)
+            restored, _ = load_geometry_file(backups[0])
+            self.assertEqual(restored, original)
+
+    def test_invalid_custom_polygon_is_not_persisted(self) -> None:
+        payload = geometry_payload(
+            {},
+            [{"id": "unfinished", "points": [], "visible": True}],
+        )
+
+        self.assertEqual(payload["custom_polygons"], [])
 
 
 if __name__ == "__main__":

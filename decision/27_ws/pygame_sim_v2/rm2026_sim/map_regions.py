@@ -7,9 +7,11 @@ stable when the Pygame window is resized or the map is letterboxed differently.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 import math
 import json
 from pathlib import Path
+import shutil
 
 from .field_rules import REGION_TYPES, canonical_region_id
 
@@ -125,7 +127,10 @@ def geometry_payload(
                 "visible": bool(item.get("visible", False)),
             }
             for item in custom_polygons
-            if isinstance(item, dict)
+            if (
+                isinstance(item, dict)
+                and validate_polygon(normalize_points(item.get("points"))) is None
+            )
         ],
     }
 
@@ -184,16 +189,37 @@ def save_geometry_file(
     path: Path,
     zone_overrides: dict[str, Sequence[Point]],
     custom_polygons: Sequence[dict],
+    *,
+    backup_limit: int = 30,
 ) -> None:
-    """Atomically save map annotations without coupling them to a scene."""
+    """Atomically save map annotations and retain rotating write backups."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(
-            geometry_payload(zone_overrides, custom_polygons),
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
+    serialized = json.dumps(
+        geometry_payload(zone_overrides, custom_polygons),
+        ensure_ascii=False,
+        indent=2,
     )
+    try:
+        current = path.read_text(encoding="utf-8") if path.is_file() else None
+    except (OSError, UnicodeDecodeError):
+        current = None
+    if current == serialized:
+        return
+
+    if path.is_file():
+        backup_directory = path.parent / f"{path.stem}_backups"
+        backup_directory.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        backup_path = backup_directory / f"{path.stem}.{stamp}{path.suffix}"
+        shutil.copy2(path, backup_path)
+        backups = sorted(
+            backup_directory.glob(f"{path.stem}.*{path.suffix}"),
+            key=lambda candidate: candidate.stat().st_mtime_ns,
+            reverse=True,
+        )
+        for expired in backups[max(1, int(backup_limit)):]:
+            expired.unlink(missing_ok=True)
+
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(serialized, encoding="utf-8")
     temporary.replace(path)

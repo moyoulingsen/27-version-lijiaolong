@@ -5,31 +5,47 @@ from __future__ import annotations
 import unittest
 
 from rm2026_sim.core import SentryState
-from rm2026_sim.field_geometry import RED_ASSEMBLY
 from rm2026_sim.task_state import TaskScenario
 
 
-class EngineeringAssemblyTests(unittest.TestCase):
-    def _place_engineer_in_zone(self, scenario: TaskScenario) -> None:
-        scenario.own_robot_positions[2] = [
-            (RED_ASSEMBLY[0] + RED_ASSEMBLY[1]) / 2.0,
-            (RED_ASSEMBLY[2] + RED_ASSEMBLY[3]) / 2.0,
-        ]
+RED_ASSEMBLY_ZONE = [[0.0, 5.0], [5.0, 5.0], [5.0, 10.0], [0.0, 10.0]]
 
-    def test_difficulty_one_completes_and_grants_income(self) -> None:
-        scenario = TaskScenario(economy=400)
-        self._place_engineer_in_zone(scenario)
-        self.assertTrue(scenario.select_assembly_difficulty(1))
+
+class EngineeringAssemblyTests(unittest.TestCase):
+    def _scenario(self, **kwargs) -> TaskScenario:
+        return TaskScenario(
+            field_zone_overrides={"region_12_assembly_red": RED_ASSEMBLY_ZONE},
+            **kwargs,
+        )
+
+    def _place_engineer_in_zone(self, scenario: TaskScenario) -> None:
+        scenario.own_robot_positions[2] = [2.5, 7.5]
+
+    def _complete(self, scenario: TaskScenario, difficulty: int) -> None:
+        self.assertTrue(scenario.select_assembly_difficulty(difficulty))
         self.assertTrue(scenario.start_assembly())
         scenario.update(scenario.assembly_required + 0.1, SentryState())
+
+    def test_unmarked_zone_blocks_assembly(self) -> None:
+        scenario = TaskScenario()
+        scenario.own_robot_positions[2] = [2.5, 7.5]
+
+        self.assertFalse(scenario.select_assembly_difficulty(1))
+        self.assertIn("标注己方装配区", scenario.event_message)
+
+    def test_difficulty_one_completes_and_grants_income(self) -> None:
+        scenario = self._scenario(economy=400)
+        self._place_engineer_in_zone(scenario)
+        self._complete(scenario, 1)
         self.assertIn(1, scenario.assembly_completed)
         self.assertEqual(scenario.assembly_bonus_per_10s, 50)
         before = scenario.economy
         scenario.update(10.0, SentryState())
-        self.assertGreater(scenario.economy, before)
+        self.assertEqual(scenario.economy, before + 50)
 
     def test_difficulty_two_needs_previous_and_time_window(self) -> None:
-        scenario = TaskScenario(remaining_time=420.0)
+        scenario = self._scenario(remaining_time=420.0)
+        self._place_engineer_in_zone(scenario)
         self.assertFalse(scenario.select_assembly_difficulty(2))
         scenario.remaining_time = 360.0
         self.assertFalse(scenario.select_assembly_difficulty(2))
@@ -37,29 +53,76 @@ class EngineeringAssemblyTests(unittest.TestCase):
         self.assertTrue(scenario.select_assembly_difficulty(2))
         self.assertEqual(scenario.assembly_difficulty, 2)
 
-    def test_difficulty_four_raises_base_hp_and_defence(self) -> None:
-        scenario = TaskScenario(
+    def test_difficulty_two_first_and_repeat_rewards_and_own_level_cap(self) -> None:
+        scenario = self._scenario(remaining_time=360.0)
+        self._place_engineer_in_zone(scenario)
+        scenario.assembly_completed.add(1)
+
+        self._complete(scenario, 2)
+        self.assertEqual(scenario.level_cap, 7)
+        self.assertEqual(scenario.enemy_level_cap, 5)
+        self.assertEqual(scenario.assembly_bonus_per_10s, 25)
+
+        self._complete(scenario, 2)
+        self.assertEqual(scenario.assembly_bonus_per_10s, 35)
+
+    def test_difficulty_three_defends_ground_robots_outpost_and_base(self) -> None:
+        scenario = self._scenario(remaining_time=300.0)
+        self._place_engineer_in_zone(scenario)
+        scenario.assembly_completed.update((1, 2))
+        self._complete(scenario, 3)
+
+        self.assertEqual(scenario.level_cap, 10)
+        self.assertEqual(scenario.assembly_bonus_per_10s, 25)
+        self.assertEqual(scenario.apply_attack_damage(1, "17mm", team="red"), 15)
+        self.assertEqual(scenario.apply_attack_damage(1, "17mm", team="blue"), 20)
+        self.assertEqual(scenario.apply_attack_damage(6, "17mm", team="red"), 15)
+        scenario.own_outpost_hp = 0
+        self.assertEqual(scenario.apply_attack_damage(7, "17mm", team="red"), 15)
+
+    def test_difficulty_four_adds_base_hp_overflow_to_shield_and_is_once_only(self) -> None:
+        scenario = self._scenario(
             remaining_time=240.0,
-            own_base_hp=5000,
+            own_base_hp=4000,
             own_base_shield=150,
         )
         self._place_engineer_in_zone(scenario)
         scenario.assembly_completed.update((1, 2, 3))
-        self.assertTrue(scenario.select_assembly_difficulty(4))
-        self.assertTrue(scenario.start_assembly())
-        scenario.update(scenario.assembly_required + 0.1, SentryState())
-        self.assertEqual(scenario.own_base_max_hp, 7000)
-        self.assertEqual(scenario.own_base_hp, 7000)
-        self.assertAlmostEqual(scenario.assembly_defence, 0.50)
+        self._complete(scenario, 4)
 
-    def test_engineer_leaving_zone_cancels_assembly(self) -> None:
-        scenario = TaskScenario()
+        self.assertEqual(scenario.own_base_max_hp, 5000)
+        self.assertEqual(scenario.own_base_hp, 5000)
+        self.assertEqual(scenario.own_base_shield, 1150)
+        self.assertAlmostEqual(scenario.assembly_defence, 0.50)
+        self.assertEqual(scenario.assembly_bonus_per_10s, 50)
+        self.assertFalse(scenario.select_assembly_difficulty(4))
+
+    def test_engineer_must_leave_for_fifteen_seconds_to_fail(self) -> None:
+        scenario = self._scenario()
         self._place_engineer_in_zone(scenario)
         scenario.select_assembly_difficulty(1)
         scenario.start_assembly()
         scenario.own_robot_positions[2] = [10.0, 10.0]
-        scenario.update(0.1, SentryState())
+
+        scenario.update(14.9, SentryState())
+        self.assertTrue(scenario.assembly_active)
+        scenario.update(0.2, SentryState())
         self.assertFalse(scenario.assembly_active)
+
+    def test_failed_fourth_level_has_ninety_second_cooldown(self) -> None:
+        scenario = self._scenario(remaining_time=240.0)
+        self._place_engineer_in_zone(scenario)
+        scenario.assembly_completed.update((1, 2, 3))
+        self.assertTrue(scenario.select_assembly_difficulty(4))
+        self.assertTrue(scenario.start_assembly())
+        scenario.own_robot_positions[2] = [10.0, 10.0]
+
+        scenario.update(15.0, SentryState())
+
+        self.assertFalse(scenario.assembly_active)
+        self.assertEqual(scenario.assembly_level4_cooldown_remaining, 90.0)
+        self._place_engineer_in_zone(scenario)
+        self.assertFalse(scenario.start_assembly())
 
 
 class DartSystemTests(unittest.TestCase):

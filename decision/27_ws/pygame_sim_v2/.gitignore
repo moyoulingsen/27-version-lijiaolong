@@ -3,3 +3,4 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 scenario_saves.json
+map_regions_backups/

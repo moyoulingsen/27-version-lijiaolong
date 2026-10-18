@@ -8,6 +8,29 @@ import math
 from .field_geometry import RED_HOME
 
 
+# Tunnel-sentry chassis parameters copied from scut_gazebo_simulation:
+# - tunnel_sentry_description/urdf/sentry.urdf.xacro
+# - simulation_gazebo_plugins/.../omni_wheel_control.hpp
+# Total mass and planar yaw inertia are calculated from every URDF link at the
+# zero joint pose using the parallel-axis theorem.  The Gazebo controller is a
+# wrench controller rather than an electrical motor model, so Pygame reports
+# controller mechanical power F·v + tau·omega (watts), not guessed motor current.
+GAZEBO_SENTRY_MASS = 8.6722129
+GAZEBO_SENTRY_YAW_INERTIA = 0.2598719172
+GAZEBO_SUPPORT_FRICTION = 0.05
+GAZEBO_GRAVITY = 9.80665
+GAZEBO_WHEEL_ARM = 0.300
+GAZEBO_MAX_FORCE = 60.0
+GAZEBO_MAX_TORQUE = 30.0
+GAZEBO_MAX_LINEAR_SPEED = 3.0
+GAZEBO_MAX_ANGULAR_SPEED = 4.0
+GAZEBO_LINEAR_GAINS = (50.0, 20.0, 2.0)
+GAZEBO_LINEAR_INTEGRAL_LIMIT = 2.0
+GAZEBO_YAW_GAINS = (2.5, 0.5, 0.05)
+GAZEBO_YAW_INTEGRAL_LIMIT = 2.0
+GAZEBO_POWER_STEP = 0.02
+
+
 @dataclass(frozen=True)
 class Arena:
     """RMUC 2026 field dimensions and source-map metadata, in metres."""
@@ -105,12 +128,189 @@ class SentryState:
     # applies the 60 J buffer / 5 s power-cut penalty.
     heat: float = 0.0
     chassis_power: float = 0.0
+    chassis_velocity_x: float = 0.0
+    chassis_velocity_y: float = 0.0
+    chassis_yaw_rate: float = 0.0
+    chassis_pid_integral_x: float = 0.0
+    chassis_pid_integral_y: float = 0.0
+    chassis_pid_integral_yaw: float = 0.0
+    chassis_pid_previous_error_x: float = 0.0
+    chassis_pid_previous_error_y: float = 0.0
+    chassis_pid_previous_error_yaw: float = 0.0
+    chassis_pid_has_previous: bool = False
 
     def enable_manual_control(self) -> None:
         self.manual_control = True
 
     def cancel_manual_control(self) -> None:
         self.manual_control = False
+
+    def reset_chassis_dynamics(self) -> None:
+        self.chassis_power = 0.0
+        self.chassis_velocity_x = 0.0
+        self.chassis_velocity_y = 0.0
+        self.chassis_yaw_rate = 0.0
+        self.chassis_pid_integral_x = 0.0
+        self.chassis_pid_integral_y = 0.0
+        self.chassis_pid_integral_yaw = 0.0
+        self.chassis_pid_previous_error_x = 0.0
+        self.chassis_pid_previous_error_y = 0.0
+        self.chassis_pid_previous_error_yaw = 0.0
+        self.chassis_pid_has_previous = False
+
+    @staticmethod
+    def _pid_step(
+        error: float,
+        previous_error: float,
+        integral_error: float,
+        has_previous: bool,
+        elapsed_seconds: float,
+        gains: tuple[float, float, float],
+        integral_limit: float,
+        output_limit: float,
+    ) -> tuple[float, float]:
+        proportional, integral, derivative = gains
+        error_rate = (
+            (error - previous_error) / elapsed_seconds
+            if has_previous and elapsed_seconds > 1e-9
+            else 0.0
+        )
+        candidate_integral = max(
+            -integral_limit,
+            min(integral_limit, integral_error + error * elapsed_seconds),
+        )
+        candidate_output = (
+            proportional * error
+            + integral * candidate_integral
+            + derivative * error_rate
+        )
+        if (
+            abs(candidate_output) <= output_limit
+            or (candidate_output > output_limit and error < 0.0)
+            or (candidate_output < -output_limit and error > 0.0)
+        ):
+            integral_error = candidate_integral
+        output = (
+            proportional * error
+            + integral * integral_error
+            + derivative * error_rate
+        )
+        return max(-output_limit, min(output_limit, output)), integral_error
+
+    def update_chassis_power(
+        self,
+        elapsed_seconds: float,
+        command_velocity_x: float,
+        command_velocity_y: float,
+        command_yaw_rate: float,
+    ) -> None:
+        """Advance the Gazebo-derived wrench model and report mechanical power."""
+        if elapsed_seconds <= 0.0:
+            return
+        target_x = max(
+            -GAZEBO_MAX_LINEAR_SPEED,
+            min(GAZEBO_MAX_LINEAR_SPEED, command_velocity_x),
+        )
+        target_y = max(
+            -GAZEBO_MAX_LINEAR_SPEED,
+            min(GAZEBO_MAX_LINEAR_SPEED, command_velocity_y),
+        )
+        target_yaw = max(
+            -GAZEBO_MAX_ANGULAR_SPEED,
+            min(GAZEBO_MAX_ANGULAR_SPEED, command_yaw_rate),
+        )
+        remaining = elapsed_seconds
+        mechanical_energy = 0.0
+        while remaining > 1e-9:
+            step = min(GAZEBO_POWER_STEP, remaining)
+            error_x = target_x - self.chassis_velocity_x
+            error_y = target_y - self.chassis_velocity_y
+            error_yaw = target_yaw - self.chassis_yaw_rate
+            force_x, self.chassis_pid_integral_x = self._pid_step(
+                error_x,
+                self.chassis_pid_previous_error_x,
+                self.chassis_pid_integral_x,
+                self.chassis_pid_has_previous,
+                step,
+                GAZEBO_LINEAR_GAINS,
+                GAZEBO_LINEAR_INTEGRAL_LIMIT,
+                GAZEBO_MAX_FORCE,
+            )
+            force_y, self.chassis_pid_integral_y = self._pid_step(
+                error_y,
+                self.chassis_pid_previous_error_y,
+                self.chassis_pid_integral_y,
+                self.chassis_pid_has_previous,
+                step,
+                GAZEBO_LINEAR_GAINS,
+                GAZEBO_LINEAR_INTEGRAL_LIMIT,
+                GAZEBO_MAX_FORCE,
+            )
+            force_magnitude = math.hypot(force_x, force_y)
+            if force_magnitude > GAZEBO_MAX_FORCE:
+                scale = GAZEBO_MAX_FORCE / force_magnitude
+                force_x *= scale
+                force_y *= scale
+            torque, self.chassis_pid_integral_yaw = self._pid_step(
+                error_yaw,
+                self.chassis_pid_previous_error_yaw,
+                self.chassis_pid_integral_yaw,
+                self.chassis_pid_has_previous,
+                step,
+                GAZEBO_YAW_GAINS,
+                GAZEBO_YAW_INTEGRAL_LIMIT,
+                GAZEBO_MAX_TORQUE,
+            )
+
+            speed = math.hypot(self.chassis_velocity_x, self.chassis_velocity_y)
+            resistance = GAZEBO_SUPPORT_FRICTION * GAZEBO_SENTRY_MASS * GAZEBO_GRAVITY
+            resistance_x = 0.0
+            resistance_y = 0.0
+            if speed > 1e-6:
+                resistance_x = -resistance * self.chassis_velocity_x / speed
+                resistance_y = -resistance * self.chassis_velocity_y / speed
+            yaw_resistance = 0.0
+            if abs(self.chassis_yaw_rate) > 1e-6:
+                yaw_resistance = -math.copysign(
+                    resistance * GAZEBO_WHEEL_ARM,
+                    self.chassis_yaw_rate,
+                )
+
+            self.chassis_velocity_x += (
+                (force_x + resistance_x) / GAZEBO_SENTRY_MASS * step
+            )
+            self.chassis_velocity_y += (
+                (force_y + resistance_y) / GAZEBO_SENTRY_MASS * step
+            )
+            self.chassis_yaw_rate += (
+                (torque + yaw_resistance) / GAZEBO_SENTRY_YAW_INERTIA * step
+            )
+            self.chassis_velocity_x = max(
+                -GAZEBO_MAX_LINEAR_SPEED,
+                min(GAZEBO_MAX_LINEAR_SPEED, self.chassis_velocity_x),
+            )
+            self.chassis_velocity_y = max(
+                -GAZEBO_MAX_LINEAR_SPEED,
+                min(GAZEBO_MAX_LINEAR_SPEED, self.chassis_velocity_y),
+            )
+            self.chassis_yaw_rate = max(
+                -GAZEBO_MAX_ANGULAR_SPEED,
+                min(GAZEBO_MAX_ANGULAR_SPEED, self.chassis_yaw_rate),
+            )
+            mechanical_power = max(
+                0.0,
+                force_x * self.chassis_velocity_x
+                + force_y * self.chassis_velocity_y
+                + torque * self.chassis_yaw_rate,
+            )
+            mechanical_energy += mechanical_power * step
+            self.chassis_pid_previous_error_x = error_x
+            self.chassis_pid_previous_error_y = error_y
+            self.chassis_pid_previous_error_yaw = error_yaw
+            self.chassis_pid_has_previous = True
+            remaining -= step
+
+        self.chassis_power = mechanical_energy / elapsed_seconds
 
     def update(
         self,
@@ -122,6 +322,8 @@ class SentryState:
         spin_enabled: bool = True,
         spin_speed_scale: float = 1.0,
         turret_enabled: bool = True,
+        chassis_move_x: float | None = None,
+        chassis_move_y: float | None = None,
     ) -> None:
         if elapsed_seconds < 0.0:
             raise ValueError("elapsed_seconds must be non-negative")
@@ -135,25 +337,25 @@ class SentryState:
             self.turret_angle = normalize_angle(
                 self.turret_angle + self.turret_speed * elapsed_seconds
             )
-
+        power_move_x = move_x if chassis_move_x is None else chassis_move_x
+        power_move_y = move_y if chassis_move_y is None else chassis_move_y
+        length = math.hypot(power_move_x, power_move_y)
+        if length > 1.0:
+            power_move_x /= length
+            power_move_y /= length
+        self.update_chassis_power(
+            elapsed_seconds,
+            power_move_x * self.movement_speed,
+            power_move_y * self.movement_speed,
+            self.spin_speed * spin_speed_scale if spin_enabled else 0.0,
+        )
         if not self.manual_control:
-            self.chassis_power = min(
-                200.0,
-                (abs(spin_speed_scale) * 18.0 if spin_enabled else 0.0)
-                + (8.0 if turret_enabled else 0.0),
-            )
             return
 
         length = math.hypot(move_x, move_y)
         if length > 1.0:
             move_x /= length
             move_y /= length
-        self.chassis_power = min(
-            200.0,
-            abs(move_x) * 65.0
-            + abs(move_y) * 65.0
-            + (abs(spin_speed_scale) * 18.0 if spin_enabled else 0.0),
-        )
         self.x, self.y = arena.clamp(
             self.x + move_x * self.movement_speed * elapsed_seconds,
             self.y + move_y * self.movement_speed * elapsed_seconds,
