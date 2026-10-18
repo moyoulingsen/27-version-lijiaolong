@@ -1,5 +1,10 @@
 # 27-version-lijiaolong
 
-## RMUC 2026 二维验证
+### 简介
+这是本人在华南虎实习期的workspace，主要围绕哨兵决策
 
-Pygame 哨兵二维验证器位于 [`decision/27_ws/pygame_sim`](decision/27_ws/pygame_sim/README.md)，包含 2026 场地平面图、世界坐标换算、人工移动、小陀螺和云台模拟。
+### git说明
+（feat）添加
+（fit）修改
+（docx）文档资料
+（comment）单纯加入注释
