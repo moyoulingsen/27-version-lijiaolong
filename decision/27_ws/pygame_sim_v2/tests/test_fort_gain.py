@@ -63,7 +63,9 @@ class FortGainTests(unittest.TestCase):
         self.assertTrue(scenario.robot_in_enemy_fort_gain("blue", 1))
 
         scenario.set_robot_position(1, (13.0, 13.0), team="red")
-        scenario.update(0.0, sentry)
+        scenario.update(1.9, sentry)
+        self.assertEqual(scenario.fort_own_occupants["red"], [1])
+        scenario.update(0.2, sentry)
         self.assertEqual(scenario.fort_own_occupants["red"], [3])
 
     def test_enemy_occupation_requires_three_minutes_and_destroyed_outpost(self) -> None:
@@ -198,7 +200,7 @@ class FortGainTests(unittest.TestCase):
 
         scenario.set_robot_position(3, (13.0, 13.0), team="red")
         scenario.update(2.0, sentry)
-        self.assertEqual(scenario.fort_enemy_capture_elapsed["red"][3], 10.0)
+        self.assertEqual(scenario.fort_enemy_capture_elapsed["red"][3], 12.0)
         scenario.set_robot_position(3, (20.0, 7.0), team="red")
         scenario.update(10.0, sentry)
         self.assertTrue(scenario.enemy_base_armor_deployed)
@@ -213,6 +215,8 @@ class FortGainTests(unittest.TestCase):
         scenario.update(10.0, sentry)
         scenario.set_robot_position(3, (13.0, 13.0), team="red")
         scenario.update(3.1, sentry)
+        self.assertEqual(scenario.fort_enemy_capture_elapsed["red"][3], 12.0)
+        scenario.update(2.0, sentry)
         self.assertNotIn(3, scenario.fort_enemy_capture_elapsed["red"])
 
         scenario.set_robot_position(3, (20.0, 7.0), team="red")

@@ -50,6 +50,8 @@ class BaseGainAndRespawnTests(unittest.TestCase):
 
         scenario.set_robot_position(3, (8.0, 8.0), team="red")
         scenario.update(0.1, sentry)
+        self.assertIn(3, scenario.base_gain_occupants["red"])
+        scenario.update(2.0, sentry)
         self.assertNotIn(3, scenario.base_gain_occupants["red"])
         self.assertEqual(scenario.robot_effective_defence(3, team="red"), 0.0)
 

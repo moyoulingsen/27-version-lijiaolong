@@ -67,13 +67,16 @@ class AssemblyGainTests(unittest.TestCase):
         scenario.update(60.0, sentry)
         self.assertEqual(scenario.assembly_gain_elapsed["red"], 60.0)
         scenario.set_robot_position(2, (10.0, 10.0), team="red")
-        scenario.update(20.0, sentry)
-        self.assertEqual(scenario.assembly_gain_elapsed["red"], 60.0)
+        scenario.update(1.9, sentry)
+        self.assertAlmostEqual(scenario.assembly_gain_elapsed["red"], 61.9)
+        self.assertEqual(scenario.apply_attack_damage(2, "42mm", team="red"), 0)
+        scenario.update(18.1, sentry)
+        self.assertEqual(scenario.assembly_gain_elapsed["red"], 62.0)
         self.assertEqual(scenario.apply_attack_damage(2, "42mm", team="red"), 200)
         scenario.set_robot_position(2, (3.0, 7.0), team="red")
         scenario.update(30.0, sentry)
 
-        self.assertEqual(scenario.assembly_gain_elapsed["red"], 90.0)
+        self.assertEqual(scenario.assembly_gain_elapsed["red"], 92.0)
         self.assertIn(2, scenario.assembly_gain_occupants["red"])
 
     def test_invincibility_expires_after_180_cumulative_seconds(self) -> None:

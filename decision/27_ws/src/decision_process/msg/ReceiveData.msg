@@ -12,3 +12,5 @@ float32[] radar_data
 uint16 pending_ammo
 uint16 economy
 bool aggressive_patrol
+float32[] conservative_patrol_points
+float32[] aggressive_patrol_points

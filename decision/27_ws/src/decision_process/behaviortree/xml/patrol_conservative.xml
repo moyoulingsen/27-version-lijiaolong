@@ -19,7 +19,7 @@
       <KeepRunningUntilFailure name="ConservativePatrolLoop">
         <Sequence name="ConservativePatrolPoint">
           <SelectPatrolPoint
-            points="5.0,5.0;9.0,5.0;9.0,9.0"
+            points="{conservative_patrol_points}"
             index="{waypoint_index}"
             target_x="{target_x}"
             target_y="{target_y}"

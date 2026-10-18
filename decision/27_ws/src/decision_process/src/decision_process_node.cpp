@@ -74,6 +74,29 @@ Type blackboardValue(
   return value;
 }
 
+std::string patrolPointsText(
+  const std::vector<float> & values, const std::string & fallback)
+{
+  if(values.size() < 4U || values.size() % 2U != 0U)
+  {
+    return fallback;
+  }
+  std::ostringstream output;
+  for(std::size_t index = 0; index < values.size(); index += 2U)
+  {
+    if(!std::isfinite(values[index]) || !std::isfinite(values[index + 1U]))
+    {
+      return fallback;
+    }
+    if(index > 0U)
+    {
+      output << ';';
+    }
+    output << values[index] << ',' << values[index + 1U];
+  }
+  return output.str();
+}
+
 }  // namespace
 
 namespace decision_process
@@ -196,6 +219,10 @@ private:
     blackboard_->set("waypoint_index", 0);
     blackboard_->set("tolerance", goal_tolerance_);
     blackboard_->set("economy_threshold", 400.0);
+    blackboard_->set(
+      "conservative_patrol_points", std::string{"5.0,5.0;9.0,5.0;9.0,9.0"});
+    blackboard_->set(
+      "aggressive_patrol_points", std::string{"12.0,3.0;14.0,7.5;12.3,11.7"});
     blackboard_->set("persistent_targets", std::string{});
     blackboard_->set("targets", std::string{});
     blackboard_->set("goal_frame_id", std::string{"map"});
@@ -483,6 +510,16 @@ private:
     blackboard_->set("defense_buff", static_cast<double>(referee_.defence_buff) / 100.0);
     blackboard_->set("economy", static_cast<double>(referee_.economy));
     blackboard_->set("aggressive_patrol", referee_.aggressive_patrol);
+    blackboard_->set(
+      "conservative_patrol_points",
+      patrolPointsText(
+        referee_.conservative_patrol_points,
+        "5.0,5.0;9.0,5.0;9.0,9.0"));
+    blackboard_->set(
+      "aggressive_patrol_points",
+      patrolPointsText(
+        referee_.aggressive_patrol_points,
+        "12.0,3.0;14.0,7.5;12.3,11.7"));
     blackboard_->set("targets", observedTargets());
     blackboard_->set("persistent_targets", persistentTargets());
     blackboard_->set("health_decreased", health_decreased_);

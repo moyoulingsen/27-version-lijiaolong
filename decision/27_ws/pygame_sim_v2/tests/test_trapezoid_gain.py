@@ -54,6 +54,12 @@ class TrapezoidGainTests(unittest.TestCase):
         self.assertEqual(scenario.robot_effective_defence(4, team="red"), 0.0)
         self.assertEqual(scenario.effective_sentry_defence, TRAPEZOID_GAIN_DEFENCE)
 
+        scenario.set_robot_position(3, (8.0, 8.0), team="red")
+        scenario.update(1.9, sentry)
+        self.assertIn(3, scenario.trapezoid_gain_occupants["red"])
+        scenario.update(0.2, sentry)
+        self.assertNotIn(3, scenario.trapezoid_gain_occupants["red"])
+
     def test_robot_cannot_occupy_enemy_trapezoid_gain(self) -> None:
         scenario = self.configured_scenario(defence_buff=0)
         sentry = SentryState(x=25.0, y=7.5)

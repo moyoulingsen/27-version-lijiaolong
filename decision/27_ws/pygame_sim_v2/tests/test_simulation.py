@@ -168,6 +168,26 @@ class RobotSimulationTests(unittest.TestCase):
             self.assertIsNotNone(decision)
             self.assertEqual(decision.goal, expected_goal)
 
+    def test_manual_patrol_routes_are_published_and_map_legacy_bt_goals(self) -> None:
+        aggressive = [[11.0, 3.0], [15.0, 7.5], [11.0, 12.0]]
+        conservative = [[3.0, 4.0], [7.0, 4.0]]
+        self.app.task.configure_patrol_routes(conservative, aggressive)
+        self.app._restart_signal_remaining = 0.0
+
+        state = self.app._bridge_state()
+
+        self.assertEqual(state["aggressive_patrol_points"], aggressive)
+        self.assertEqual(state["conservative_patrol_points"], conservative)
+        self.app.bridge = SimpleNamespace(
+            connected=True,
+            latest_output=lambda: {
+                "serial": {},
+                "autoaim": {"target": 0},
+                "goal": list(AGGRESSIVE_PATROL_POINTS[1]),
+            },
+        )
+        self.assertEqual(self.app._bridge_decision().goal, tuple(aggressive[1]))
+
     def test_friendly_scene_changes_do_not_enter_bridge_or_target_selection(self) -> None:
         self.app._restart_signal_remaining = 0.0
         before_bridge = self.app._bridge_state()

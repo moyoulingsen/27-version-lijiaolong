@@ -178,11 +178,11 @@ def restore_snapshot(
             for zone_id, owner in (task_data.get("central_highland_owners") or {}).items()
             if owner in ("red", "blue")
         }
-    if "central_highland_exit_grace" in task_data:
+    for grace_name in ("central_highland_exit_grace", "gain_exit_grace"):
+        if grace_name not in task_data:
+            continue
         restored_grace: dict[str, dict[str, dict[int, float]]] = {}
-        for zone_id, teams in (
-            task_data.get("central_highland_exit_grace") or {}
-        ).items():
+        for zone_id, teams in (task_data.get(grace_name) or {}).items():
             if not isinstance(teams, dict):
                 continue
             restored_grace[str(zone_id)] = {
@@ -192,7 +192,36 @@ def restore_snapshot(
                 }
                 for team in ("red", "blue")
             }
-        task_data["central_highland_exit_grace"] = restored_grace
+        task_data[grace_name] = restored_grace
+    if "outpost_rebuild_progress" in task_data:
+        values = task_data.get("outpost_rebuild_progress") or {}
+        task_data["outpost_rebuild_progress"] = {
+            team: {
+                target_id: max(
+                    0.0,
+                    float(
+                        (values.get(team) or {}).get(
+                            str(target_id),
+                            (values.get(team) or {}).get(target_id, 0.0),
+                        )
+                    ),
+                )
+                for target_id in (1, 2, 3, 4, 8)
+            }
+            for team in ("red", "blue")
+        }
+    if "base_hp_damage_taken" in task_data:
+        values = task_data.get("base_hp_damage_taken") or {}
+        task_data["base_hp_damage_taken"] = {
+            team: max(0.0, float(values.get(team, 0.0)))
+            for team in ("red", "blue")
+        }
+    if "outpost_rebuild_chances" in task_data:
+        values = task_data.get("outpost_rebuild_chances") or {}
+        task_data["outpost_rebuild_chances"] = {
+            team: max(0, int(values.get(team, 0)))
+            for team in ("red", "blue")
+        }
     for fort_value_name in ("fort_reserve_ammo", "fort_reserve_capacity"):
         if fort_value_name in task_data:
             values = task_data.get(fort_value_name) or {}

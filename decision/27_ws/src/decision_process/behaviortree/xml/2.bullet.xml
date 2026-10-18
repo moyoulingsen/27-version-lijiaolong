@@ -74,6 +74,7 @@
                       economy="{economy}"
                       economy_threshold="400.0"/>
         <SubTree ID="ConservativePatrol"
+                 conservative_patrol_points="{conservative_patrol_points}"
                  current_x="{current_x}"
                  current_y="{current_y}"
                  localization_valid="{localization_valid}"
@@ -90,6 +91,7 @@
                  gimbal_enabled="{gimbal_enabled}"/>
       </ReactiveSequence>
       <SubTree ID="AggressivePatrol"
+               aggressive_patrol_points="{aggressive_patrol_points}"
                current_x="{current_x}"
                current_y="{current_y}"
                localization_valid="{localization_valid}"
@@ -162,6 +164,8 @@
                      goal_frame_id="{goal_frame_id}"
                      goal_enabled="{goal_enabled}"/>
             <SubTree ID="NoAmmoPatrolDecision"
+                     conservative_patrol_points="{conservative_patrol_points}"
+                     aggressive_patrol_points="{aggressive_patrol_points}"
                      current_x="{current_x}"
                      current_y="{current_y}"
                      localization_valid="{localization_valid}"

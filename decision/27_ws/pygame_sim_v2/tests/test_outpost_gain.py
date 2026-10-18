@@ -49,7 +49,7 @@ class OutpostGainTests(unittest.TestCase):
         self.assertEqual(scenario.outpost_gain_occupants["red"], [])
         self.assertEqual(scenario.effective_sentry_defence, -0.25)
 
-    def test_outpost_destruction_immediately_removes_existing_gain(self) -> None:
+    def test_outpost_destruction_uses_two_second_exit_delay(self) -> None:
         scenario = self.configured_scenario(defence_buff=0, active_posture=1)
         sentry = SentryState(x=3.0, y=7.5)
         scenario.update(0.1, sentry)
@@ -64,6 +64,10 @@ class OutpostGainTests(unittest.TestCase):
         )
 
         self.assertEqual(scenario.own_outpost_hp, 0)
+        self.assertIn(8, scenario.outpost_gain_occupants["red"])
+        scenario.update(1.9, sentry)
+        self.assertIn(8, scenario.outpost_gain_occupants["red"])
+        scenario.update(0.2, sentry)
         self.assertNotIn(8, scenario.outpost_gain_occupants["red"])
         self.assertEqual(scenario.effective_sentry_defence, -0.25)
 

@@ -31,9 +31,11 @@ from .map_asset import load_p5_pgm
 from .map_regions import (
     geometry_payload,
     load_geometry_file,
+    load_patrol_routes_file,
     nearest_segment_index,
     normalize_points,
     restore_geometry_payload,
+    restore_patrol_routes,
     save_geometry_file,
     validate_polygon,
 )
@@ -70,6 +72,7 @@ from .task_state import (
     RULE_DAMAGE_17MM,
     RULE_DAMAGE_42MM,
     RULE_OUTPOST_HP,
+    OUTPOST_REBUILD_SECONDS,
     HEAT_PERMANENT_EXTRA,
     DecisionView,
     FIELD_ENTITIES,
@@ -109,13 +112,15 @@ MAP_OVERLAY_LABELS = (
 # The v1/C++ behaviour tree still sends this historical outpost goal.  v2 maps
 # it to the configured opening attack point.
 LEGACY_ATTACK_POINT = (17.0, 10.0)
+LEGACY_AGGRESSIVE_PATROL_POINTS = (
+    (12.0, 3.0),
+    (16.0, 7.5),
+    (12.3, 11.7),
+)
 LEGACY_GOAL_ALIASES = (
     (LEGACY_ATTACK_POINT, ATTACK),
     ((4.971, 7.5), HOME),
     ((2.0, 1.0), SUPPLY),
-    ((12.0, 3.0), AGGRESSIVE_PATROL_POINTS[0]),
-    ((16.0, 7.5), AGGRESSIVE_PATROL_POINTS[1]),
-    ((12.3, 11.7), AGGRESSIVE_PATROL_POINTS[2]),
 )
 
 # The PGM remains the sole source for static map/building obstacles.  Keep this
@@ -229,6 +234,11 @@ class SimulatorApp:
             if canonical_region_id(name) in {identifier for identifier, _ in REGION_TYPES}
         }
         self.custom_map_polygons: list[dict] = []
+        patrol_defaults = {
+            "conservative": CONSERVATIVE_PATROL_POINTS,
+            "aggressive": AGGRESSIVE_PATROL_POINTS,
+        }
+        self.patrol_routes = restore_patrol_routes({}, patrol_defaults)
         # Keep persistence path on the fully initialized app instance.  Tests
         # and lightweight helper objects created with ``__new__`` must never
         # fall back to the user's real map_regions.json file.
@@ -237,6 +247,10 @@ class SimulatorApp:
         if self._persistent_geometry_loaded:
             self.map_zone_overrides, self.custom_map_polygons = load_geometry_file(
                 self.map_geometry_path
+            )
+            self.patrol_routes = load_patrol_routes_file(
+                self.map_geometry_path,
+                patrol_defaults,
             )
         else:
             # Migrate geometry from the newest scene once.  Future edits are
@@ -247,20 +261,34 @@ class SimulatorApp:
                     migrated_overrides, migrated_custom = restore_geometry_payload(
                         raw_geometry
                     )
+                    migrated_routes = restore_patrol_routes(
+                        raw_geometry,
+                        patrol_defaults,
+                    )
                 else:
                     task_data = snapshot.get("task") or {}
                     legacy_overrides = task_data.get("field_zone_overrides")
                     migrated_overrides, migrated_custom = restore_geometry_payload(
                         {"zone_overrides": legacy_overrides}
                     ) if legacy_overrides else ({}, [])
-                if migrated_overrides or migrated_custom:
+                    migrated_routes = restore_patrol_routes({}, patrol_defaults)
+                if (
+                    migrated_overrides
+                    or migrated_custom
+                    or (
+                        isinstance(raw_geometry, dict)
+                        and bool(raw_geometry.get("patrol_routes"))
+                    )
+                ):
                     self.map_zone_overrides = migrated_overrides
                     self.custom_map_polygons = migrated_custom
+                    self.patrol_routes = migrated_routes
                     try:
                         save_geometry_file(
                             self.map_geometry_path,
                             self.map_zone_overrides,
                             self.custom_map_polygons,
+                            patrol_routes=self.patrol_routes,
                         )
                         self._persistent_geometry_loaded = True
                     except OSError:
@@ -270,9 +298,11 @@ class SimulatorApp:
         # its polygons available to live rule evaluation immediately on every
         # startup, without requiring the user to edit or reload a scene first.
         self._sync_task_zone_overrides()
+        self._sync_task_patrol_routes()
         self.region_edit_target: str | None = None
         self.region_edit_custom_id: str | None = None
         self.region_edit_kind: str | None = None
+        self.region_edit_patrol_kind: str | None = None
         self.region_edit_new_custom = False
         self.region_edit_points: list[tuple[float, float]] = []
         self.region_edit_drag_index: int | None = None
@@ -561,7 +591,12 @@ class SimulatorApp:
                         ):
                             self._save_snapshot()
                         elif event.key == self.pg.K_ESCAPE:
-                            if self.region_edit_new_custom or self.region_edit_target is not None or self.region_edit_custom_id is not None:
+                            if (
+                                self.region_edit_new_custom
+                                or self.region_edit_target is not None
+                                or self.region_edit_custom_id is not None
+                                or self.region_edit_patrol_kind is not None
+                            ):
                                 self._cancel_region_edit()
                             elif self.subsystem_panel_open:
                                 self.subsystem_panel_open = False
@@ -807,11 +842,12 @@ class SimulatorApp:
             or
             self.region_edit_target is not None
             or self.region_edit_custom_id is not None
+            or self.region_edit_patrol_kind is not None
             or self.region_edit_points
         ) else 0
         return max(
             MAP_LAYER_PANEL_EXPANDED_HEIGHT,
-            82 + rows * 38 + editor_height + region_rows * 34,
+            116 + rows * 38 + editor_height + region_rows * 34,
         )
 
     def _movement_input(self) -> tuple[float, float]:
@@ -1262,6 +1298,22 @@ class SimulatorApp:
                 # field frame as local control, including the clear firing point.
                 goal = canonical_goal
                 break
+        for fallback_route in (
+            LEGACY_AGGRESSIVE_PATROL_POINTS,
+            AGGRESSIVE_PATROL_POINTS,
+        ):
+            for legacy_goal, configured_goal in zip(
+                fallback_route,
+                self.task.aggressive_patrol_route,
+            ):
+                if self._near_goal(goal, legacy_goal):
+                    # Compatibility with an older, not-yet-rebuilt BT process.
+                    # A rebuilt process consumes the configured routes directly.
+                    goal = tuple(configured_goal)
+                    break
+            else:
+                continue
+            break
         return DecisionView(
             behavior=self._bridge_behavior(goal, target),
             posture=int(serial.get("posture", 3)),
@@ -1338,6 +1390,12 @@ class SimulatorApp:
             "camera_yaw": self.sentry.turret_angle,
             "autoaim": self._simulated_autoaim(enemy_hp),
             "aggressive_patrol": self.task.patrol_is_aggressive,
+            "conservative_patrol_points": [
+                list(point) for point in self.task.conservative_patrol_route
+            ],
+            "aggressive_patrol_points": [
+                list(point) for point in self.task.aggressive_patrol_route
+            ],
         }
 
     def _enemy_health_snapshot(self) -> list[int]:
@@ -1571,6 +1629,13 @@ class SimulatorApp:
         if callable(configure_cards):
             configure_cards(terrain_cards)
 
+    def _sync_task_patrol_routes(self) -> None:
+        """Apply the globally edited routes to local and bridged decisions."""
+        self.task.configure_patrol_routes(
+            self.patrol_routes["conservative"],
+            self.patrol_routes["aggressive"],
+        )
+
     def _save_persistent_geometry(self) -> bool:
         """Persist map annotations independently of the currently selected scene."""
         path = getattr(self, "map_geometry_path", None)
@@ -1584,6 +1649,7 @@ class SimulatorApp:
                 path,
                 self.map_zone_overrides,
                 self.custom_map_polygons,
+                patrol_routes=self.patrol_routes,
             )
         except OSError:
             self.task.notify("区域已更新，但永久配置写入失败，请检查目录权限")
@@ -1615,6 +1681,7 @@ class SimulatorApp:
             return
         self.region_edit_target = target
         self.region_edit_custom_id = None
+        self.region_edit_patrol_kind = None
         self.region_edit_kind = target
         self.region_edit_new_custom = False
         self.region_edit_points = list(self._zone_points(zone))
@@ -1622,9 +1689,25 @@ class SimulatorApp:
         self.region_edit_error = ""
         self.task.notify(f"正在编辑{zone.label or zone.name}：拖动顶点或点击边线添加点")
 
+    def _start_patrol_route_edit(self, route_kind: str) -> None:
+        if route_kind not in ("conservative", "aggressive"):
+            return
+        self.region_edit_target = None
+        self.region_edit_custom_id = None
+        self.region_edit_kind = None
+        self.region_edit_patrol_kind = route_kind
+        self.region_edit_new_custom = False
+        self.region_edit_points = list(self.patrol_routes[route_kind])
+        self.region_edit_drag_index = None
+        self.region_edit_error = ""
+        label = "保守" if route_kind == "conservative" else "激进"
+        self.map_layer_visibility["patrol_route"] = True
+        self.task.notify(f"正在编辑{label}巡逻路线：按顺序点击添加点，右键撤销末点")
+
     def _start_custom_region(self, kind: str | None = None) -> None:
         self.region_edit_target = None
         self.region_edit_custom_id = None
+        self.region_edit_patrol_kind = None
         candidate = canonical_region_id(kind or REGION_TYPES[0][0])
         allowed = {identifier for identifier, _ in REGION_TYPES}
         self.region_edit_kind = candidate if candidate in allowed else REGION_TYPES[0][0]
@@ -1642,6 +1725,7 @@ class SimulatorApp:
         if item is None:
             return
         self.region_edit_target = None
+        self.region_edit_patrol_kind = None
         self.region_edit_custom_id = identifier
         candidate = canonical_region_id(item.get("kind") or REGION_TYPES[0][0])
         allowed = {identifier for identifier, _ in REGION_TYPES}
@@ -1656,6 +1740,7 @@ class SimulatorApp:
         self.region_edit_target = None
         self.region_edit_custom_id = None
         self.region_edit_kind = None
+        self.region_edit_patrol_kind = None
         self.region_edit_new_custom = False
         self.region_edit_points = []
         self.region_edit_drag_index = None
@@ -1668,6 +1753,19 @@ class SimulatorApp:
 
     def _save_region_edit(self) -> bool:
         points = normalize_points(self.region_edit_points)
+        if self.region_edit_patrol_kind is not None:
+            if len(points) < 2:
+                self.region_edit_error = "巡逻路线至少需要 2 个点"
+                self.task.notify("巡逻路线不能保存：至少需要 2 个点")
+                return False
+            route_kind = self.region_edit_patrol_kind
+            self.patrol_routes[route_kind] = points
+            self._sync_task_patrol_routes()
+            self._save_persistent_geometry()
+            label = "保守" if route_kind == "conservative" else "激进"
+            self.task.notify(f"已保存{label}巡逻路线，并同步到行为树输入")
+            self._cancel_region_edit()
+            return True
         error = validate_polygon(points)
         if error is not None:
             self.region_edit_error = error
@@ -1771,6 +1869,7 @@ class SimulatorApp:
             self.region_edit_new_custom
             or self.region_edit_target is not None
             or self.region_edit_custom_id is not None
+            or self.region_edit_patrol_kind is not None
         ):
             return False
         viewport = self._viewport()
@@ -1787,6 +1886,12 @@ class SimulatorApp:
                 nearest_index, nearest_distance = index, distance
 
         is_new_custom = self.region_edit_new_custom
+        if self.region_edit_patrol_kind is not None:
+            if nearest_index is not None and nearest_distance <= MAP_EDITOR_HIT_RADIUS:
+                self.region_edit_drag_index = nearest_index
+                return True
+            self.region_edit_points.append(world)
+            return True
         if is_new_custom:
             if (
                 len(self.region_edit_points) >= 3
@@ -1816,6 +1921,7 @@ class SimulatorApp:
             self.region_edit_new_custom
             or self.region_edit_target is not None
             or self.region_edit_custom_id is not None
+            or self.region_edit_patrol_kind is not None
         )
         if not active or not self._viewport().contains(*position):
             return False
@@ -1979,6 +2085,8 @@ class SimulatorApp:
                 self._set_all_map_layers(False)
             elif action == "new_custom_region":
                 self._start_custom_region()
+            elif action == "edit_patrol_route":
+                self._start_patrol_route_edit(str(target_id))
             elif action == "new_region_instance":
                 self._start_custom_region(str(target_id))
             elif action == "region_editor_new_instance":
@@ -2228,7 +2336,11 @@ class SimulatorApp:
             self.sentry,
             self.controlled_robot_id,
             self.controlled_robot_team,
-            geometry_payload(self.map_zone_overrides, self.custom_map_polygons),
+            geometry_payload(
+                self.map_zone_overrides,
+                self.custom_map_polygons,
+                self.patrol_routes,
+            ),
         )
         self.snapshots.append(snapshot)
         self.active_snapshot_index = len(self.snapshots) - 1
@@ -2255,6 +2367,15 @@ class SimulatorApp:
             self.custom_map_polygons = []
         if not hasattr(self, "map_zone_overrides"):
             self.map_zone_overrides = {}
+        if not hasattr(self, "patrol_routes"):
+            self.patrol_routes = {
+                "conservative": normalize_points(
+                    getattr(self.task, "conservative_patrol_route", CONSERVATIVE_PATROL_POINTS)
+                ),
+                "aggressive": normalize_points(
+                    getattr(self.task, "aggressive_patrol_route", AGGRESSIVE_PATROL_POINTS)
+                ),
+            }
         try:
             task, sentry, controlled_robot_id = restore_snapshot(
                 self.snapshots[index]
@@ -2277,9 +2398,23 @@ class SimulatorApp:
             self.map_zone_overrides, self.custom_map_polygons = load_geometry_file(
                 geometry_path
             )
+            self.patrol_routes = load_patrol_routes_file(
+                geometry_path,
+                {
+                    "conservative": CONSERVATIVE_PATROL_POINTS,
+                    "aggressive": AGGRESSIVE_PATROL_POINTS,
+                },
+            )
         elif isinstance(raw_geometry, dict) and raw_geometry:
             self.map_zone_overrides, self.custom_map_polygons = restore_geometry_payload(
                 raw_geometry
+            )
+            self.patrol_routes = restore_patrol_routes(
+                raw_geometry,
+                {
+                    "conservative": CONSERVATIVE_PATROL_POINTS,
+                    "aggressive": AGGRESSIVE_PATROL_POINTS,
+                },
             )
         else:
             self.map_zone_overrides = {
@@ -2289,6 +2424,7 @@ class SimulatorApp:
             }
             self.custom_map_polygons = []
         self._sync_task_zone_overrides()
+        self._sync_task_patrol_routes()
         self.map_layer_visibility = {
             key: value
             for key, value in self.map_layer_visibility.items()
@@ -2303,6 +2439,7 @@ class SimulatorApp:
         self.region_edit_target = None
         self.region_edit_custom_id = None
         self.region_edit_kind = None
+        self.region_edit_patrol_kind = None
         self.region_edit_new_custom = False
         self.region_edit_points = []
         self.region_edit_drag_index = None
@@ -2926,6 +3063,19 @@ class SimulatorApp:
             f"{round(self.task.own_base_shield)}（开局 {RULE_BASE_SHIELD}）",
             width,
         )
+        rebuild_progress = self.task.outpost_rebuild_progress.get("red", {})
+        rebuild_id, rebuild_value = max(
+            rebuild_progress.items(), key=lambda item: item[1], default=(2, 0.0)
+        )
+        rebuild_required = OUTPOST_REBUILD_SECONDS.get(rebuild_id, 10.0)
+        y = self._draw_key_value(
+            x,
+            y,
+            "前哨重建",
+            f"机会 {self.task.outpost_rebuild_chances.get('red', 0)}｜"
+            f"{rebuild_id}号 {rebuild_value:.1f}/{rebuild_required:.0f}s",
+            width,
+        )
 
         y = self._draw_section_title(x, y + 3, "机器人属性列表")
         y = self._draw_robot_team_tabs(x, y, width)
@@ -3209,6 +3359,7 @@ class SimulatorApp:
             or
             self.region_edit_target is not None
             or self.region_edit_custom_id is not None
+            or self.region_edit_patrol_kind is not None
             or bool(self.region_edit_points)
         )
         if editor_active:
@@ -3228,14 +3379,21 @@ class SimulatorApp:
                     None,
                 )
                 status = f"正在编辑：{item.get('name', '自定义区域') if item else '自定义区域'}"
+            elif self.region_edit_patrol_kind is not None:
+                route_label = "保守" if self.region_edit_patrol_kind == "conservative" else "激进"
+                status = f"正在编辑：{route_label}巡逻路线"
             status_text = self.panel_label_font.render(status, True, (244, 211, 115))
             self.screen.blit(status_text, (panel.left + 12, editor_top + 3))
             editor_buttons = (
-                ("保存区域", "region_editor_save", 82),
+                (
+                    "保存路线" if self.region_edit_patrol_kind else "保存区域",
+                    "region_editor_save",
+                    82,
+                ),
                 ("清空重画", "region_editor_clear", 82),
                 ("取消", "region_editor_cancel", 68),
             )
-            if self.region_edit_kind:
+            if self.region_edit_kind and self.region_edit_patrol_kind is None:
                 editor_buttons = (
                     ("再画一个", "region_editor_new_instance", 96),
                     *editor_buttons,
@@ -3252,6 +3410,16 @@ class SimulatorApp:
                 error = self.panel_label_font.render(self.region_edit_error, True, (236, 103, 103))
                 self.screen.blit(error, (panel.left + 12, editor_top + 32))
             editor_top += 56
+
+        route_section = self.panel_label_font.render("可编辑巡逻路线", True, (191, 202, 206))
+        self.screen.blit(route_section, (panel.left + 12, editor_top + 2))
+        route_button_x = panel.left + 142
+        for route_kind, label in (("conservative", "编辑保守路线"), ("aggressive", "编辑激进路线")):
+            rect = self.pg.Rect(route_button_x, editor_top, 116, 26)
+            self._draw_click_button(rect, label)
+            self.click_regions.append((rect, "edit_patrol_route", route_kind, 0))
+            route_button_x += 122
+        editor_top += 34
 
         section = self.panel_label_font.render("可编辑区域", True, (191, 202, 206))
         self.screen.blit(section, (panel.left + 12, editor_top + 2))
@@ -4452,6 +4620,7 @@ class SimulatorApp:
             not self.region_edit_new_custom
             and self.region_edit_target is None
             and self.region_edit_custom_id is None
+            and self.region_edit_patrol_kind is None
             and not self.region_edit_points
         ):
             return
@@ -4460,8 +4629,14 @@ class SimulatorApp:
             for x, y in self.region_edit_points
         ]
         if len(points) >= 2:
-            self.pg.draw.lines(self.screen, (248, 211, 90), len(points) >= 3, points, 3)
-        if len(points) >= 3:
+            self.pg.draw.lines(
+                self.screen,
+                (248, 211, 90),
+                self.region_edit_patrol_kind is not None or len(points) >= 3,
+                points,
+                3,
+            )
+        if len(points) >= 3 and self.region_edit_patrol_kind is None:
             overlay = self.pg.Surface(self.screen.get_size(), self.pg.SRCALPHA)
             self.pg.draw.polygon(overlay, (248, 211, 90, 32), points)
             self.screen.blit(overlay, (0, 0))
@@ -4654,13 +4829,13 @@ class SimulatorApp:
     def _draw_patrol_route(self, viewport: Viewport) -> None:
         routes = (
             (
-                CONSERVATIVE_PATROL_POINTS,
+                self.task.conservative_patrol_route,
                 "保守",
                 (68, 116, 132) if not self.task.patrol_is_aggressive else (137, 151, 157),
                 not self.task.patrol_is_aggressive,
             ),
             (
-                AGGRESSIVE_PATROL_POINTS,
+                self.task.aggressive_patrol_route,
                 "激进",
                 (222, 86, 48) if self.task.patrol_is_aggressive else (190, 126, 101),
                 self.task.patrol_is_aggressive,

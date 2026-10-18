@@ -17,6 +17,7 @@ from .field_rules import REGION_TYPES, canonical_region_id
 
 
 Point = tuple[float, float]
+PATROL_ROUTE_KEYS = ("conservative", "aggressive")
 
 
 def normalize_points(
@@ -107,9 +108,10 @@ def nearest_segment_index(point: Point, polygon: Sequence[Point]) -> int:
 def geometry_payload(
     zone_overrides: dict[str, Sequence[Point]],
     custom_polygons: Sequence[dict],
+    patrol_routes: dict[str, Sequence[Point]] | None = None,
 ) -> dict:
     """Build the JSON-safe map-geometry portion of a scenario snapshot."""
-    return {
+    payload = {
         "zone_overrides": {
             canonical_region_id(name): [[float(x), float(y)] for x, y in points]
             for name, points in zone_overrides.items()
@@ -133,6 +135,13 @@ def geometry_payload(
             )
         ],
     }
+    if patrol_routes is not None:
+        payload["patrol_routes"] = {
+            key: [[float(x), float(y)] for x, y in normalize_points(patrol_routes.get(key))]
+            for key in PATROL_ROUTE_KEYS
+            if len(normalize_points(patrol_routes.get(key))) >= 2
+        }
+    return payload
 
 
 def restore_geometry_payload(payload: dict | None) -> tuple[dict[str, tuple[Point, ...]], list[dict]]:
@@ -185,17 +194,49 @@ def load_geometry_file(path: Path) -> tuple[dict[str, tuple[Point, ...]], list[d
     return restore_geometry_payload(payload)
 
 
+def restore_patrol_routes(
+    payload: dict | None,
+    defaults: dict[str, Sequence[Point]],
+) -> dict[str, tuple[Point, ...]]:
+    """Restore two ordered patrol loops, falling back route-by-route."""
+    payload = payload if isinstance(payload, dict) else {}
+    raw_routes = payload.get("patrol_routes")
+    raw_routes = raw_routes if isinstance(raw_routes, dict) else {}
+    routes: dict[str, tuple[Point, ...]] = {}
+    for key in PATROL_ROUTE_KEYS:
+        points = normalize_points(raw_routes.get(key))
+        if len(points) < 2:
+            points = normalize_points(defaults.get(key))
+        routes[key] = points
+    return routes
+
+
+def load_patrol_routes_file(
+    path: Path,
+    defaults: dict[str, Sequence[Point]],
+) -> dict[str, tuple[Point, ...]]:
+    """Load ordered patrol loops from the shared permanent map file."""
+    if not path.is_file():
+        return restore_patrol_routes({}, defaults)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        payload = {}
+    return restore_patrol_routes(payload, defaults)
+
+
 def save_geometry_file(
     path: Path,
     zone_overrides: dict[str, Sequence[Point]],
     custom_polygons: Sequence[dict],
     *,
+    patrol_routes: dict[str, Sequence[Point]] | None = None,
     backup_limit: int = 30,
 ) -> None:
     """Atomically save map annotations and retain rotating write backups."""
     path.parent.mkdir(parents=True, exist_ok=True)
     serialized = json.dumps(
-        geometry_payload(zone_overrides, custom_polygons),
+        geometry_payload(zone_overrides, custom_polygons, patrol_routes),
         ensure_ascii=False,
         indent=2,
     )

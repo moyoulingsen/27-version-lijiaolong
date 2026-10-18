@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from collections import Counter
 from types import SimpleNamespace
 
 from rm2026_sim.app import SimulatorApp
@@ -12,6 +13,7 @@ from rm2026_sim.field_rules import REGION_DEFINITIONS, REGION_TYPES
 from rm2026_sim.map_regions import (
     geometry_payload,
     load_geometry_file,
+    load_patrol_routes_file,
     normalize_points,
     polygon_area,
     restore_geometry_payload,
@@ -177,13 +179,46 @@ class MapRegionGeometryTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "map_regions.json"
-            save_geometry_file(path, overrides, custom)
+            routes = {
+                "conservative": ((2.0, 2.0), (3.0, 2.0)),
+                "aggressive": ((10.0, 3.0), (12.0, 7.0), (10.0, 11.0)),
+            }
+            save_geometry_file(path, overrides, custom, patrol_routes=routes)
             restored_overrides, restored_custom = load_geometry_file(path)
+            restored_routes = load_patrol_routes_file(path, {})
 
         self.assertEqual(restored_overrides, overrides)
         self.assertEqual(restored_custom[0]["id"], "custom_7")
         self.assertEqual(restored_custom[0]["kind"], "region_01_supply_blue")
         self.assertTrue(restored_custom[0]["visible"])
+        self.assertEqual(restored_routes, routes)
+
+    def test_manual_patrol_route_save_updates_task_and_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            app = SimulatorApp.__new__(SimulatorApp)
+            app.task = TaskScenario(enemy_outpost_hp=0.0)
+            app.map_zone_overrides = {}
+            app.custom_map_polygons = []
+            app.map_geometry_path = Path(directory) / "map_regions.json"
+            app.patrol_routes = {
+                "conservative": ((2.0, 2.0), (4.0, 2.0)),
+                "aggressive": ((10.0, 3.0), (12.0, 7.0)),
+            }
+            app.region_edit_patrol_kind = "aggressive"
+            app.region_edit_points = [(11.0, 4.0), (14.0, 8.0), (11.0, 12.0)]
+            app.region_edit_error = ""
+            app.region_edit_target = None
+            app.region_edit_custom_id = None
+            app.region_edit_kind = None
+            app.region_edit_new_custom = False
+            app.region_edit_drag_index = None
+
+            self.assertTrue(app._save_region_edit())
+
+            restored = load_patrol_routes_file(app.map_geometry_path, {})
+            expected = ((11.0, 4.0), (14.0, 8.0), (11.0, 12.0))
+            self.assertEqual(restored["aggressive"], expected)
+            self.assertEqual(app.task.aggressive_patrol_route, [list(point) for point in expected])
 
     def test_permanent_geometry_file_creates_backup_before_rewrite(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -217,6 +252,32 @@ class MapRegionGeometryTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["custom_polygons"], [])
+
+    def test_checked_in_map_configures_every_gain_family_and_crossing_route(self) -> None:
+        path = Path(__file__).resolve().parents[1] / "map_regions.json"
+        overrides, custom = load_geometry_file(path)
+        self.assertEqual(set(overrides), {identifier for identifier, _ in REGION_TYPES})
+        self.assertTrue(all(validate_polygon(points) is None for points in overrides.values()))
+
+        app = SimulatorApp.__new__(SimulatorApp)
+        app.task = TaskScenario()
+        app.map_zone_overrides = overrides
+        app.custom_map_polygons = custom
+        app._sync_task_zone_overrides()
+
+        self.assertEqual(len(app.task.central_highland_zones), 4)
+        counts = Counter(
+            (card["kind"], card["field_team"])
+            for card in app.task.terrain_crossing_cards
+        )
+        self.assertEqual(counts[("road", "red")], 2)
+        self.assertEqual(counts[("road", "blue")], 2)
+        self.assertEqual(counts[("fly_slope", "red")], 2)
+        self.assertEqual(counts[("fly_slope", "blue")], 2)
+        self.assertEqual(counts[("highland", "red")], 4)
+        self.assertEqual(counts[("highland", "blue")], 4)
+        self.assertEqual(counts[("tunnel", "red")], 6)
+        self.assertEqual(counts[("tunnel", "blue")], 6)
 
 
 if __name__ == "__main__":

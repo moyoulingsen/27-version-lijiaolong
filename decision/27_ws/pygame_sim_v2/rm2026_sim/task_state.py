@@ -129,10 +129,15 @@ TRAPEZOID_GAIN_ZONE_IDS = {
 }
 CENTRAL_HIGHLAND_ZONE_ID = "region_11_central_highland"
 CENTRAL_HIGHLAND_DEFENCE = 0.25
-CENTRAL_HIGHLAND_EXIT_DELAY = 2.0
+GAIN_OCCUPATION_EXIT_DELAY = 2.0
+CENTRAL_HIGHLAND_EXIT_DELAY = GAIN_OCCUPATION_EXIT_DELAY
 CENTRAL_HIGHLAND_ROBOT_IDS = (1, 3, 4, 8)
 OUTPOST_GAIN_DEFENCE = 0.25
 OUTPOST_GAIN_ENEMY_CAPTURE_SECONDS = 300.0
+OUTPOST_REBUILD_DAMAGE_STEP = 1000.0
+OUTPOST_REBUILD_HP = 750.0
+OUTPOST_REBUILD_DEADLINE_SECONDS = 300.0
+OUTPOST_REBUILD_SECONDS = {1: 10.0, 2: 5.0, 3: 10.0, 4: 10.0, 8: 10.0}
 OUTPOST_GAIN_ZONE_IDS = {
     "red": "region_09_outpost_red",
     "blue": "region_09_outpost_blue",
@@ -413,6 +418,10 @@ def _initial_central_highland_grace() -> dict[str, dict[str, dict[int, float]]]:
     return {}
 
 
+def _initial_gain_exit_grace() -> dict[str, dict[str, dict[int, float]]]:
+    return {}
+
+
 def _initial_outpost_gain_occupants() -> dict[str, list[int]]:
     return {"red": [], "blue": []}
 
@@ -439,6 +448,21 @@ def _initial_fort_values() -> dict[str, int]:
 
 def _initial_fort_capture_timers() -> dict[str, dict[int, float]]:
     return {"red": {}, "blue": {}}
+
+
+def _initial_team_float_values() -> dict[str, float]:
+    return {"red": 0.0, "blue": 0.0}
+
+
+def _initial_team_int_values() -> dict[str, int]:
+    return {"red": 0, "blue": 0}
+
+
+def _initial_outpost_rebuild_progress() -> dict[str, dict[int, float]]:
+    return {
+        team: {target_id: 0.0 for target_id in GROUND_ROBOT_IDS}
+        for team in ("red", "blue")
+    }
 
 
 def _initial_terrain_robot_values() -> dict[str, dict[int, float]]:
@@ -570,6 +594,12 @@ class TaskScenario:
     dodge_goal: tuple[float, float] | None = None
     aggressive_patrol: bool = False
     patrol_index: int = 0
+    conservative_patrol_route: list[list[float]] = field(
+        default_factory=lambda: [list(point) for point in CONSERVATIVE_PATROL_POINTS]
+    )
+    aggressive_patrol_route: list[list[float]] = field(
+        default_factory=lambda: [list(point) for point in AGGRESSIVE_PATROL_POINTS]
+    )
     event_message: str = "比赛进行中"
     event_message_remaining: float = 3.0
     robot_positions: dict[int, list[float]] = field(default_factory=_initial_robot_positions)
@@ -692,8 +722,23 @@ class TaskScenario:
     central_highland_exit_grace: dict[str, dict[str, dict[int, float]]] = field(
         default_factory=_initial_central_highland_grace
     )
+    # Rule 5.5.3.1: occupation remains valid for two seconds after card/zone
+    # detection is lost.  Central highland keeps a separate per-polygon map
+    # because ownership is mutually exclusive there.
+    gain_exit_grace: dict[str, dict[str, dict[int, float]]] = field(
+        default_factory=_initial_gain_exit_grace
+    )
     outpost_gain_occupants: dict[str, list[int]] = field(
         default_factory=_initial_outpost_gain_occupants
+    )
+    base_hp_damage_taken: dict[str, float] = field(
+        default_factory=_initial_team_float_values
+    )
+    outpost_rebuild_chances: dict[str, int] = field(
+        default_factory=_initial_team_int_values
+    )
+    outpost_rebuild_progress: dict[str, dict[int, float]] = field(
+        default_factory=_initial_outpost_rebuild_progress
     )
     assembly_gain_occupants: dict[str, list[int]] = field(
         default_factory=_initial_assembly_gain_occupants
@@ -1040,6 +1085,28 @@ class TaskScenario:
         else:
             raise ValueError(f"unknown team {team}")
 
+    def _record_base_hp_damage(self, team: str, damage: float) -> None:
+        """Accumulate real base-HP loss and award rebuild opportunities."""
+        if team not in ("red", "blue"):
+            raise ValueError(f"unknown team {team}")
+        damage = max(0.0, float(damage))
+        if damage <= 0.0:
+            return
+        previous = max(0.0, float(self.base_hp_damage_taken.get(team, 0.0)))
+        current = previous + damage
+        self.base_hp_damage_taken[team] = current
+        previous_awards = int(previous // OUTPOST_REBUILD_DAMAGE_STEP)
+        current_awards = int(current // OUTPOST_REBUILD_DAMAGE_STEP)
+        gained = max(0, current_awards - previous_awards)
+        if gained:
+            self.outpost_rebuild_chances[team] = max(
+                0, int(self.outpost_rebuild_chances.get(team, 0))
+            ) + gained
+            self._set_event(
+                f"{'红' if team == 'red' else '蓝'}方基地累计损失"
+                f" {current:.0f}，前哨重建机会 +{gained}"
+            )
+
     def fortress_cooling_bonus(self, team: str) -> int:
         return min(FORT_GAIN_COOLING_CAP, self.fortress_damage_delta(team) // 40)
 
@@ -1246,15 +1313,43 @@ class TaskScenario:
 
     @property
     def patrol_points(self) -> tuple[tuple[float, float], ...]:
+        route = (
+            self.aggressive_patrol_route
+            if self.patrol_is_aggressive
+            else self.conservative_patrol_route
+        )
+        points = normalize_points(route)
+        if len(points) >= 2:
+            return points
         return AGGRESSIVE_PATROL_POINTS if self.patrol_is_aggressive else CONSERVATIVE_PATROL_POINTS
+
+    def configure_patrol_routes(
+        self,
+        conservative: list[list[float]] | tuple[tuple[float, float], ...],
+        aggressive: list[list[float]] | tuple[tuple[float, float], ...],
+    ) -> None:
+        """Install ordered referee-simulator patrol loops without changing policy."""
+        conservative_points = normalize_points(conservative)
+        aggressive_points = normalize_points(aggressive)
+        if len(conservative_points) >= 2:
+            self.conservative_patrol_route = [list(point) for point in conservative_points]
+        if len(aggressive_points) >= 2:
+            self.aggressive_patrol_route = [list(point) for point in aggressive_points]
+        self.patrol_index %= len(self.patrol_points)
 
     def reset(self) -> None:
         field_zone_overrides = {
             name: [list(point) for point in points]
             for name, points in self.field_zone_overrides.items()
         }
+        conservative_patrol_route = [list(point) for point in self.conservative_patrol_route]
+        aggressive_patrol_route = [list(point) for point in self.aggressive_patrol_route]
         fresh = type(self)()
         fresh.field_zone_overrides = field_zone_overrides
+        fresh.configure_patrol_routes(
+            conservative_patrol_route,
+            aggressive_patrol_route,
+        )
         self.__dict__.update(fresh.__dict__)
 
     def move_robot(
@@ -2214,7 +2309,11 @@ class TaskScenario:
                 self.enemy_outpost_destroyed_ever = True
             name = "敌方前哨"
         elif target_id == 7:
+            previous_base_hp = self.enemy_base_hp
             self.enemy_base_hp = health
+            self._record_base_hp_damage(
+                "blue", max(0.0, previous_base_hp - self.enemy_base_hp)
+            )
             self._record_base_minimum("blue")
             name = "敌方基地"
         else:
@@ -2426,7 +2525,11 @@ class TaskScenario:
 
     def adjust_own_base_health(self, direction: int) -> None:
         self._validate_adjustment_direction(direction)
+        previous_base_hp = self.own_base_hp
         self.own_base_hp = max(0, min(self.own_base_max_hp, self.own_base_hp + 500 * direction))
+        self._record_base_hp_damage(
+            "red", max(0.0, previous_base_hp - self.own_base_hp)
+        )
         self._record_base_minimum("red")
         self._set_event(f"己方基地血量已调整为 {self.own_base_hp}")
 
@@ -2535,10 +2638,11 @@ class TaskScenario:
             if not self.game_finished:
                 self._update_respawn(sentry, simulation_elapsed, bool(confirm_respawn))
                 self._update_robot_respawns(simulation_elapsed)
-                self._update_base_gain_points(sentry)
-                self._update_trapezoid_gain_points(sentry)
+                self._update_base_gain_points(sentry, simulation_elapsed)
+                self._update_trapezoid_gain_points(sentry, simulation_elapsed)
                 self._update_central_highland_gain_points(sentry, simulation_elapsed)
-                self._update_outpost_gain_points(sentry)
+                self._update_outpost_rebuild(sentry, simulation_elapsed)
+                self._update_outpost_gain_points(sentry, simulation_elapsed)
                 self._update_assembly_gain_points(sentry, simulation_elapsed)
                 self._update_supply(sentry, simulation_elapsed)
                 self._update_fort_gain_points(sentry, simulation_elapsed)
@@ -2754,11 +2858,14 @@ class TaskScenario:
                 self.own_outpost_hp = max(0, self.own_outpost_hp - int(damage))
                 if self.own_outpost_hp <= 0:
                     self.own_outpost_destroyed_ever = True
-                    self.outpost_gain_occupants["red"] = []
             elif target_id == 7:
                 shield_damage = min(self.own_base_shield, damage)
                 self.own_base_shield -= shield_damage
+                previous_base_hp = self.own_base_hp
                 self.own_base_hp = max(0, self.own_base_hp - int(damage - shield_damage))
+                self._record_base_hp_damage(
+                    "red", max(0.0, previous_base_hp - self.own_base_hp)
+                )
                 self._record_base_minimum("red")
             elif target_id == 8:
                 previous_health = self.sentry_hp
@@ -2784,12 +2891,15 @@ class TaskScenario:
             self.enemy_outpost_hp = max(0.0, self.enemy_outpost_hp - damage)
             if self.enemy_outpost_hp <= 0.0:
                 self.enemy_outpost_destroyed_ever = True
-                self.outpost_gain_occupants["blue"] = []
         elif target_id == 7:
             shield_damage = min(self.enemy_base_shield, damage)
             self.enemy_base_shield -= shield_damage
             remaining_damage = damage - shield_damage
+            previous_base_hp = self.enemy_base_hp
             self.enemy_base_hp = max(0.0, self.enemy_base_hp - remaining_damage)
+            self._record_base_hp_damage(
+                "blue", max(0.0, previous_base_hp - self.enemy_base_hp)
+            )
             self._record_base_minimum("blue")
         elif target_id in self.robot_hp:
             previous_health = self.robot_hp[target_id]
@@ -3039,6 +3149,8 @@ class TaskScenario:
         self.road_crossing_elapsed = 0.0
         self._clear_terrain_crossing_robot(8, team="red")
         self._clear_central_highland_robot(8, team="red")
+        self._clear_gain_exit_grace_robot(8, team="red")
+        self.outpost_rebuild_progress["red"][8] = 0.0
         self.death_elapsed = 0.0
         self.revive_progress = 0.0
         self.revive_required = (
@@ -3125,6 +3237,8 @@ class TaskScenario:
         sources[target_id] = ""
         self._clear_terrain_crossing_robot(target_id, team=team)
         self._clear_central_highland_robot(target_id, team=team)
+        self._clear_gain_exit_grace_robot(target_id, team=team)
+        self.outpost_rebuild_progress[team][target_id] = 0.0
         self._reset_robot_out_of_combat(target_id, team=team)
         heat = self.robot_heat if team == "blue" else self.own_robot_heat
         temporary = self.robot_heat_locked if team == "blue" else self.own_robot_heat_locked
@@ -3310,7 +3424,7 @@ class TaskScenario:
         if occupying_team == zone_team:
             return True
         return (
-            self._outpost_destroyed(zone_team)
+            self._outpost_health(zone_team) <= 0.0
             and self.match_elapsed <= OUTPOST_GAIN_ENEMY_CAPTURE_SECONDS
         )
 
@@ -3435,6 +3549,114 @@ class TaskScenario:
         # editable annotation system was introduced.
         return 0.0 <= sentry.x <= 4.0 and 0.0 <= sentry.y <= 3.0
 
+    def _gain_robot_health(self, team: str, target_id: int) -> float:
+        if team == "red":
+            return float(self.own_robot_health(target_id))
+        if team == "blue":
+            return float(self.enemy_health(target_id))
+        raise ValueError(f"unknown team {team}")
+
+    def _update_gain_exit_grace(
+        self,
+        zone_id: str,
+        detected: dict[str, set[int]],
+        elapsed_seconds: float,
+    ) -> dict[str, set[int]]:
+        """Return active occupants after the universal two-second exit delay."""
+        elapsed_seconds = max(0.0, float(elapsed_seconds))
+        grace = self.gain_exit_grace.setdefault(
+            zone_id, {"red": {}, "blue": {}}
+        )
+        active: dict[str, set[int]] = {"red": set(), "blue": set()}
+        for team in ("red", "blue"):
+            timers = grace.setdefault(team, {})
+            present = {int(target_id) for target_id in detected.get(team, set())}
+            for target_id in present:
+                if self._gain_robot_health(team, target_id) > 0.0:
+                    timers[target_id] = GAIN_OCCUPATION_EXIT_DELAY
+            for target_id in tuple(timers):
+                if self._gain_robot_health(team, target_id) <= 0.0:
+                    timers.pop(target_id, None)
+                    continue
+                if target_id not in present:
+                    remaining = max(0.0, timers[target_id] - elapsed_seconds)
+                    if remaining <= 0.0:
+                        timers.pop(target_id, None)
+                        continue
+                    timers[target_id] = remaining
+                active[team].add(target_id)
+        if not any(grace[team] for team in ("red", "blue")):
+            self.gain_exit_grace.pop(zone_id, None)
+        return active
+
+    def _clear_gain_exit_grace_robot(self, target_id: int, *, team: str) -> None:
+        """Deaths invalidate every ordinary gain occupation immediately."""
+        for zone_id in tuple(self.gain_exit_grace):
+            teams = self.gain_exit_grace[zone_id]
+            teams.setdefault(team, {}).pop(target_id, None)
+            if not any(teams.get(side) for side in ("red", "blue")):
+                self.gain_exit_grace.pop(zone_id, None)
+
+    def _update_outpost_rebuild(
+        self, sentry: SentryState, elapsed_seconds: float
+    ) -> None:
+        """Rebuild a destroyed outpost from independently timed robot scans."""
+        elapsed_seconds = max(0.0, float(elapsed_seconds))
+        for team in ("red", "blue"):
+            progress = self.outpost_rebuild_progress.setdefault(
+                team, {target_id: 0.0 for target_id in GROUND_ROBOT_IDS}
+            )
+            available = (
+                self._outpost_health(team) <= 0.0
+                and self.outpost_rebuild_chances.get(team, 0) > 0
+                and self.match_elapsed <= OUTPOST_REBUILD_DEADLINE_SECONDS
+                and bool(self._outpost_gain_polygon(team))
+            )
+            if not available:
+                for target_id in GROUND_ROBOT_IDS:
+                    progress[target_id] = 0.0
+                continue
+
+            candidates: list[tuple[float, int]] = []
+            for target_id in GROUND_ROBOT_IDS:
+                health = self._gain_robot_health(team, target_id)
+                position = (
+                    self.own_robot_position(target_id, sentry)
+                    if team == "red"
+                    else self.robot_position(target_id, team="blue")
+                )
+                detected = (
+                    health > 0.0
+                    and not self.robot_is_weak(target_id, team=team)
+                    and self._position_in_outpost_gain(team, position)
+                )
+                if not detected:
+                    progress[target_id] = 0.0
+                    continue
+                required = OUTPOST_REBUILD_SECONDS[target_id]
+                previous = max(0.0, float(progress.get(target_id, 0.0)))
+                progress[target_id] = min(required, previous + elapsed_seconds)
+                if progress[target_id] >= required:
+                    completion_offset = max(0.0, required - previous)
+                    candidates.append((completion_offset, target_id))
+
+            if not candidates:
+                continue
+            _, builder_id = min(candidates)
+            if team == "red":
+                self.own_outpost_hp = OUTPOST_REBUILD_HP
+            else:
+                self.enemy_outpost_hp = OUTPOST_REBUILD_HP
+            self.outpost_rebuild_chances[team] = max(
+                0, self.outpost_rebuild_chances.get(team, 0) - 1
+            )
+            for target_id in GROUND_ROBOT_IDS:
+                progress[target_id] = 0.0
+            self._set_event(
+                f"{'红' if team == 'red' else '蓝'}方 {builder_id} 号机器人"
+                f"完成前哨重建，前哨恢复 {OUTPOST_REBUILD_HP:.0f} 血"
+            )
+
     def _field_zones(self) -> tuple:
         """Return configured rule-bearing region ids.
 
@@ -3512,78 +3734,89 @@ class TaskScenario:
 
     def _update_field_zones(self, sentry: SentryState, elapsed_seconds: float) -> None:
         """Compatibility hook for callers that update rule-bearing regions."""
-        self._update_base_gain_points(sentry)
-        self._update_trapezoid_gain_points(sentry)
+        self._update_base_gain_points(sentry, elapsed_seconds)
+        self._update_trapezoid_gain_points(sentry, elapsed_seconds)
         self._update_central_highland_gain_points(sentry, elapsed_seconds)
-        self._update_outpost_gain_points(sentry)
+        self._update_outpost_rebuild(sentry, elapsed_seconds)
+        self._update_outpost_gain_points(sentry, elapsed_seconds)
         self._update_assembly_gain_points(sentry, elapsed_seconds)
         self._update_supply(sentry, elapsed_seconds)
         self._update_fort_gain_points(sentry, elapsed_seconds)
         self._update_terrain_crossing(sentry, elapsed_seconds)
 
-    def _update_base_gain_points(self, sentry: SentryState) -> None:
-        """Apply both teams' base gain points to every occupying ground robot."""
-        occupants: dict[str, list[int]] = {"red": [], "blue": []}
-        if self._base_gain_polygon("red"):
-            for target_id in GROUND_ROBOT_IDS:
-                health = self.own_robot_health(target_id)
-                position = self.own_robot_position(target_id, sentry)
-                if health > 0.0 and self._position_in_base_gain("red", position):
-                    occupants["red"].append(target_id)
-        if self._base_gain_polygon("blue"):
-            for target_id in GROUND_ROBOT_IDS:
-                if self.enemy_health(target_id) <= 0.0:
-                    continue
-                if self._position_in_base_gain(
-                    "blue", self.robot_position(target_id, team="blue")
-                ):
-                    occupants["blue"].append(target_id)
-
+    def _update_base_gain_points(
+        self, sentry: SentryState, elapsed_seconds: float
+    ) -> None:
+        """Apply both teams' base gain points with delayed occupation loss."""
+        occupants: dict[str, set[int]] = {"red": set(), "blue": set()}
         cleared: list[str] = []
-        for team, target_ids in occupants.items():
-            for target_id in target_ids:
-                if self._clear_robot_weakness_at_gain(target_id, team=team):
-                    cleared.append(f"{'红' if team == 'red' else '蓝'}方{target_id}号")
-
-        self.base_gain_occupants = occupants
-        for team, zone_id in BASE_GAIN_ZONE_IDS.items():
-            if occupants[team]:
-                self.zone_inside.add(zone_id)
-            else:
-                self.zone_inside.discard(zone_id)
-        if cleared:
-            self._set_event(
-                "基地增益点解除虚弱：" + "、".join(cleared)
+        for team in ("red", "blue"):
+            zone_id = BASE_GAIN_ZONE_IDS[team]
+            detected: dict[str, set[int]] = {"red": set(), "blue": set()}
+            if self._base_gain_polygon(team):
+                for target_id in GROUND_ROBOT_IDS:
+                    position = (
+                        self.own_robot_position(target_id, sentry)
+                        if team == "red"
+                        else self.robot_position(target_id, team="blue")
+                    )
+                    if (
+                        self._gain_robot_health(team, target_id) > 0.0
+                        and self._position_in_base_gain(team, position)
+                    ):
+                        detected[team].add(target_id)
+                        if self._clear_robot_weakness_at_gain(target_id, team=team):
+                            cleared.append(
+                                f"{'红' if team == 'red' else '蓝'}方{target_id}号"
+                            )
+            active = self._update_gain_exit_grace(
+                zone_id, detected, elapsed_seconds
             )
-
-    def _update_trapezoid_gain_points(self, sentry: SentryState) -> None:
-        """Track every living robot occupying its own trapezoid highland."""
-        occupants: dict[str, list[int]] = {"red": [], "blue": []}
-        if self._trapezoid_gain_polygon("red"):
-            for target_id in GROUND_ROBOT_IDS:
-                if self.own_robot_health(target_id) <= 0.0:
-                    continue
-                if self.robot_is_weak(target_id, team="red"):
-                    continue
-                position = self.own_robot_position(target_id, sentry)
-                if self._position_in_trapezoid_gain("red", position):
-                    occupants["red"].append(target_id)
-        if self._trapezoid_gain_polygon("blue"):
-            for target_id in GROUND_ROBOT_IDS:
-                if self.enemy_health(target_id) <= 0.0:
-                    continue
-                if self.robot_is_weak(target_id, team="blue"):
-                    continue
-                position = self.robot_position(target_id, team="blue")
-                if self._position_in_trapezoid_gain("blue", position):
-                    occupants["blue"].append(target_id)
-
-        self.trapezoid_gain_occupants = occupants
-        for team, zone_id in TRAPEZOID_GAIN_ZONE_IDS.items():
-            if occupants[team]:
+            occupants[team].update(active[team])
+            if active[team]:
                 self.zone_inside.add(zone_id)
             else:
                 self.zone_inside.discard(zone_id)
+
+        self.base_gain_occupants = {
+            team: sorted(target_ids) for team, target_ids in occupants.items()
+        }
+        if cleared:
+            self._set_event("基地增益点解除虚弱：" + "、".join(cleared))
+
+    def _update_trapezoid_gain_points(
+        self, sentry: SentryState, elapsed_seconds: float
+    ) -> None:
+        """Track trapezoid occupation with the universal two-second delay."""
+        occupants: dict[str, set[int]] = {"red": set(), "blue": set()}
+        for team in ("red", "blue"):
+            zone_id = TRAPEZOID_GAIN_ZONE_IDS[team]
+            detected: dict[str, set[int]] = {"red": set(), "blue": set()}
+            if self._trapezoid_gain_polygon(team):
+                for target_id in GROUND_ROBOT_IDS:
+                    position = (
+                        self.own_robot_position(target_id, sentry)
+                        if team == "red"
+                        else self.robot_position(target_id, team="blue")
+                    )
+                    if (
+                        self._gain_robot_health(team, target_id) > 0.0
+                        and not self.robot_is_weak(target_id, team=team)
+                        and self._position_in_trapezoid_gain(team, position)
+                    ):
+                        detected[team].add(target_id)
+            active = self._update_gain_exit_grace(
+                zone_id, detected, elapsed_seconds
+            )
+            occupants[team].update(active[team])
+            if active[team]:
+                self.zone_inside.add(zone_id)
+            else:
+                self.zone_inside.discard(zone_id)
+
+        self.trapezoid_gain_occupants = {
+            team: sorted(target_ids) for team, target_ids in occupants.items()
+        }
 
     def _update_central_highland_gain_points(
         self, sentry: SentryState, elapsed_seconds: float
@@ -3667,49 +3900,53 @@ class TaskScenario:
         if ownership_changes:
             self._set_event("中央高地占领更新：" + "、".join(ownership_changes))
 
-    def _update_outpost_gain_points(self, sentry: SentryState) -> None:
-        """Apply outpost occupancy, defence, and weak-state cancellation."""
-        occupants: dict[str, list[int]] = {"red": [], "blue": []}
-        occupied_zone_ids: set[str] = set()
+    def _update_outpost_gain_points(
+        self, sentry: SentryState, elapsed_seconds: float
+    ) -> None:
+        """Apply outpost occupation and delayed loss for either team."""
+        occupants: dict[str, set[int]] = {"red": set(), "blue": set()}
         cleared: list[str] = []
 
-        for occupying_team in ("red", "blue"):
-            for zone_team in ("red", "blue"):
-                if not self._outpost_gain_zone_available(occupying_team, zone_team):
-                    continue
-                if not self._outpost_gain_polygon(zone_team):
-                    continue
-                for target_id in GROUND_ROBOT_IDS:
-                    health = (
-                        self.own_robot_health(target_id)
-                        if occupying_team == "red"
-                        else self.enemy_health(target_id)
-                    )
-                    if health <= 0.0:
-                        continue
-                    position = (
-                        self.own_robot_position(target_id, sentry)
-                        if occupying_team == "red"
-                        else self.robot_position(target_id, team="blue")
-                    )
-                    if not self._position_in_outpost_gain(zone_team, position):
-                        continue
-                    if target_id not in occupants[occupying_team]:
-                        occupants[occupying_team].append(target_id)
-                    occupied_zone_ids.add(OUTPOST_GAIN_ZONE_IDS[zone_team])
-                    if self._clear_robot_weakness_at_gain(
-                        target_id, team=occupying_team
+        for zone_team in ("red", "blue"):
+            zone_id = OUTPOST_GAIN_ZONE_IDS[zone_team]
+            detected: dict[str, set[int]] = {"red": set(), "blue": set()}
+            if self._outpost_gain_polygon(zone_team):
+                for occupying_team in ("red", "blue"):
+                    if not self._outpost_gain_zone_available(
+                        occupying_team, zone_team
                     ):
-                        cleared.append(
-                            f"{'红' if occupying_team == 'red' else '蓝'}方{target_id}号"
+                        continue
+                    for target_id in GROUND_ROBOT_IDS:
+                        position = (
+                            self.own_robot_position(target_id, sentry)
+                            if occupying_team == "red"
+                            else self.robot_position(target_id, team="blue")
                         )
-
-        self.outpost_gain_occupants = occupants
-        for zone_id in OUTPOST_GAIN_ZONE_IDS.values():
-            if zone_id in occupied_zone_ids:
+                        if (
+                            self._gain_robot_health(occupying_team, target_id) > 0.0
+                            and self._position_in_outpost_gain(zone_team, position)
+                        ):
+                            detected[occupying_team].add(target_id)
+                            if self._clear_robot_weakness_at_gain(
+                                target_id, team=occupying_team
+                            ):
+                                cleared.append(
+                                    f"{'红' if occupying_team == 'red' else '蓝'}方"
+                                    f"{target_id}号"
+                                )
+            active = self._update_gain_exit_grace(
+                zone_id, detected, elapsed_seconds
+            )
+            for team in ("red", "blue"):
+                occupants[team].update(active[team])
+            if any(active.values()):
                 self.zone_inside.add(zone_id)
             else:
                 self.zone_inside.discard(zone_id)
+
+        self.outpost_gain_occupants = {
+            team: sorted(target_ids) for team, target_ids in occupants.items()
+        }
         if cleared:
             self._set_event(
                 "前哨站增益点解除虚弱及无敌：" + "、".join(cleared)
@@ -3736,23 +3973,37 @@ class TaskScenario:
                 if team == "red"
                 else self.robot_position(2, team="blue")
             )
-            inside = (
+            detected_inside = (
                 health > 0.0
                 and not self.robot_is_weak(2, team=team)
                 and elapsed < ASSEMBLY_GAIN_MAX_SECONDS
                 and self._position_in_assembly_gain(team, position)
             )
-            if inside:
+            detected = {"red": set(), "blue": set()}
+            if detected_inside:
+                detected[team].add(2)
+            previous_exit = (
+                self.gain_exit_grace.get(zone_id, {}).get(team, {}).get(2, 0.0)
+            )
+            active_duration = (
+                max(0.0, elapsed_seconds)
+                if detected_inside
+                else min(max(0.0, elapsed_seconds), max(0.0, previous_exit))
+            )
+            active = self._update_gain_exit_grace(
+                zone_id, detected, elapsed_seconds
+            )
+            if active_duration > 0.0 and elapsed < ASSEMBLY_GAIN_MAX_SECONDS:
                 elapsed = min(
                     ASSEMBLY_GAIN_MAX_SECONDS,
-                    elapsed + max(0.0, elapsed_seconds),
+                    elapsed + active_duration,
                 )
-                if elapsed < ASSEMBLY_GAIN_MAX_SECONDS:
-                    occupants[team].append(2)
-                    self.zone_inside.add(zone_id)
-                else:
-                    self.zone_inside.discard(zone_id)
+            if 2 in active[team] and elapsed < ASSEMBLY_GAIN_MAX_SECONDS:
+                occupants[team].append(2)
+                self.zone_inside.add(zone_id)
             else:
+                if elapsed >= ASSEMBLY_GAIN_MAX_SECONDS:
+                    self.gain_exit_grace.get(zone_id, {}).get(team, {}).pop(2, None)
                 self.zone_inside.discard(zone_id)
             self.assembly_gain_elapsed[team] = elapsed
         self.assembly_gain_occupants = occupants
@@ -3762,20 +4013,46 @@ class TaskScenario:
         occupants: dict[str, list[int]] = {"red": [], "blue": []}
         cleared: list[str] = []
         for team in ("red", "blue"):
+            zone_id = SUPPLY_GAIN_ZONE_IDS[team]
+            detected: dict[str, set[int]] = {"red": set(), "blue": set()}
             for target_id in GROUND_ROBOT_IDS:
-                health = (
-                    self.own_robot_health(target_id)
-                    if team == "red"
-                    else self.enemy_health(target_id)
-                )
-                if health <= 0.0 or not self._robot_position_in_supply_gain(
-                    team, target_id, sentry
+                if (
+                    self._gain_robot_health(team, target_id) > 0.0
+                    and self._robot_position_in_supply_gain(
+                        team, target_id, sentry
+                    )
                 ):
-                    continue
-                occupants[team].append(target_id)
-                if self._clear_robot_weakness_at_gain(target_id, team=team):
-                    cleared.append(f"{'红' if team == 'red' else '蓝'}方{target_id}号")
+                    detected[team].add(target_id)
+                    if self._clear_robot_weakness_at_gain(target_id, team=team):
+                        cleared.append(
+                            f"{'红' if team == 'red' else '蓝'}方{target_id}号"
+                        )
+            previous_exit = dict(
+                self.gain_exit_grace.get(zone_id, {}).get(team, {})
+            )
+            active = self._update_gain_exit_grace(
+                zone_id, detected, elapsed_seconds
+            )
+            occupants[team] = sorted(active[team])
+            if occupants[team]:
+                self.zone_inside.add(zone_id)
+            else:
+                self.zone_inside.discard(zone_id)
 
+            active_durations = {
+                target_id: (
+                    max(0.0, elapsed_seconds)
+                    if target_id in detected[team]
+                    else min(
+                        max(0.0, elapsed_seconds),
+                        max(0.0, previous_exit.get(target_id, 0.0)),
+                    )
+                )
+                for target_id in set(previous_exit) | detected[team]
+            }
+            for target_id, active_duration in active_durations.items():
+                if active_duration <= 0.0:
+                    continue
                 maximum = self.robot_max_hp(target_id, team=team)
                 out_of_combat = (
                     self.robot_out_of_combat_seconds_value(target_id, team=team)
@@ -3784,7 +4061,7 @@ class TaskScenario:
                 fraction = SUPPLY_GAIN_HEAL
                 if self.match_elapsed >= SUPPLY_GAIN_LATE_SECONDS and out_of_combat:
                     fraction = SUPPLY_GAIN_HEAL_LATE
-                healed = maximum * fraction * max(0.0, elapsed_seconds)
+                healed = maximum * fraction * active_duration
                 if team == "red" and target_id == 8:
                     self.sentry_hp = min(maximum, self.sentry_hp + healed)
                 elif team == "red":
@@ -3797,11 +4074,6 @@ class TaskScenario:
                     )
 
         self.supply_gain_occupants = occupants
-        for team, zone_id in SUPPLY_GAIN_ZONE_IDS.items():
-            if occupants[team]:
-                self.zone_inside.add(zone_id)
-            else:
-                self.zone_inside.discard(zone_id)
 
         if 8 in occupants["red"]:
             self.respawn_fire_locked = False
@@ -3822,54 +4094,93 @@ class TaskScenario:
         }
         own_occupants: dict[str, list[int]] = {"red": [], "blue": []}
         enemy_occupants: dict[str, list[int]] = {"red": [], "blue": []}
+        enemy_capture_active_duration: dict[str, dict[int, float]] = {
+            "red": {}, "blue": {}
+        }
+        enemy_capture_active_end: dict[str, set[int]] = {
+            "red": set(), "blue": set()
+        }
 
         for fort_team in ("red", "blue"):
-            if not self._fort_active(fort_team) or not self._fort_gain_polygon(fort_team):
-                continue
+            zone_id = FORT_GAIN_ZONE_IDS[fort_team]
+            detected: dict[str, set[int]] = {"red": set(), "blue": set()}
             own_candidates: list[int] = []
-            for target_id in FORT_ROBOT_IDS:
-                health = (
-                    self.own_robot_health(target_id)
-                    if fort_team == "red"
-                    else self.enemy_health(target_id)
-                )
-                position = (
-                    self.own_robot_position(target_id, sentry)
-                    if fort_team == "red"
-                    else self.robot_position(target_id, team="blue")
-                )
-                if (
-                    health > 0.0
-                    and not self.robot_is_weak(target_id, team=fort_team)
-                    and self._position_in_fort_gain(fort_team, position)
-                ):
-                    own_candidates.append(target_id)
+            active_polygon = bool(self._fort_gain_polygon(fort_team))
+            if self._fort_active(fort_team) and active_polygon:
+                for target_id in FORT_ROBOT_IDS:
+                    position = (
+                        self.own_robot_position(target_id, sentry)
+                        if fort_team == "red"
+                        else self.robot_position(target_id, team="blue")
+                    )
+                    if (
+                        self._gain_robot_health(fort_team, target_id) > 0.0
+                        and not self.robot_is_weak(target_id, team=fort_team)
+                        and self._position_in_fort_gain(fort_team, position)
+                    ):
+                        own_candidates.append(target_id)
             previous_owner = previous_owners[fort_team]
             if previous_owner in own_candidates:
-                own_occupants[fort_team] = [int(previous_owner)]
-            elif own_candidates:
-                own_occupants[fort_team] = [own_candidates[0]]
+                detected[fort_team].add(int(previous_owner))
+            else:
+                previous_grace = (
+                    self.gain_exit_grace.get(zone_id, {})
+                    .get(fort_team, {})
+                )
+                if previous_owner not in previous_grace and own_candidates:
+                    detected[fort_team].add(own_candidates[0])
 
             attacking_team = self.opposing_team(fort_team)
-            if not self._fort_enemy_capture_available(attacking_team):
-                continue
-            for target_id in FORT_ROBOT_IDS:
-                health = (
-                    self.own_robot_health(target_id)
-                    if attacking_team == "red"
-                    else self.enemy_health(target_id)
+            if self._fort_enemy_capture_available(attacking_team) and active_polygon:
+                for target_id in FORT_ROBOT_IDS:
+                    position = (
+                        self.own_robot_position(target_id, sentry)
+                        if attacking_team == "red"
+                        else self.robot_position(target_id, team="blue")
+                    )
+                    if (
+                        self._gain_robot_health(attacking_team, target_id) > 0.0
+                        and not self.robot_is_weak(target_id, team=attacking_team)
+                        and self._position_in_fort_gain(fort_team, position)
+                    ):
+                        detected[attacking_team].add(target_id)
+
+            previous_enemy_exit = dict(
+                self.gain_exit_grace.get(zone_id, {}).get(attacking_team, {})
+            )
+            active = self._update_gain_exit_grace(
+                zone_id, detected, elapsed_seconds
+            )
+            if not active[fort_team] and own_candidates:
+                detected[fort_team] = {own_candidates[0]}
+                active = self._update_gain_exit_grace(zone_id, detected, 0.0)
+            if active[fort_team]:
+                owner = (
+                    int(previous_owner)
+                    if previous_owner in active[fort_team]
+                    else min(active[fort_team], key=FORT_ROBOT_IDS.index)
                 )
-                position = (
-                    self.own_robot_position(target_id, sentry)
-                    if attacking_team == "red"
-                    else self.robot_position(target_id, team="blue")
+                own_occupants[fort_team] = [owner]
+                grace = self.gain_exit_grace.get(zone_id, {}).get(fort_team, {})
+                for target_id in tuple(grace):
+                    if target_id != owner:
+                        grace.pop(target_id, None)
+            enemy_occupants[attacking_team] = sorted(active[attacking_team])
+            for target_id in set(previous_enemy_exit) | detected[attacking_team]:
+                if target_id in detected[attacking_team]:
+                    duration = max(0.0, elapsed_seconds)
+                else:
+                    duration = min(
+                        max(0.0, elapsed_seconds),
+                        max(0.0, previous_enemy_exit.get(target_id, 0.0)),
+                    )
+                enemy_capture_active_duration[attacking_team][target_id] = max(
+                    enemy_capture_active_duration[attacking_team].get(target_id, 0.0),
+                    duration,
                 )
-                if (
-                    health > 0.0
-                    and not self.robot_is_weak(target_id, team=attacking_team)
-                    and self._position_in_fort_gain(fort_team, position)
-                ):
-                    enemy_occupants[attacking_team].append(target_id)
+            enemy_capture_active_end[attacking_team].update(
+                active[attacking_team]
+            )
 
         self.fort_own_occupants = own_occupants
         self.fort_enemy_occupants = enemy_occupants
@@ -3895,17 +4206,31 @@ class TaskScenario:
             self.fort_reserve_ammo[team] = remaining
 
         for attacking_team in ("red", "blue"):
-            active_ids = set(enemy_occupants[attacking_team])
             elapsed_map = self.fort_enemy_capture_elapsed[attacking_team]
             grace_map = self.fort_enemy_capture_grace[attacking_team]
-            for target_id in active_ids:
+            durations = enemy_capture_active_duration[attacking_team]
+            active_at_end = enemy_capture_active_end[attacking_team]
+            for target_id, active_duration in durations.items():
+                if active_duration <= 0.0:
+                    continue
                 elapsed_map[target_id] = min(
                     FORT_ENEMY_CAPTURE_REQUIRED_SECONDS,
-                    elapsed_map.get(target_id, 0.0) + max(0.0, elapsed_seconds),
+                    elapsed_map.get(target_id, 0.0) + active_duration,
                 )
-                grace_map[target_id] = FORT_ENEMY_CAPTURE_GRACE_SECONDS
+                inactive_duration = max(0.0, elapsed_seconds - active_duration)
+                grace_map[target_id] = (
+                    FORT_ENEMY_CAPTURE_GRACE_SECONDS
+                    if target_id in active_at_end
+                    else max(
+                        0.0,
+                        FORT_ENEMY_CAPTURE_GRACE_SECONDS - inactive_duration,
+                    )
+                )
             for target_id in tuple(elapsed_map):
-                if target_id in active_ids:
+                if target_id in durations:
+                    if grace_map.get(target_id, 0.0) <= 0.0:
+                        elapsed_map.pop(target_id, None)
+                        grace_map.pop(target_id, None)
                     continue
                 grace = max(0.0, grace_map.get(target_id, 0.0) - elapsed_seconds)
                 if grace > 0.0:
@@ -4587,8 +4912,12 @@ class TaskScenario:
         }[self.dart_target_type]
         shield_damage = min(self.enemy_base_shield, damage)
         self.enemy_base_shield -= shield_damage
+        previous_base_hp = self.enemy_base_hp
         self.enemy_base_hp = max(
             0.0, self.enemy_base_hp - (damage - shield_damage)
+        )
+        self._record_base_hp_damage(
+            "blue", max(0.0, previous_base_hp - self.enemy_base_hp)
         )
         self._record_base_minimum("blue")
         self.dart_hits += 1

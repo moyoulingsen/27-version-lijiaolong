@@ -101,6 +101,15 @@ class PygameRosBridge(Node):
         result.extend(conversion(0) for _ in range(length - len(result)))
         return result
 
+    @staticmethod
+    def _flatten_points(values):
+        flattened = []
+        for point in list(values or []):
+            if not isinstance(point, (list, tuple)) or len(point) < 2:
+                continue
+            flattened.extend((float(point[0]), float(point[1])))
+        return flattened
+
     def _publish_state(self, state: dict) -> None:
         referee = ReceiveData()
         referee.game_period = int(state.get("game_period", 0))
@@ -118,6 +127,12 @@ class PygameRosBridge(Node):
         referee.pending_ammo = max(0, int(state.get("pending_ammo", 0)))
         referee.economy = max(0, min(1000, int(state.get("economy", 0))))
         referee.aggressive_patrol = bool(state.get("aggressive_patrol", False))
+        referee.conservative_patrol_points = self._flatten_points(
+            state.get("conservative_patrol_points")
+        )
+        referee.aggressive_patrol_points = self._flatten_points(
+            state.get("aggressive_patrol_points")
+        )
         self.referee_pub.publish(referee)
 
         raw_autoaim = state.get("autoaim") or {}

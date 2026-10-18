@@ -95,7 +95,9 @@ class SupplyGainTests(unittest.TestCase):
 
         self.assertEqual(scenario.apply_attack_damage(2, "42mm", team="red"), 0)
         scenario.set_robot_position(2, (12.0, 12.0), team="red")
-        scenario.update(0.0, sentry)
+        scenario.update(1.9, sentry)
+        self.assertEqual(scenario.apply_attack_damage(2, "42mm", team="red"), 0)
+        scenario.update(0.2, sentry)
         self.assertEqual(scenario.apply_attack_damage(2, "42mm", team="red"), 200)
 
     def test_supply_accelerates_other_robot_revive_read_bar(self) -> None:

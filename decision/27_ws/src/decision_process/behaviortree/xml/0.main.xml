@@ -406,6 +406,8 @@
                      gimbal_enabled_command="{gimbal_enabled}"
                      gimbal_rotate_command="{gimbal_rotate}"/>
             <SubTree ID="BulletCheck"
+                     conservative_patrol_points="{conservative_patrol_points}"
+                     aggressive_patrol_points="{aggressive_patrol_points}"
                      ammo_count="{ammo_count}"
                      pickup_ammo_count="{pickup_ammo_count}"
                      current_x="{current_x}"
@@ -432,6 +434,8 @@
           <!-- With ammunition and no attack target, retain the old resource
                patrol policy instead of letting Attack own the patrol loop. -->
           <SubTree ID="NoAmmoPatrolDecision"
+                   conservative_patrol_points="{conservative_patrol_points}"
+                   aggressive_patrol_points="{aggressive_patrol_points}"
                    current_x="{current_x}"
                    current_y="{current_y}"
                    localization_valid="{localization_valid}"

@@ -40,6 +40,8 @@ def base_state() -> dict:
             "target_polar_angle": [0.0] * 9,
         },
         "aggressive_patrol": False,
+        "conservative_patrol_points": [[5.0, 5.0], [9.0, 5.0], [9.0, 9.0]],
+        "aggressive_patrol_points": [[12.0, 3.0], [14.0, 7.5], [12.3, 11.7]],
     }
 
 
@@ -366,6 +368,18 @@ def main() -> None:
             "both-low patrol boundary remains below health-recovery priority",
         )
         state["hp_sentry"] = 400
+
+        state["aggressive_patrol_points"] = [
+            [11.0, 3.0],
+            [15.0, 7.5],
+            [11.0, 12.0],
+        ]
+        wait_for(
+            client,
+            state,
+            lambda output: near_goal(output, (11.0, 3.0)),
+            "Pygame manual patrol route reaches behavior-tree blackboard",
+        )
 
         running = copy.deepcopy(state)
         running["time"] = 10

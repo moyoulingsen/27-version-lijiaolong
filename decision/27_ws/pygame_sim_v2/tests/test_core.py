@@ -518,6 +518,22 @@ class TaskScenarioTests(unittest.TestCase):
         self.assertEqual(scenario.patrol_name, "保守巡逻")
         self.assertEqual(scenario.patrol_points[scenario.patrol_index], CONSERVATIVE_PATROL_POINTS[0])
 
+    def test_manual_patrol_routes_drive_local_decision_and_survive_reset(self) -> None:
+        conservative = [[2.0, 2.0], [4.0, 2.0]]
+        aggressive = [[11.0, 3.0], [15.0, 7.5], [11.0, 12.0]]
+        scenario = TaskScenario(enemy_outpost_hp=0.0)
+        scenario.configure_patrol_routes(conservative, aggressive)
+
+        self.assertEqual(scenario.evaluate(SentryState()).goal, tuple(aggressive[0]))
+        scenario.sentry_hp = 125.0
+        scenario.economy = 350
+        self.assertEqual(scenario.patrol_points, tuple(tuple(point) for point in conservative))
+
+        scenario.reset_match_time()
+
+        self.assertEqual(scenario.aggressive_patrol_route, aggressive)
+        self.assertEqual(scenario.conservative_patrol_route, conservative)
+
     def test_match_time_reset_restores_complete_match_state(self) -> None:
         scenario = TaskScenario(
             remaining_time=12.0,
