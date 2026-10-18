@@ -30,6 +30,7 @@ from .field_geometry import (
     RED_START_POSITIONS,
     RED_SUPPLY_POINT,
 )
+from .map_regions import normalize_points, validate_polygon
 
 
 HOME = RED_HOME
@@ -109,6 +110,12 @@ RULEBOOK_REVIVE_RATE = 1.0
 RULEBOOK_REVIVE_BASE = 10.0
 INSTANT_REVIVE_INVINCIBLE = 3.0
 INSTANT_REVIVE_POWER_BOOST = 4.0
+BASE_GAIN_DEFENCE = 0.50
+BASE_GAIN_ZONE_IDS = {
+    "red": "region_06_base_red",
+    "blue": "region_06_base_blue",
+}
+GROUND_ROBOT_IDS = (1, 2, 3, 4, 8)
 
 # Level tables (rulebook 5.4).  Sentry and engineer do not use levels.
 LEVEL_EXP_THRESHOLDS = (0, 550, 1100, 1650, 2200, 2750, 3300, 3850, 4400, 5000)
@@ -271,6 +278,35 @@ def _initial_robot_shots() -> dict[int, int | None]:
     return {target_id: None for target_id in ROBOT_PROFILES}
 
 
+def _initial_enemy_ground_flags() -> dict[int, bool]:
+    return {target_id: False for target_id in GROUND_ROBOT_IDS}
+
+
+def _initial_own_ground_flags() -> dict[int, bool]:
+    # The red sentry keeps its legacy scalar fields for ROS/UI compatibility.
+    return {target_id: False for target_id in GROUND_ROBOT_IDS if target_id != 8}
+
+
+def _initial_enemy_ground_timers() -> dict[int, float]:
+    return {target_id: 0.0 for target_id in GROUND_ROBOT_IDS}
+
+
+def _initial_own_ground_timers() -> dict[int, float]:
+    return {target_id: 0.0 for target_id in GROUND_ROBOT_IDS if target_id != 8}
+
+
+def _initial_enemy_death_timers() -> dict[int, float | None]:
+    return {target_id: None for target_id in GROUND_ROBOT_IDS}
+
+
+def _initial_own_death_timers() -> dict[int, float | None]:
+    return {target_id: None for target_id in GROUND_ROBOT_IDS if target_id != 8}
+
+
+def _initial_base_gain_occupants() -> dict[str, list[int]]:
+    return {"red": [], "blue": []}
+
+
 @dataclass
 class ActiveBuff:
     source: str
@@ -380,6 +416,19 @@ class TaskScenario:
     invincible_remaining: float = 0.0
     weak_state: bool = False
     instant_revive_power_boost_remaining: float = 0.0
+    # Per-robot rulebook state for every other ground robot.  The red sentry
+    # continues to use the scalar fields above so existing ROS/UI consumers do
+    # not need to change.
+    robot_weak_state: dict[int, bool] = field(default_factory=_initial_enemy_ground_flags)
+    own_robot_weak_state: dict[int, bool] = field(default_factory=_initial_own_ground_flags)
+    robot_invincible_remaining: dict[int, float] = field(default_factory=_initial_enemy_ground_timers)
+    own_robot_invincible_remaining: dict[int, float] = field(default_factory=_initial_own_ground_timers)
+    robot_death_elapsed: dict[int, float | None] = field(default_factory=_initial_enemy_death_timers)
+    own_robot_death_elapsed: dict[int, float | None] = field(default_factory=_initial_own_death_timers)
+    robot_revive_progress: dict[int, float] = field(default_factory=_initial_enemy_ground_timers)
+    own_robot_revive_progress: dict[int, float] = field(default_factory=_initial_own_ground_timers)
+    robot_revive_required: dict[int, float] = field(default_factory=_initial_enemy_ground_timers)
+    own_robot_revive_required: dict[int, float] = field(default_factory=_initial_own_ground_timers)
     remote_heal_remaining: float | None = None
     remote_ammo_pending: int = 0
     remote_ammo_remaining: float | None = None
@@ -407,6 +456,9 @@ class TaskScenario:
     field_zone_overrides: dict[str, list[list[float]]] = field(default_factory=dict)
     active_buffs: list[ActiveBuff] = field(default_factory=list)
     zone_inside: set[str] = field(default_factory=set)
+    base_gain_occupants: dict[str, list[int]] = field(
+        default_factory=_initial_base_gain_occupants
+    )
     zone_cooldowns: dict[str, float] = field(default_factory=dict)
     road_crossing_side: str | None = None
     road_crossing_elapsed: float = 0.0
@@ -533,6 +585,7 @@ class TaskScenario:
     @property
     def effective_sentry_defence(self) -> float:
         bonus, vulnerability, _, _ = self.posture_effects
+        base_gain_active = self.robot_in_base_gain("red", 8)
         defence = max(
             self.defence_buff / 100.0,
             self.buff_value("defence"),
@@ -540,7 +593,8 @@ class TaskScenario:
             bonus,
         )
         weakness = max(self.buff_value("vulnerability"), vulnerability)
-        return max(-1.0, min(0.99, defence - weakness))
+        effective = max(-1.0, min(0.99, defence - weakness))
+        return max(BASE_GAIN_DEFENCE, effective) if base_gain_active else effective
 
     @property
     def effective_sentry_heat_cooling(self) -> float:
@@ -568,6 +622,42 @@ class TaskScenario:
     @property
     def sentry_invincible(self) -> bool:
         return self.invincible_remaining > 0.0
+
+    def robot_in_base_gain(self, team: str, target_id: int) -> bool:
+        """Return whether a living ground robot occupies its own base gain point."""
+        if team not in ("red", "blue"):
+            raise ValueError(f"unknown team {team}")
+        return target_id in self.base_gain_occupants.get(team, ())
+
+    def robot_is_weak(self, target_id: int, *, team: str = "blue") -> bool:
+        if team not in ("red", "blue"):
+            raise ValueError(f"unknown team {team}")
+        if team == "red" and target_id == 8:
+            return self.weak_state
+        states = self.robot_weak_state if team == "blue" else self.own_robot_weak_state
+        return bool(states.get(target_id, False))
+
+    def robot_invincibility_remaining(
+        self, target_id: int, *, team: str = "blue"
+    ) -> float:
+        if team not in ("red", "blue"):
+            raise ValueError(f"unknown team {team}")
+        if team == "red" and target_id == 8:
+            return self.invincible_remaining
+        timers = (
+            self.robot_invincible_remaining
+            if team == "blue"
+            else self.own_robot_invincible_remaining
+        )
+        return max(0.0, float(timers.get(target_id, 0.0)))
+
+    def robot_effective_defence(self, target_id: int, *, team: str = "blue") -> float:
+        """Return the live defence fraction used by the damage path."""
+        if team not in ("red", "blue"):
+            raise ValueError(f"unknown team {team}")
+        if team == "red" and target_id == 8:
+            return self.effective_sentry_defence
+        return BASE_GAIN_DEFENCE if self.robot_in_base_gain(team, target_id) else 0.0
 
     @property
     def remote_heal_cost(self) -> int:
@@ -691,10 +781,15 @@ class TaskScenario:
             # continue through adjust_sentry_health instead of this dictionary.
             raise ValueError("sentry health must use adjust_sentry_health")
         step = max(10.0, entity.max_hp / 10.0)
+        previous_health = self.own_robot_hp[target_id]
         self.own_robot_hp[target_id] = max(
             0.0,
             min(float(entity.max_hp), self.own_robot_hp[target_id] + step * direction),
         )
+        if previous_health > 0.0 and self.own_robot_hp[target_id] <= 0.0:
+            self._mark_robot_death(target_id, team="red")
+        elif self.own_robot_hp[target_id] > 0.0:
+            self.own_robot_death_elapsed[target_id] = None
         self._set_event(
             f"己方 {target_id} 号机器人血量已调整为 {round(self.own_robot_hp[target_id])}"
         )
@@ -1065,6 +1160,7 @@ class TaskScenario:
         if entity is None:
             raise ValueError(f"target {target_id} is not an enemy unit")
 
+        previous_health = self.enemy_health(target_id)
         step = 500.0 if target_id == 7 else 100.0 if target_id == 6 else max(10.0, entity.max_hp / 10.0)
         health = max(0.0, min(float(entity.max_hp), self.enemy_health(target_id) + step * direction))
         if target_id == 6:
@@ -1077,6 +1173,10 @@ class TaskScenario:
             name = "敌方基地"
         else:
             self.robot_hp[target_id] = health
+            if previous_health > 0.0 and health <= 0.0 and target_id in GROUND_ROBOT_IDS:
+                self._mark_robot_death(target_id, team="blue")
+            elif health > 0.0 and target_id in self.robot_death_elapsed:
+                self.robot_death_elapsed[target_id] = None
             name = f"敌方 {target_id} 号机器人"
         self._set_event(f"{name}血量已调整为 {round(health)}")
 
@@ -1177,8 +1277,15 @@ class TaskScenario:
             cost = REMOTE_17MM_COST
             amount = REMOTE_17MM_AMOUNT
         else:
-            self._set_event("区域属性暂未实现，非远程兑换不可用")
-            return False
+            inside_base_gain = self.robot_in_base_gain("red", 8)
+            if sentry is not None:
+                inside_base_gain = self._position_in_base_gain(
+                    "red", (sentry.x, sentry.y)
+                )
+            inside_legacy_supply = sentry is not None and self._sentry_at_supply(sentry)
+            if not inside_base_gain and not inside_legacy_supply:
+                self._set_event("需要位于己方补给区或基地增益点才能本地兑换弹量")
+                return False
             cost = LOCAL_17MM_COST
             amount = LOCAL_17MM_AMOUNT
         if self.economy < cost:
@@ -1355,6 +1462,9 @@ class TaskScenario:
                 self._update_power(sentry, simulation_elapsed)
             if not self.game_finished:
                 self._update_respawn(sentry, simulation_elapsed, bool(confirm_respawn))
+                self._update_robot_respawns(simulation_elapsed)
+                self._update_base_gain_points(sentry)
+                self._update_supply(sentry, simulation_elapsed)
             self._update_patrol(sentry)
             self.dodge_remaining = max(
                 0.0,
@@ -1484,11 +1594,14 @@ class TaskScenario:
             raise ValueError("shots must be a positive integer")
         if team not in ("blue", "red"):
             raise ValueError(f"unknown team {team}")
-        if target_id == 8 and team == "red" and self.invincible_remaining > 0.0:
+        if (
+            target_id in GROUND_ROBOT_IDS
+            and self.robot_invincibility_remaining(target_id, team=team) > 0.0
+        ):
             return 0
         if defence_buff is None:
-            if target_id == 8 and team == "red":
-                defence_buff = self.effective_sentry_defence
+            if target_id in GROUND_ROBOT_IDS:
+                defence_buff = self.robot_effective_defence(target_id, team=team)
             else:
                 defence_buff = 0.0
         damage = self.rule_damage(
@@ -1578,7 +1691,14 @@ class TaskScenario:
                 if previous_health > 0.0 and self.sentry_hp == 0.0:
                     self._mark_sentry_death()
             elif target_id in self.own_robot_hp:
+                previous_health = self.own_robot_hp[target_id]
                 self.own_robot_hp[target_id] = max(0.0, self.own_robot_hp[target_id] - damage)
+                if (
+                    target_id in GROUND_ROBOT_IDS
+                    and previous_health > 0.0
+                    and self.own_robot_hp[target_id] <= 0.0
+                ):
+                    self._mark_robot_death(target_id, team="red")
             after = self._target_health_total(target_id, team=team)
             self.enemy_team_damage += max(0.0, before - after)
             self._finish_if_base_destroyed()
@@ -1593,7 +1713,14 @@ class TaskScenario:
             remaining_damage = damage - shield_damage
             self.enemy_base_hp = max(0.0, self.enemy_base_hp - remaining_damage)
         elif target_id in self.robot_hp:
+            previous_health = self.robot_hp[target_id]
             self.robot_hp[target_id] = max(0.0, self.robot_hp[target_id] - damage)
+            if (
+                target_id in GROUND_ROBOT_IDS
+                and previous_health > 0.0
+                and self.robot_hp[target_id] <= 0.0
+            ):
+                self._mark_robot_death(target_id, team="blue")
         after = self._target_health_total(target_id, team=team)
         self.own_team_damage += max(0.0, before - after)
         self._finish_if_base_destroyed()
@@ -1777,6 +1904,41 @@ class TaskScenario:
         self.remote_heal_remaining = None
         self.instant_revive_power_boost_remaining = 0.0
 
+    def _mark_robot_death(self, target_id: int, *, team: str) -> None:
+        """Start the common respawn state machine for a non-player ground robot."""
+        if target_id not in GROUND_ROBOT_IDS or (team == "red" and target_id == 8):
+            return
+        if team == "blue":
+            death, progress, required = (
+                self.robot_death_elapsed,
+                self.robot_revive_progress,
+                self.robot_revive_required,
+            )
+            weak = self.robot_weak_state
+            invincible = self.robot_invincible_remaining
+        elif team == "red":
+            death, progress, required = (
+                self.own_robot_death_elapsed,
+                self.own_robot_revive_progress,
+                self.own_robot_revive_required,
+            )
+            weak = self.own_robot_weak_state
+            invincible = self.own_robot_invincible_remaining
+        else:
+            raise ValueError(f"unknown team {team}")
+        death[target_id] = 0.0
+        progress[target_id] = 0.0
+        required[target_id] = (
+            self.revive_seconds_required
+            if self.revive_mode == "rulebook"
+            else RESPAWN_CONFIRM_SECONDS
+        )
+        weak[target_id] = False
+        invincible[target_id] = 0.0
+        self.base_gain_occupants[team] = [
+            item for item in self.base_gain_occupants.get(team, []) if item != target_id
+        ]
+
     def kill_sentry(self) -> None:
         self.sentry_hp = 0.0
         self._mark_sentry_death()
@@ -1809,18 +1971,130 @@ class TaskScenario:
                 remaining.append(buff)
         self.active_buffs = remaining
 
+    def _base_gain_polygon(self, team: str) -> tuple[tuple[float, float], ...]:
+        if team not in BASE_GAIN_ZONE_IDS:
+            raise ValueError(f"unknown team {team}")
+        points = normalize_points(
+            self.field_zone_overrides.get(BASE_GAIN_ZONE_IDS[team])
+        )
+        return points if validate_polygon(points) is None else ()
+
+    def _position_in_base_gain(
+        self, team: str, position: tuple[float, float]
+    ) -> bool:
+        polygon = self._base_gain_polygon(team)
+        return bool(polygon) and _point_in_polygon(position, polygon)
+
+    @staticmethod
+    def _sentry_at_supply(sentry: SentryState) -> bool:
+        # Compatibility footprint used by the existing simulator before the
+        # editable annotation system was introduced.
+        return 0.0 <= sentry.x <= 4.0 and 0.0 <= sentry.y <= 3.0
+
     def _field_zones(self) -> tuple:
-        """Area annotations have no active rule semantics yet."""
-        return ()
+        """Return configured rule-bearing region ids.
+
+        Other annotation families remain geometry-only.  The two base slots
+        become active automatically once their polygons are drawn.
+        """
+        return tuple(
+            zone_id
+            for team, zone_id in BASE_GAIN_ZONE_IDS.items()
+            if self._base_gain_polygon(team)
+        )
 
     def _zones_for_team(self, team: str = "red") -> tuple:
-        return ()
+        zone_id = BASE_GAIN_ZONE_IDS.get(team)
+        if zone_id is None or not self._base_gain_polygon(team):
+            return ()
+        return (zone_id,)
 
     def _update_field_zones(self, sentry: SentryState, elapsed_seconds: float) -> None:
-        """Compatibility hook for old callers; region effects are empty."""
-        self.zone_inside.clear()
+        """Compatibility hook for callers that update rule-bearing regions."""
+        self._update_base_gain_points(sentry)
         self.road_crossing_side = None
         self.road_crossing_elapsed = 0.0
+
+    def _update_base_gain_points(self, sentry: SentryState) -> None:
+        """Apply both teams' base gain points to every occupying ground robot."""
+        occupants: dict[str, list[int]] = {"red": [], "blue": []}
+        if self._base_gain_polygon("red"):
+            for target_id in GROUND_ROBOT_IDS:
+                health = self.own_robot_health(target_id)
+                position = self.own_robot_position(target_id, sentry)
+                if health > 0.0 and self._position_in_base_gain("red", position):
+                    occupants["red"].append(target_id)
+        if self._base_gain_polygon("blue"):
+            for target_id in GROUND_ROBOT_IDS:
+                if self.enemy_health(target_id) <= 0.0:
+                    continue
+                if self._position_in_base_gain(
+                    "blue", self.robot_position(target_id, team="blue")
+                ):
+                    occupants["blue"].append(target_id)
+
+        cleared: list[str] = []
+        for team, target_ids in occupants.items():
+            for target_id in target_ids:
+                if not self.robot_is_weak(target_id, team=team):
+                    continue
+                if team == "red" and target_id == 8:
+                    self.weak_state = False
+                    self.respawn_fire_locked = False
+                    self.invincible_remaining = min(
+                        self.invincible_remaining,
+                        RULEBOOK_REVIVE_WEAK_INVINCIBLE_MIN,
+                    )
+                else:
+                    weak = (
+                        self.robot_weak_state
+                        if team == "blue"
+                        else self.own_robot_weak_state
+                    )
+                    invincible = (
+                        self.robot_invincible_remaining
+                        if team == "blue"
+                        else self.own_robot_invincible_remaining
+                    )
+                    weak[target_id] = False
+                    invincible[target_id] = min(
+                        invincible.get(target_id, 0.0),
+                        RULEBOOK_REVIVE_WEAK_INVINCIBLE_MIN,
+                    )
+                cleared.append(f"{'红' if team == 'red' else '蓝'}方{target_id}号")
+
+        self.base_gain_occupants = occupants
+        for team, zone_id in BASE_GAIN_ZONE_IDS.items():
+            if occupants[team]:
+                self.zone_inside.add(zone_id)
+            else:
+                self.zone_inside.discard(zone_id)
+        if cleared:
+            self._set_event(
+                "基地增益点解除虚弱：" + "、".join(cleared)
+            )
+
+    def _update_supply(self, sentry: SentryState, elapsed_seconds: float) -> None:
+        """Retain the existing red supply-zone healing and unlock behavior."""
+        if not self._sentry_at_supply(sentry) or self.sentry_hp <= 0.0:
+            return
+        if self.weak_state:
+            self.weak_state = False
+            self.invincible_remaining = min(
+                self.invincible_remaining,
+                RULEBOOK_REVIVE_WEAK_INVINCIBLE_MIN,
+            )
+        self.respawn_fire_locked = False
+        if self.pending_ammo > 0:
+            transferred = min(self.pending_ammo, AMMO_CAP - self.ammo)
+            self.ammo += transferred
+            self.pending_ammo -= transferred
+        if elapsed_seconds > 0.0 and self.sentry_out_of_combat_seconds >= OUT_OF_COMBAT_SECONDS:
+            fraction_per_second = 0.25 if self.match_elapsed >= 240.0 else 0.10
+            self.sentry_hp = min(
+                400.0,
+                self.sentry_hp + 400.0 * fraction_per_second * elapsed_seconds,
+            )
 
     def _update_road_crossing(
         self,
@@ -1905,7 +2179,9 @@ class TaskScenario:
         self._set_event("能量机关状态结束")
 
     def _zone_named(self, name: str):
-        return next((zone for zone in self._field_zones() if zone.name == name), None)
+        # Legacy assembly helpers expect a FieldZone object.  Base gain points
+        # use the polygon helpers above and do not expose a synthetic object.
+        return None
 
     def select_assembly_difficulty(self, difficulty: int) -> bool:
         if difficulty not in (1, 2, 3, 4):
@@ -2250,7 +2526,11 @@ class TaskScenario:
     ) -> None:
         if self.revive_required <= 0.0:
             self.revive_required = self.revive_seconds_required
-        rate = RULEBOOK_REVIVE_RATE
+        rate = (
+            RULEBOOK_REVIVE_RATE * 4.0
+            if self._sentry_at_supply(sentry)
+            else RULEBOOK_REVIVE_RATE
+        )
         self.revive_progress = min(
             self.revive_required,
             self.revive_progress + rate * elapsed_seconds,
@@ -2272,6 +2552,61 @@ class TaskScenario:
         self._ammo_shot_accumulator = 0.0
         self._set_event("读条复活：10% 血量，30 秒无敌并进入虚弱状态")
 
+    def _update_robot_respawns(self, elapsed_seconds: float) -> None:
+        """Advance respawn timers for every non-player ground robot."""
+        if elapsed_seconds <= 0.0:
+            return
+        revived: list[str] = []
+        for team in ("red", "blue"):
+            if team == "blue":
+                hp_map = self.robot_hp
+                death = self.robot_death_elapsed
+                progress = self.robot_revive_progress
+                required = self.robot_revive_required
+                weak = self.robot_weak_state
+                invincible = self.robot_invincible_remaining
+            else:
+                hp_map = self.own_robot_hp
+                death = self.own_robot_death_elapsed
+                progress = self.own_robot_revive_progress
+                required = self.own_robot_revive_required
+                weak = self.own_robot_weak_state
+                invincible = self.own_robot_invincible_remaining
+            for target_id in tuple(death):
+                if death[target_id] is None or hp_map.get(target_id, 0.0) > 0.0:
+                    continue
+                death[target_id] = float(death[target_id] or 0.0) + elapsed_seconds
+                if required.get(target_id, 0.0) <= 0.0:
+                    required[target_id] = (
+                        self.revive_seconds_required
+                        if self.revive_mode == "rulebook"
+                        else RESPAWN_CONFIRM_SECONDS
+                    )
+                progress[target_id] = min(
+                    required[target_id],
+                    progress.get(target_id, 0.0) + elapsed_seconds,
+                )
+                if progress[target_id] < required[target_id]:
+                    continue
+                maximum = self.robot_max_hp(target_id, team=team)
+                if self.revive_mode == "rulebook":
+                    hp_map[target_id] = maximum * RULEBOOK_REVIVE_HP_FRACTION
+                    weak[target_id] = True
+                    invincible[target_id] = RULEBOOK_REVIVE_INVINCIBLE
+                else:
+                    hp_map[target_id] = maximum
+                    weak[target_id] = False
+                    invincible[target_id] = 0.0
+                death[target_id] = None
+                progress[target_id] = 0.0
+                required[target_id] = 0.0
+                revived.append(
+                    f"{'红' if team == 'red' else '蓝'}方{target_id}号"
+                )
+        if revived:
+            suffix = "，10%血量、30秒无敌并进入虚弱" if self.revive_mode == "rulebook" else ""
+            self._set_event("机器人复活：" + "、".join(revived) + suffix)
+
     def _update_economy_timers(
         self,
         sentry: SentryState,
@@ -2280,6 +2615,14 @@ class TaskScenario:
         self.invincible_remaining = max(
             0.0, self.invincible_remaining - elapsed_seconds
         )
+        for timers in (
+            self.robot_invincible_remaining,
+            self.own_robot_invincible_remaining,
+        ):
+            for target_id in timers:
+                timers[target_id] = max(
+                    0.0, timers[target_id] - elapsed_seconds
+                )
         self.instant_revive_power_boost_remaining = max(
             0.0,
             self.instant_revive_power_boost_remaining - elapsed_seconds,
@@ -2331,3 +2674,35 @@ class TaskScenario:
 
 def _distance(first: tuple[float, float], second: tuple[float, float]) -> float:
     return math.hypot(first[0] - second[0], first[1] - second[1])
+
+
+def _point_in_polygon(
+    point: tuple[float, float],
+    polygon: tuple[tuple[float, float], ...],
+) -> bool:
+    """Return True for points inside or on the boundary of a polygon."""
+    x, y = point
+    inside = False
+    previous_x, previous_y = polygon[-1]
+    for current_x, current_y in polygon:
+        cross = (x - previous_x) * (current_y - previous_y) - (
+            y - previous_y
+        ) * (current_x - previous_x)
+        if (
+            abs(cross) <= 1e-9
+            and min(previous_x, current_x) - 1e-9
+            <= x
+            <= max(previous_x, current_x) + 1e-9
+            and min(previous_y, current_y) - 1e-9
+            <= y
+            <= max(previous_y, current_y) + 1e-9
+        ):
+            return True
+        if (current_y > y) != (previous_y > y):
+            edge_x = previous_x + (y - previous_y) * (
+                current_x - previous_x
+            ) / (current_y - previous_y)
+            if x < edge_x:
+                inside = not inside
+        previous_x, previous_y = current_x, current_y
+    return inside

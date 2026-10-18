@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 import math
+import json
+from pathlib import Path
 
 from .field_rules import REGION_TYPES, canonical_region_id
 
@@ -165,3 +167,33 @@ def restore_geometry_payload(payload: dict | None) -> tuple[dict[str, tuple[Poin
                 "visible": bool(item.get("visible", False)),
             })
     return overrides, custom
+
+
+def load_geometry_file(path: Path) -> tuple[dict[str, tuple[Point, ...]], list[dict]]:
+    """Load the independent, permanent map annotation configuration."""
+    if not path.is_file():
+        return {}, []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}, []
+    return restore_geometry_payload(payload)
+
+
+def save_geometry_file(
+    path: Path,
+    zone_overrides: dict[str, Sequence[Point]],
+    custom_polygons: Sequence[dict],
+) -> None:
+    """Atomically save map annotations without coupling them to a scene."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(
+            geometry_payload(zone_overrides, custom_polygons),
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    temporary.replace(path)

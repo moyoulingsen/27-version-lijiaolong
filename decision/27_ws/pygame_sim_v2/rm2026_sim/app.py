@@ -30,9 +30,11 @@ from .field_geometry import BLUE_BASE, BLUE_OUTPOST
 from .map_asset import load_p5_pgm
 from .map_regions import (
     geometry_payload,
+    load_geometry_file,
     nearest_segment_index,
     normalize_points,
     restore_geometry_payload,
+    save_geometry_file,
     validate_polygon,
 )
 from .navigation import (
@@ -80,6 +82,7 @@ APP_ROOT = Path(__file__).resolve().parent.parent
 MAP_PATH = APP_ROOT / "assets" / "rmuc2026.pgm"
 FIELD_LAYOUT_PATH = APP_ROOT / "assets" / "rmuc2026_field_layout.png"
 SNAPSHOT_PATH = APP_ROOT / "scenario_saves.json"
+MAP_GEOMETRY_PATH = APP_ROOT / "map_regions.json"
 WINDOW_SIZE = (2240, 1260)
 HEADER_HEIGHT = 112
 SIDE_PANEL_WIDTH = 390
@@ -103,8 +106,8 @@ MAP_OVERLAY_LABELS = (
     ("objectives", "目标点"),
     ("navigation", "导航路径"),
 )
-# The v1/C++ behaviour tree still sends this pre-LOS outpost goal.  v2 maps it
-# to the LOS-clear firing point so ROS-online mode does not stop behind a wall.
+# The v1/C++ behaviour tree still sends this historical outpost goal.  v2 maps
+# it to the configured opening attack point.
 LEGACY_ATTACK_POINT = (17.0, 10.0)
 LEGACY_GOAL_ALIASES = (
     (LEGACY_ATTACK_POINT, ATTACK),
@@ -115,17 +118,11 @@ LEGACY_GOAL_ALIASES = (
     ((12.3, 11.7), AGGRESSIVE_PATROL_POINTS[2]),
 )
 
-# Static 2-D collision footprints for the field buildings.  The PGM already
-# contains the surrounding walls; these rectangles prevent a robot centre from
-# entering the base/outpost structures themselves.  The outpost rectangles are
-# centered on the black circles used by the field-layout image.
+# The PGM remains the sole source for static map/building obstacles.  Keep this
+# compatibility collection empty so no extra base or outpost collision volume
+# is added on top of the official map.
 AERIAL_COLLISION_RADIUS = 0.26
-STATIC_COLLISION_RECTANGLES = (
-    (0.00, 6.40, 0.55, 8.60),    # red base edge
-    (27.45, 6.40, 28.00, 8.60),  # blue base edge
-    (10.30, 3.14, 11.81, 4.65),  # red outpost
-    (16.23, 10.35, 17.73, 11.85),  # blue outpost
-)
+STATIC_COLLISION_RECTANGLES: tuple[tuple[float, float, float, float], ...] = ()
 
 
 def _font_path(bold: bool = False) -> str | None:
@@ -180,11 +177,6 @@ class SimulatorApp:
             STATIC_COLLISION_RECTANGLES,
             inflation=ROBOT_ENTITY_COLLISION_RADIUS,
         )
-        self.los_grid = OccupancyGrid.from_pgm(
-            map_image,
-            self.arena,
-            collision_radius=0.0,
-        )
         self.planning_grid = OccupancyGrid.from_pgm(
             map_image,
             self.arena,
@@ -228,6 +220,43 @@ class SimulatorApp:
             if canonical_region_id(name) in {identifier for identifier, _ in REGION_TYPES}
         }
         self.custom_map_polygons: list[dict] = []
+        self._persistent_geometry_loaded = MAP_GEOMETRY_PATH.is_file()
+        if self._persistent_geometry_loaded:
+            self.map_zone_overrides, self.custom_map_polygons = load_geometry_file(
+                MAP_GEOMETRY_PATH
+            )
+        else:
+            # Migrate geometry from the newest scene once.  Future edits are
+            # written to the independent map_regions.json file immediately.
+            for snapshot in reversed(self.snapshots):
+                raw_geometry = snapshot.get("map_geometry")
+                if isinstance(raw_geometry, dict) and raw_geometry:
+                    migrated_overrides, migrated_custom = restore_geometry_payload(
+                        raw_geometry
+                    )
+                else:
+                    task_data = snapshot.get("task") or {}
+                    legacy_overrides = task_data.get("field_zone_overrides")
+                    migrated_overrides, migrated_custom = restore_geometry_payload(
+                        {"zone_overrides": legacy_overrides}
+                    ) if legacy_overrides else ({}, [])
+                if migrated_overrides or migrated_custom:
+                    self.map_zone_overrides = migrated_overrides
+                    self.custom_map_polygons = migrated_custom
+                    try:
+                        save_geometry_file(
+                            MAP_GEOMETRY_PATH,
+                            self.map_zone_overrides,
+                            self.custom_map_polygons,
+                        )
+                        self._persistent_geometry_loaded = True
+                    except OSError:
+                        pass
+                    break
+        # The permanent map file is independent from scene snapshots.  Make
+        # its polygons available to live rule evaluation immediately on every
+        # startup, without requiring the user to edit or reload a scene first.
+        self._sync_task_zone_overrides()
         self.region_edit_target: str | None = None
         self.region_edit_custom_id: str | None = None
         self.region_edit_kind: str | None = None
@@ -673,7 +702,6 @@ class SimulatorApp:
                     self.task.resolve_fire_shot(
                         self.sentry,
                         preferred_target=preferred_target,
-                        line_of_sight=self._line_of_sight,
                     )
                     if fire_request
                     else None
@@ -681,7 +709,7 @@ class SimulatorApp:
                 self.hit_target_id = shot.target_id if shot is not None else None
                 if not restarting and not self.sentry.manual_control and shot is None:
                     # Automatic fire must not consume ammo/heat while the
-                    # target is behind cover or still outside alignment.
+                    # target is still outside the firing alignment.
                     fire_request = False
                 critical_zone = bool(
                     shot is not None and self.task.is_center_hit(shot)
@@ -993,16 +1021,6 @@ class SimulatorApp:
         )
         self._collision_damage_cooldown = 0.5
 
-    def _line_of_sight(
-        self,
-        start: tuple[float, float],
-        end: tuple[float, float],
-    ) -> bool:
-        grid = getattr(self, "los_grid", None)
-        if grid is None:
-            return True
-        return grid.line_of_sight(start, end)
-
     @staticmethod
     def _robot_collision_radius(team: str, target_id: int) -> float:
         if target_id == 5:
@@ -1104,8 +1122,6 @@ class SimulatorApp:
         delta_y = target_y - self.sentry.y
         if math.hypot(delta_x, delta_y) > DETECTION_RANGE:
             return False
-        if not self._line_of_sight((self.sentry.x, self.sentry.y), (target_x, target_y)):
-            return False
         target_angle = math.atan2(delta_y, delta_x)
         difference = (
             target_angle - self.sentry.turret_angle + math.pi
@@ -1126,23 +1142,13 @@ class SimulatorApp:
         """Keep the gimbal rotating until the barrel is inside firing tolerance.
 
         ``shoot_mode`` means "ready to fire", not merely "the decision selected
-        this target".  Without this gate the outpost branch can stop the gimbal
-        while the target is outside the 4-degree firing cone.  The same gate
-        clears a fire request when the target is behind cover.
+        this target".  The gate only waits for the 4-degree firing alignment.
         """
         if decision.target <= 0:
             return decision
         error = self.task.aim_error(self.sentry, decision.target)
         if error is None:
             return decision
-        try:
-            target_position = self.task.target_position(decision.target)
-        except ValueError:
-            target_position = None
-        if target_position is not None and not self._line_of_sight(
-            (self.sentry.x, self.sentry.y), target_position
-        ):
-            return replace(decision, tripod_mode=1, shoot_mode=0)
         if error <= FIRE_ALIGNMENT_TOLERANCE:
             return decision
         return replace(decision, tripod_mode=1, shoot_mode=0)
@@ -1346,11 +1352,6 @@ class SimulatorApp:
                 angle - self.sentry.turret_angle + math.pi
             ) % math.tau - math.pi
             if distance <= DETECTION_RANGE and abs(relative_angle) <= AUTOAIM_HALF_VIEW:
-                if not self._line_of_sight(
-                    (self.sentry.x, self.sentry.y),
-                    position,
-                ):
-                    continue
                 visible[target_id] = 1
                 distances[target_id] = distance
                 polar_radius[target_id] = distance
@@ -1390,6 +1391,7 @@ class SimulatorApp:
                 if item.get("id") == identifier:
                     item["visible"] = visible
                     break
+            self._save_persistent_geometry()
         if layer.startswith("zone:"):
             self.show_field_zones = any(
                 self.map_layer_visibility.get(f"zone:{kind}", False)
@@ -1403,6 +1405,7 @@ class SimulatorApp:
             item["visible"] = visible
         self.show_collision_volumes = visible
         self.show_field_zones = visible
+        self._save_persistent_geometry()
 
     def _toggle_all_field_zones(self) -> None:
         show_zones = not self.show_field_zones
@@ -1430,6 +1433,20 @@ class SimulatorApp:
             name: [[float(x), float(y)] for x, y in points]
             for name, points in self.map_zone_overrides.items()
         }
+
+    def _save_persistent_geometry(self) -> bool:
+        """Persist map annotations independently of the currently selected scene."""
+        try:
+            save_geometry_file(
+                MAP_GEOMETRY_PATH,
+                self.map_zone_overrides,
+                self.custom_map_polygons,
+            )
+        except OSError:
+            self.task.notify("区域已更新，但永久配置写入失败，请检查目录权限")
+            return False
+        self._persistent_geometry_loaded = True
+        return True
 
     def _region_type_configured(self, kind: str) -> bool:
         """Return whether a type has at least one valid polygon."""
@@ -1555,6 +1572,7 @@ class SimulatorApp:
                 if self.region_edit_kind:
                     item["kind"] = canonical_region_id(self.region_edit_kind)
                 self.task.notify(f"已保存{item.get('name', '自定义区域')}")
+        self._save_persistent_geometry()
         self._cancel_region_edit()
         return True
 
@@ -1594,6 +1612,7 @@ class SimulatorApp:
         for removed_id in removed_ids:
             self.map_layer_visibility.pop(f"custom:{removed_id}", None)
         self._sync_task_zone_overrides()
+        self._save_persistent_geometry()
         if (
             self.region_edit_target == region_kind
             or self.region_edit_custom_id in removed_ids
@@ -2020,7 +2039,13 @@ class SimulatorApp:
         self.task = task
         self.sentry = sentry
         raw_geometry = self.snapshots[index].get("map_geometry")
-        if isinstance(raw_geometry, dict) and raw_geometry:
+        if getattr(self, "_persistent_geometry_loaded", False) and MAP_GEOMETRY_PATH.is_file():
+            # Region annotations are global configuration, not per-scene
+            # state. Loading a scene must not erase them.
+            self.map_zone_overrides, self.custom_map_polygons = load_geometry_file(
+                MAP_GEOMETRY_PATH
+            )
+        elif isinstance(raw_geometry, dict) and raw_geometry:
             self.map_zone_overrides, self.custom_map_polygons = restore_geometry_payload(
                 raw_geometry
             )
@@ -2503,7 +2528,7 @@ class SimulatorApp:
                 "exchange_remote_ammo",
             ),
             (
-                "补给 +10 弹 -10",
+                "基地/补给 +10 弹 -10",
                 "exchange_local_ammo",
             ),
             (
@@ -3991,20 +4016,7 @@ class SimulatorApp:
         error = self.task.aim_error(self.sentry, self.decision.target)
         if error is None:
             return ""
-        try:
-            target_position = self.task.target_position(self.decision.target)
-        except ValueError:
-            target_position = None
-        vision = ""
-        if target_position is not None:
-            vision = (
-                "｜视线通"
-                if self._line_of_sight(
-                    (self.sentry.x, self.sentry.y), target_position
-                )
-                else "｜视线遮挡"
-            )
-        return f"｜误差 {math.degrees(error):.1f}°{vision}"
+        return f"｜误差 {math.degrees(error):.1f}°"
 
     def _draw_arena(self, viewport: Viewport) -> None:
         rect = self.pg.Rect(

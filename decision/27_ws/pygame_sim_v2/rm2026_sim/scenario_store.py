@@ -79,11 +79,29 @@ def restore_snapshot(
         "own_robot_heat",
         "robot_power",
         "own_robot_power",
+        "robot_invincible_remaining",
+        "own_robot_invincible_remaining",
+        "robot_revive_progress",
+        "own_robot_revive_progress",
+        "robot_revive_required",
+        "own_robot_revive_required",
     ):
         if resource_name in task_data:
             task_data[resource_name] = {
                 int(target_id): float(value)
                 for target_id, value in (task_data.get(resource_name) or {}).items()
+            }
+    for flag_name in ("robot_weak_state", "own_robot_weak_state"):
+        if flag_name in task_data:
+            task_data[flag_name] = {
+                int(target_id): bool(value)
+                for target_id, value in (task_data.get(flag_name) or {}).items()
+            }
+    for timer_name in ("robot_death_elapsed", "own_robot_death_elapsed"):
+        if timer_name in task_data:
+            task_data[timer_name] = {
+                int(target_id): (None if value is None else float(value))
+                for target_id, value in (task_data.get(timer_name) or {}).items()
             }
     for shot_name in (
         "robot_shots_17mm",
@@ -115,6 +133,16 @@ def restore_snapshot(
             }
     if "zone_inside" in task_data:
         task_data["zone_inside"] = set(task_data.get("zone_inside") or [])
+    if "base_gain_occupants" in task_data:
+        restored_occupants = {
+            team: [int(target_id) for target_id in (target_ids or [])]
+            for team, target_ids in (task_data.get("base_gain_occupants") or {}).items()
+            if team in ("red", "blue")
+        }
+        task_data["base_gain_occupants"] = {
+            "red": restored_occupants.get("red", []),
+            "blue": restored_occupants.get("blue", []),
+        }
     if "assembly_completed" in task_data:
         task_data["assembly_completed"] = set(
             int(value) for value in (task_data.get("assembly_completed") or [])

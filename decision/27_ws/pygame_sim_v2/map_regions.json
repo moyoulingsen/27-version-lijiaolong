@@ -1,0 +1,33 @@
+{
+  "zone_overrides": {
+    "region_01_supply_red": [],
+    "region_01_supply_blue": [
+      [
+        20.0,
+        1.0
+      ],
+      [
+        21.0,
+        1.0
+      ],
+      [
+        21.0,
+        2.0
+      ]
+    ]
+  },
+  "custom_polygons": [
+    {
+      "id": "custom_3",
+      "kind": "region_01_supply_blue",
+      "name": "自定义区域",
+      "points": [],
+      "color": [
+        230,
+        160,
+        70
+      ],
+      "visible": false
+    }
+  ]
+}

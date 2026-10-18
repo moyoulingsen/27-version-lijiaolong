@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import tempfile
 import unittest
 from types import SimpleNamespace
 
@@ -9,9 +11,11 @@ from rm2026_sim.core import SentryState
 from rm2026_sim.field_rules import REGION_DEFINITIONS, REGION_TYPES
 from rm2026_sim.map_regions import (
     geometry_payload,
+    load_geometry_file,
     normalize_points,
     polygon_area,
     restore_geometry_payload,
+    save_geometry_file,
     validate_polygon,
 )
 from rm2026_sim.task_state import TaskScenario
@@ -146,6 +150,30 @@ class MapRegionGeometryTests(unittest.TestCase):
 
         self.assertTrue(app._region_type_configured("region_01_supply_red"))
         self.assertEqual(app._missing_required_regions(), [])
+
+    def test_permanent_geometry_file_round_trip(self) -> None:
+        overrides = {
+            "region_11_central_highland": ((10.0, 10.0), (12.0, 10.0), (12.0, 12.0))
+        }
+        custom = [
+            {
+                "id": "custom_7",
+                "kind": "region_01_supply_blue",
+                "name": "补给区增益点（蓝方） 2",
+                "points": [[20.0, 10.0], [22.0, 10.0], [22.0, 12.0]],
+                "color": [45, 130, 220],
+                "visible": True,
+            }
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "map_regions.json"
+            save_geometry_file(path, overrides, custom)
+            restored_overrides, restored_custom = load_geometry_file(path)
+
+        self.assertEqual(restored_overrides, overrides)
+        self.assertEqual(restored_custom[0]["id"], "custom_7")
+        self.assertEqual(restored_custom[0]["kind"], "region_01_supply_blue")
+        self.assertTrue(restored_custom[0]["visible"])
 
 
 if __name__ == "__main__":

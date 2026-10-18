@@ -15,8 +15,8 @@ from .field_geometry import RUNE_POSITIONS
 
 # These are the only area annotation slots exposed by the map editor.  The six
 # gain-point families that exist on both sides of the field have explicit red
-# and blue slots.  The two tunnel entries remain separate because the source
-# figure labels the two tunnel gain points independently.
+# and blue slots.  There is one tunnel slot; duplicate tunnel entries are not
+# separate area types.
 REGION_TYPES = (
     ("region_01_supply_red", "补给区增益点（红方）"),
     ("region_01_supply_blue", "补给区增益点（蓝方）"),
@@ -32,7 +32,6 @@ REGION_TYPES = (
     ("region_08_highland", "地形跨越增益点（高地）"),
     ("region_09_outpost_red", "前哨站增益点（红方）"),
     ("region_09_outpost_blue", "前哨站增益点（蓝方）"),
-    ("region_10_tunnel", "地形跨越增益点（隧道）"),
     ("region_11_central_highland", "中央高地增益点兼地形跨越增益点（高地）"),
     ("region_12_assembly_red", "装配区增益点（红方）"),
     ("region_12_assembly_blue", "装配区增益点（蓝方）"),
