@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .core import SentryState
+from .field_rules import REGION_TYPES, canonical_region_id
 from .task_state import ActiveBuff, TaskScenario
 
 
@@ -17,6 +18,7 @@ def capture_snapshot(
     sentry: SentryState,
     controlled_robot_id: int | None,
     controlled_robot_team: str | None = None,
+    map_geometry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     task_data = asdict(task)
     task_data["zone_inside"] = sorted(task.zone_inside)
@@ -27,6 +29,7 @@ def capture_snapshot(
         "sentry": asdict(sentry),
         "controlled_robot_id": controlled_robot_id,
         "controlled_robot_team": controlled_robot_team,
+        "map_geometry": map_geometry or {},
     }
 
 
@@ -127,6 +130,18 @@ def restore_snapshot(
         ]
     if task_data.get("dodge_goal") is not None:
         task_data["dodge_goal"] = tuple(task_data["dodge_goal"])
+    if "field_zone_overrides" in task_data:
+        allowed_regions = {identifier for identifier, _ in REGION_TYPES}
+        task_data["field_zone_overrides"] = {
+            canonical_region_id(name): [
+                [float(point[0]), float(point[1])]
+                for point in (points or [])
+                if isinstance(point, (list, tuple)) and len(point) >= 2
+            ]
+            for name, points in (task_data.get("field_zone_overrides") or {}).items()
+            if canonical_region_id(name) in allowed_regions
+            and isinstance(points, (list, tuple))
+        }
 
     controlled = snapshot.get("controlled_robot_id")
     controlled_robot_id = int(controlled) if controlled is not None else None

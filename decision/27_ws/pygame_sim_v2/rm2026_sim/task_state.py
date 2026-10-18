@@ -9,19 +9,13 @@ from collections.abc import Callable
 
 from .core import Arena, SentryState
 from .field_rules import (
-    FIELD_ZONES,
-    FieldZone,
     LARGE_RUNE_ACTIVATION_WINDOW,
     RUNE_POSITIONS,
-    ROAD_CARD_HALF_EXTENT,
-    ROAD_CROSSING_CARDS,
-    ROAD_CROSSING_WINDOW,
     SMALL_RUNE_ACTIVATION_WINDOW,
     SMALL_RUNE_DEFENCE,
     SMALL_RUNE_DURATION,
     large_rune_profile,
     rune_distance_to,
-    zones_for_team,
 )
 from .field_geometry import (
     AGGRESSIVE_PATROL_POINTS,
@@ -35,7 +29,6 @@ from .field_geometry import (
     RED_OUTPOST,
     RED_START_POSITIONS,
     RED_SUPPLY_POINT,
-    RED_SUPPLY_ZONE,
 )
 
 
@@ -70,17 +63,12 @@ EVADE_OFFSETS = (
     (0.95, -0.55),
     (-0.85, 0.65),
 )
-SUPPLY_ZONE = RED_SUPPLY_ZONE
-SUPPLY_FIELD_ZONE = next(zone for zone in FIELD_ZONES if zone.name == "red_supply")
 PATROL_POINTS = CONSERVATIVE_PATROL_POINTS
 
 # v2 rule-fidelity constants.  The task-one sheet keeps the sentry in "task"
 # mode (5 s confirm, 400 HP); the other values follow rulebook V2.2.0.
 RESPAWN_CONFIRM_SECONDS = 5.0
 OUT_OF_COMBAT_SECONDS = 6.0
-SUPPLY_HEAL_BASE_FRACTION = 0.10
-SUPPLY_HEAL_LATE_FRACTION = 0.25
-SUPPLY_LATE_MATCH_ELAPSED = 240.0
 PENDING_AMMO_CAP = 1000
 AMMO_CAP = 1000
 ECONOMY_INITIAL = 400
@@ -118,7 +106,6 @@ RULEBOOK_REVIVE_HP_FRACTION = 0.10
 RULEBOOK_REVIVE_INVINCIBLE = 30.0
 RULEBOOK_REVIVE_WEAK_INVINCIBLE_MIN = 10.0
 RULEBOOK_REVIVE_RATE = 1.0
-RULEBOOK_REVIVE_SUPPLY_RATE = 4.0
 RULEBOOK_REVIVE_BASE = 10.0
 INSTANT_REVIVE_INVINCIBLE = 3.0
 INSTANT_REVIVE_POWER_BOOST = 4.0
@@ -414,6 +401,10 @@ class TaskScenario:
     infantry_chassis_mode: str = "blood"
     infantry_launcher_mode: str = "cooling"
     # Field gain points / energy rune.
+    # Optional world-coordinate polygons edited from the Pygame map editor.
+    # An empty polygon means that the corresponding required region was
+    # deleted and must be drawn again before validation can start.
+    field_zone_overrides: dict[str, list[list[float]]] = field(default_factory=dict)
     active_buffs: list[ActiveBuff] = field(default_factory=list)
     zone_inside: set[str] = field(default_factory=set)
     zone_cooldowns: dict[str, float] = field(default_factory=dict)
@@ -619,7 +610,12 @@ class TaskScenario:
         return AGGRESSIVE_PATROL_POINTS if self.patrol_is_aggressive else CONSERVATIVE_PATROL_POINTS
 
     def reset(self) -> None:
+        field_zone_overrides = {
+            name: [list(point) for point in points]
+            for name, points in self.field_zone_overrides.items()
+        }
         fresh = type(self)()
+        fresh.field_zone_overrides = field_zone_overrides
         self.__dict__.update(fresh.__dict__)
 
     def move_robot(
@@ -1181,9 +1177,8 @@ class TaskScenario:
             cost = REMOTE_17MM_COST
             amount = REMOTE_17MM_AMOUNT
         else:
-            if sentry is None or not in_supply_zone(sentry.x, sentry.y):
-                self._set_event("非远程兑换需要在补给区")
-                return False
+            self._set_event("区域属性暂未实现，非远程兑换不可用")
+            return False
             cost = LOCAL_17MM_COST
             amount = LOCAL_17MM_AMOUNT
         if self.economy < cost:
@@ -1351,11 +1346,8 @@ class TaskScenario:
 
         if not self.game_paused:
             self._update_buffs(simulation_elapsed)
-            self._update_field_zones(sentry, simulation_elapsed)
             self._update_rune(simulation_elapsed)
             if not self.game_finished:
-                self._update_assembly(simulation_elapsed)
-                self._update_assembly_bonus(simulation_elapsed)
                 self._update_dart(simulation_elapsed)
                 self._update_radar(simulation_elapsed)
                 self._update_economy_timers(sentry, simulation_elapsed)
@@ -1363,7 +1355,6 @@ class TaskScenario:
                 self._update_power(sentry, simulation_elapsed)
             if not self.game_finished:
                 self._update_respawn(sentry, simulation_elapsed, bool(confirm_respawn))
-                self._update_supply(sentry, simulation_elapsed)
             self._update_patrol(sentry)
             self.dodge_remaining = max(
                 0.0,
@@ -1818,146 +1809,27 @@ class TaskScenario:
                 remaining.append(buff)
         self.active_buffs = remaining
 
-    def _update_field_zones(
-        self,
-        sentry: SentryState,
-        elapsed_seconds: float,
-    ) -> None:
-        road_cooldown_at_start = max(
-            self.zone_cooldowns.get("terrain_road", 0.0),
-            self.zone_cooldowns.get("red_road", 0.0),
-            self.zone_cooldowns.get("blue_road", 0.0),
-        )
-        for name in list(self.zone_cooldowns):
-            self.zone_cooldowns[name] = max(
-                0.0, self.zone_cooldowns[name] - elapsed_seconds
-            )
-        inside: set[str] = set()
-        for zone in zones_for_team("red"):
-            if not zone.contains(sentry.x, sentry.y):
-                continue
-            inside.add(zone.name)
-            if zone.kind == "terrain_road":
-                continue
-            if zone.mode == "continuous":
-                for kind, value, duration in zone.buffs:
-                    self.add_buff(zone.name, kind, value, duration)
-            elif (
-                zone.name not in self.zone_inside
-                and self.zone_cooldowns.get(zone.name, 0.0) <= 0.0
-            ):
-                for kind, value, duration in zone.buffs:
-                    self.add_buff(zone.name, kind, value, duration)
-                self.zone_cooldowns[zone.name] = zone.cooldown
-        self.zone_inside = inside
-        self._update_road_crossing(
-            sentry,
-            elapsed_seconds,
-            road_cooldown_at_start,
-        )
+    def _field_zones(self) -> tuple:
+        """Area annotations have no active rule semantics yet."""
+        return ()
+
+    def _zones_for_team(self, team: str = "red") -> tuple:
+        return ()
+
+    def _update_field_zones(self, sentry: SentryState, elapsed_seconds: float) -> None:
+        """Compatibility hook for old callers; region effects are empty."""
+        self.zone_inside.clear()
+        self.road_crossing_side = None
+        self.road_crossing_elapsed = 0.0
 
     def _update_road_crossing(
         self,
         sentry: SentryState,
         elapsed_seconds: float,
-        cooldown_at_start: float,
+        cooldown_at_start: float = 0.0,
     ) -> None:
-        current = (sentry.x, sentry.y)
-        previous = (
-            tuple(self._last_field_position)
-            if self._last_field_position is not None
-            else None
-        )
-        self._last_field_position = [sentry.x, sentry.y]
-        if self.sentry_hp <= 0.0:
-            self.road_crossing_side = None
-            self.road_crossing_elapsed = 0.0
-            return
-
-        events: list[tuple[float, int, str, str | None]] = []
-        for side, cards in ROAD_CROSSING_CARDS.items():
-            for index, (x, y) in enumerate(cards):
-                half_extent = ROAD_CARD_HALF_EXTENT
-                time = _segment_rect_entry_time(
-                    previous,
-                    current,
-                    (
-                        x - half_extent,
-                        y - half_extent,
-                        x + half_extent,
-                        y + half_extent,
-                    ),
-                )
-                if time is not None:
-                    card = "low" if index == 0 else "high"
-                    events.append((time, 1, card, side))
-
-        for zone in FIELD_ZONES:
-            if zone.kind == "terrain_road":
-                continue
-            time = _segment_zone_entry_time(previous, current, zone)
-            if time is not None:
-                events.append((time, 0, "other", zone.name))
-
-        crossing_side = self.road_crossing_side
-        crossing_elapsed = self.road_crossing_elapsed
-        previous_time = 0.0
-        last_success_time: float | None = None
-        road_zone = next(zone for zone in FIELD_ZONES if zone.kind == "terrain_road")
-
-        for time, _priority, event_kind, side in sorted(events):
-            crossing_elapsed += (time - previous_time) * elapsed_seconds
-            if (
-                crossing_side is not None
-                and crossing_elapsed > ROAD_CROSSING_WINDOW
-            ):
-                crossing_side = None
-                crossing_elapsed = 0.0
-            previous_time = time
-
-            if event_kind == "other":
-                crossing_side = None
-                crossing_elapsed = 0.0
-                continue
-
-            if last_success_time is None:
-                cooling_down = cooldown_at_start - time * elapsed_seconds > 0.0
-            else:
-                cooling_down = (
-                    (time - last_success_time) * elapsed_seconds
-                    < road_zone.cooldown
-                )
-            if cooling_down:
-                crossing_side = None
-                crossing_elapsed = 0.0
-                continue
-
-            if event_kind == "low":
-                crossing_side = side
-                crossing_elapsed = 0.0
-            elif crossing_side == side and crossing_elapsed <= ROAD_CROSSING_WINDOW:
-                for kind, value, duration in road_zone.buffs:
-                    self.add_buff("terrain_road", kind, value, duration)
-                last_success_time = time
-                crossing_side = None
-                crossing_elapsed = 0.0
-            else:
-                crossing_side = None
-                crossing_elapsed = 0.0
-
-        crossing_elapsed += (1.0 - previous_time) * elapsed_seconds
-        if crossing_elapsed > ROAD_CROSSING_WINDOW:
-            crossing_side = None
-            crossing_elapsed = 0.0
-        self.road_crossing_side = crossing_side
-        self.road_crossing_elapsed = crossing_elapsed
-
-        if last_success_time is not None:
-            self.zone_cooldowns["terrain_road"] = max(
-                0.0,
-                road_zone.cooldown
-                - (1.0 - last_success_time) * elapsed_seconds,
-            )
+        self.road_crossing_side = None
+        self.road_crossing_elapsed = 0.0
 
     def activate_rune(self, kind: str = "small") -> None:
         if kind not in ("small", "large"):
@@ -2033,7 +1905,7 @@ class TaskScenario:
         self._set_event("能量机关状态结束")
 
     def _zone_named(self, name: str):
-        return next((zone for zone in FIELD_ZONES if zone.name == name), None)
+        return next((zone for zone in self._field_zones() if zone.name == name), None)
 
     def select_assembly_difficulty(self, difficulty: int) -> bool:
         if difficulty not in (1, 2, 3, 4):
@@ -2378,13 +2250,7 @@ class TaskScenario:
     ) -> None:
         if self.revive_required <= 0.0:
             self.revive_required = self.revive_seconds_required
-        in_supply = in_supply_zone(sentry.x, sentry.y)
-        fast = in_supply or self.own_base_hp < 2000
-        rate = (
-            RULEBOOK_REVIVE_SUPPLY_RATE
-            if fast
-            else RULEBOOK_REVIVE_RATE
-        )
+        rate = RULEBOOK_REVIVE_RATE
         self.revive_progress = min(
             self.revive_required,
             self.revive_progress + rate * elapsed_seconds,
@@ -2449,52 +2315,6 @@ class TaskScenario:
                 )
                 self._set_event(f"远程兑换弹药生效 +{amount}")
 
-    def _update_supply(self, sentry: SentryState, elapsed_seconds: float) -> None:
-        late_heal = (
-            self.match_elapsed >= SUPPLY_LATE_MATCH_ELAPSED
-            and self.sentry_out_of_combat_seconds >= OUT_OF_COMBAT_SECONDS
-        )
-        heal_fraction = (
-            SUPPLY_HEAL_LATE_FRACTION if late_heal else SUPPLY_HEAL_BASE_FRACTION
-        )
-        if in_supply_zone(sentry.x, sentry.y):
-            if self.weak_state:
-                self.weak_state = False
-                self.respawn_fire_locked = False
-                self.invincible_remaining = min(
-                    self.invincible_remaining,
-                    RULEBOOK_REVIVE_WEAK_INVINCIBLE_MIN,
-                )
-                self._set_event("虚弱状态解除，发射机构解锁")
-            elif self.respawn_fire_locked:
-                self.respawn_fire_locked = False
-                self._set_event("发射机构已解锁")
-            if 0.0 < self.sentry_hp < 400.0:
-                self.sentry_hp = min(
-                    400.0,
-                    self.sentry_hp + 400.0 * heal_fraction * elapsed_seconds,
-                )
-            if self.pending_ammo > 0:
-                transfer = min(AMMO_CAP - self.ammo, self.pending_ammo)
-                if transfer > 0:
-                    self.ammo += transfer
-                    self.pending_ammo -= transfer
-                    self._set_event(f"补给区补弹 +{transfer}，当前弹量 {self.ammo}")
-        # Friendly ground robots share the same supply-zone healing model.
-        for target_id, health in self.own_robot_hp.items():
-            if target_id == 5:
-                continue
-            x, y = self.own_robot_positions[target_id]
-            if not in_supply_zone(x, y) or health <= 0.0:
-                continue
-            maximum = float(ROBOT_PROFILES[target_id].max_hp)
-            if health >= maximum:
-                continue
-            self.own_robot_hp[target_id] = min(
-                maximum,
-                health + maximum * heal_fraction * elapsed_seconds,
-            )
-
     def _update_patrol(self, sentry: SentryState) -> None:
         points = self.patrol_points
         point = points[self.patrol_index]
@@ -2511,81 +2331,3 @@ class TaskScenario:
 
 def _distance(first: tuple[float, float], second: tuple[float, float]) -> float:
     return math.hypot(first[0] - second[0], first[1] - second[1])
-
-
-def _segment_rect_entry_time(
-    start: tuple[float, float] | None,
-    end: tuple[float, float],
-    rectangle: tuple[float, float, float, float],
-) -> float | None:
-    min_x, min_y, max_x, max_y = rectangle
-
-    def contains(point: tuple[float, float]) -> bool:
-        return min_x <= point[0] <= max_x and min_y <= point[1] <= max_y
-
-    if start is None:
-        return 0.0 if contains(end) else None
-    if contains(start):
-        return None
-
-    delta_x = end[0] - start[0]
-    delta_y = end[1] - start[1]
-    enter = 0.0
-    leave = 1.0
-    for origin, delta, lower, upper in (
-        (start[0], delta_x, min_x, max_x),
-        (start[1], delta_y, min_y, max_y),
-    ):
-        if abs(delta) <= 1e-12:
-            if origin < lower or origin > upper:
-                return None
-            continue
-        first = (lower - origin) / delta
-        second = (upper - origin) / delta
-        axis_enter, axis_leave = sorted((first, second))
-        enter = max(enter, axis_enter)
-        leave = min(leave, axis_leave)
-        if enter > leave:
-            return None
-    if leave < 0.0 or enter > 1.0:
-        return None
-    return max(0.0, enter)
-
-
-def _segment_zone_entry_time(
-    start: tuple[float, float] | None,
-    end: tuple[float, float],
-    zone: FieldZone,
-) -> float | None:
-    if not zone.polygon:
-        return _segment_rect_entry_time(
-            start,
-            end,
-            (zone.min_x, zone.min_y, zone.max_x, zone.max_y),
-        )
-    if start is None:
-        return 0.0 if zone.contains(*end) else None
-    if zone.contains(*start):
-        return None
-
-    delta_x = end[0] - start[0]
-    delta_y = end[1] - start[1]
-    candidates = [1.0] if zone.contains(*end) else []
-    for index, (edge_x, edge_y) in enumerate(zone.polygon):
-        next_x, next_y = zone.polygon[(index + 1) % len(zone.polygon)]
-        edge_delta_x = next_x - edge_x
-        edge_delta_y = next_y - edge_y
-        denominator = delta_x * edge_delta_y - delta_y * edge_delta_x
-        if abs(denominator) <= 1e-12:
-            continue
-        offset_x = edge_x - start[0]
-        offset_y = edge_y - start[1]
-        time = (offset_x * edge_delta_y - offset_y * edge_delta_x) / denominator
-        edge_time = (offset_x * delta_y - offset_y * delta_x) / denominator
-        if -1e-12 <= time <= 1.0 + 1e-12 and -1e-12 <= edge_time <= 1.0 + 1e-12:
-            candidates.append(max(0.0, min(time, 1.0)))
-    return min(candidates) if candidates else None
-
-
-def in_supply_zone(x: float, y: float) -> bool:
-    return SUPPLY_FIELD_ZONE.contains(x, y)

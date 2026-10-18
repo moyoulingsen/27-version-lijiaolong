@@ -20,9 +20,21 @@ from .dataset_replay import (
     ReplayPlayer,
     MatchRecord,
 )
-from .field_rules import FIELD_ZONES, RUNE_POSITIONS, zones_for_team
+from .field_rules import (
+    REGION_DEFINITIONS,
+    REGION_TYPES,
+    RUNE_POSITIONS,
+    canonical_region_id,
+)
 from .field_geometry import BLUE_BASE, BLUE_OUTPOST
 from .map_asset import load_p5_pgm
+from .map_regions import (
+    geometry_payload,
+    nearest_segment_index,
+    normalize_points,
+    restore_geometry_payload,
+    validate_polygon,
+)
 from .navigation import (
     ASTAR_PLANNING_RADIUS,
     ROBOT_ENTITY_COLLISION_RADIUS,
@@ -76,23 +88,13 @@ SNAPSHOT_BAR_HEIGHT = 62
 AUTOAIM_HALF_VIEW = math.radians(24.0)
 MAP_LAYER_PANEL_COLLAPSED_HEIGHT = 42
 MAP_LAYER_PANEL_EXPANDED_HEIGHT = 206
+MAP_EDITOR_VERTEX_RADIUS = 10
+MAP_EDITOR_HIT_RADIUS = 16
 
 # These labels are also the stable order used by the bottom map-layer panel.
-# Field zones are grouped by their rulebook type so one button controls both
-# the red and blue copy of a region (for example, both roads).
-FIELD_ZONE_KIND_LABELS = (
-    ("supply", "补给区"),
-    ("base_gain", "基地增益"),
-    ("outpost_gain", "前哨增益"),
-    ("central_highland", "中央高地"),
-    ("trapezoid_highland", "梯形高地"),
-    ("terrain_road", "公路"),
-    ("terrain_highland", "高地跨越"),
-    ("terrain_fly_slope", "飞坡"),
-    ("terrain_tunnel", "隧道"),
-    ("assembly", "装配区"),
-    ("fort", "堡垒"),
-)
+# Side-specific gain points intentionally have separate buttons so they can be
+# annotated and shown independently.
+FIELD_ZONE_KIND_LABELS = REGION_TYPES
 MAP_OVERLAY_LABELS = (
     ("patrol_route", "巡逻路线"),
     ("energy_rune", "能量机关"),
@@ -115,13 +117,14 @@ LEGACY_GOAL_ALIASES = (
 
 # Static 2-D collision footprints for the field buildings.  The PGM already
 # contains the surrounding walls; these rectangles prevent a robot centre from
-# entering the base/outpost structures themselves.
+# entering the base/outpost structures themselves.  The outpost rectangles are
+# centered on the black circles used by the field-layout image.
 AERIAL_COLLISION_RADIUS = 0.26
 STATIC_COLLISION_RECTANGLES = (
     (0.00, 6.40, 0.55, 8.60),    # red base edge
     (27.45, 6.40, 28.00, 8.60),  # blue base edge
-    (7.95, 6.75, 9.45, 8.25),    # red outpost
-    (18.55, 6.75, 20.05, 8.25),  # blue outpost
+    (10.30, 3.14, 11.81, 4.65),  # red outpost
+    (16.23, 10.35, 17.73, 11.85),  # blue outpost
 )
 
 
@@ -217,6 +220,22 @@ class SimulatorApp:
         self.map_layer_visibility.update(
             {name: False for name, _ in MAP_OVERLAY_LABELS}
         )
+        # Map-editor state. Existing rule regions keep their stable FIELD_ZONE
+        # ids; an empty override means "deleted, awaiting replacement".
+        self.map_zone_overrides = {
+            canonical_region_id(name): normalize_points(points)
+            for name, points in getattr(self.task, "field_zone_overrides", {}).items()
+            if canonical_region_id(name) in {identifier for identifier, _ in REGION_TYPES}
+        }
+        self.custom_map_polygons: list[dict] = []
+        self.region_edit_target: str | None = None
+        self.region_edit_custom_id: str | None = None
+        self.region_edit_kind: str | None = None
+        self.region_edit_new_custom = False
+        self.region_edit_points: list[tuple[float, float]] = []
+        self.region_edit_drag_index: int | None = None
+        self.region_edit_error = ""
+        self.region_edit_counter = 1
         # Keep the old attributes as compatibility aliases for callers that
         # inspect them directly.
         self.show_collision_volumes = False
@@ -499,7 +518,9 @@ class SimulatorApp:
                         ):
                             self._save_snapshot()
                         elif event.key == self.pg.K_ESCAPE:
-                            if self.subsystem_panel_open:
+                            if self.region_edit_new_custom or self.region_edit_target is not None or self.region_edit_custom_id is not None:
+                                self._cancel_region_edit()
+                            elif self.subsystem_panel_open:
                                 self.subsystem_panel_open = False
                             else:
                                 running = False
@@ -581,14 +602,23 @@ class SimulatorApp:
                         handled = self._handle_replay_timeline(event.pos) if self.replay_mode else False
                         if not handled:
                             handled = self._handle_mouse_click(event.pos)
+                        if not handled and not self.replay_mode:
+                            handled = self._region_editor_click(event.pos)
                         if not handled:
                             self._manual_fire_held = self.sentry.manual_control
+                    elif event.type == self.pg.MOUSEBUTTONDOWN and event.button == 3:
+                        if not self.replay_mode:
+                            self._region_editor_right_click(event.pos)
                     elif event.type == self.pg.MOUSEBUTTONUP and event.button == 1:
                         self._manual_fire_held = False
+                        self._region_editor_release()
                         if self.replay_mode:
                             self.replay_timeline_dragging = False
-                    elif event.type == self.pg.MOUSEMOTION and self.replay_mode and self.replay_timeline_dragging:
-                        self._handle_replay_timeline(event.pos)
+                    elif event.type == self.pg.MOUSEMOTION:
+                        if self.replay_mode and self.replay_timeline_dragging:
+                            self._handle_replay_timeline(event.pos)
+                        elif not self.replay_mode:
+                            self._region_editor_motion(event.pos)
 
                 if self.replay_mode:
                     frame = self.replay_player.update(elapsed_seconds)
@@ -727,7 +757,20 @@ class SimulatorApp:
         columns = max(2, min(8, width // 150))
         button_count = 2 + len(FIELD_ZONE_KIND_LABELS) + len(MAP_OVERLAY_LABELS)
         rows = math.ceil(button_count / columns)
-        return max(MAP_LAYER_PANEL_EXPANDED_HEIGHT, 58 + rows * 38)
+        region_count = len(REGION_DEFINITIONS) + len(self.custom_map_polygons)
+        region_columns = max(1, min(3, width // 360))
+        region_rows = math.ceil(max(1, region_count) / region_columns)
+        editor_height = 84 if (
+            self.region_edit_new_custom
+            or
+            self.region_edit_target is not None
+            or self.region_edit_custom_id is not None
+            or self.region_edit_points
+        ) else 0
+        return max(
+            MAP_LAYER_PANEL_EXPANDED_HEIGHT,
+            82 + rows * 38 + editor_height + region_rows * 34,
+        )
 
     def _movement_input(self) -> tuple[float, float]:
         keys = self.pg.key.get_pressed()
@@ -1341,6 +1384,12 @@ class SimulatorApp:
         self.map_layer_visibility[layer] = visible
         if layer == "collision_volumes":
             self.show_collision_volumes = visible
+        if layer.startswith("custom:"):
+            identifier = layer.split(":", 1)[1]
+            for item in self.custom_map_polygons:
+                if item.get("id") == identifier:
+                    item["visible"] = visible
+                    break
         if layer.startswith("zone:"):
             self.show_field_zones = any(
                 self.map_layer_visibility.get(f"zone:{kind}", False)
@@ -1350,6 +1399,8 @@ class SimulatorApp:
     def _set_all_map_layers(self, visible: bool) -> None:
         for layer in self.map_layer_visibility:
             self.map_layer_visibility[layer] = visible
+        for item in self.custom_map_polygons:
+            item["visible"] = visible
         self.show_collision_volumes = visible
         self.show_field_zones = visible
 
@@ -1358,6 +1409,272 @@ class SimulatorApp:
         for kind, _ in FIELD_ZONE_KIND_LABELS:
             self.map_layer_visibility[f"zone:{kind}"] = show_zones
         self.show_field_zones = show_zones
+
+    def _zone_named(self, name: str):
+        canonical_name = canonical_region_id(name)
+        return next(
+            (zone for zone in REGION_DEFINITIONS if zone.name == canonical_name),
+            None,
+        )
+
+    def _zone_points(self, zone) -> tuple[tuple[float, float], ...]:
+        """Return the currently configured world polygon for a field zone."""
+        if zone.name in self.map_zone_overrides:
+            return normalize_points(self.map_zone_overrides[zone.name])
+        if zone.polygon:
+            return tuple((float(x), float(y)) for x, y in zone.polygon)
+        return ()
+
+    def _sync_task_zone_overrides(self) -> None:
+        self.task.field_zone_overrides = {
+            name: [[float(x), float(y)] for x, y in points]
+            for name, points in self.map_zone_overrides.items()
+        }
+
+    def _region_type_configured(self, kind: str) -> bool:
+        """Return whether a type has at least one valid polygon."""
+        if len(normalize_points(self.map_zone_overrides.get(kind))) >= 3:
+            return True
+        return any(
+            canonical_region_id(item.get("kind") or REGION_TYPES[0][0]) == kind
+            and validate_polygon(normalize_points(item.get("points"))) is None
+            for item in self.custom_map_polygons
+        )
+
+    def _missing_required_regions(self) -> list[str]:
+        missing: list[str] = []
+        for zone in REGION_DEFINITIONS:
+            if zone.name in self.map_zone_overrides and not self._region_type_configured(zone.name):
+                missing.append(zone.label or zone.name)
+        return missing
+
+    def _start_region_edit(self, target: str) -> None:
+        target = canonical_region_id(target)
+        zone = self._zone_named(target)
+        if zone is None:
+            return
+        self.region_edit_target = target
+        self.region_edit_custom_id = None
+        self.region_edit_kind = target
+        self.region_edit_new_custom = False
+        self.region_edit_points = list(self._zone_points(zone))
+        self.region_edit_drag_index = None
+        self.region_edit_error = ""
+        self.task.notify(f"正在编辑{zone.label or zone.name}：拖动顶点或点击边线添加点")
+
+    def _start_custom_region(self, kind: str | None = None) -> None:
+        self.region_edit_target = None
+        self.region_edit_custom_id = None
+        candidate = canonical_region_id(kind or REGION_TYPES[0][0])
+        allowed = {identifier for identifier, _ in REGION_TYPES}
+        self.region_edit_kind = candidate if candidate in allowed else REGION_TYPES[0][0]
+        self.region_edit_new_custom = True
+        self.region_edit_points = []
+        self.region_edit_drag_index = None
+        self.region_edit_error = ""
+        self.task.notify("正在新建自定义区域：左键添加点，右键撤销")
+
+    def _start_custom_edit(self, identifier: str) -> None:
+        item = next(
+            (item for item in self.custom_map_polygons if item.get("id") == identifier),
+            None,
+        )
+        if item is None:
+            return
+        self.region_edit_target = None
+        self.region_edit_custom_id = identifier
+        candidate = canonical_region_id(item.get("kind") or REGION_TYPES[0][0])
+        allowed = {identifier for identifier, _ in REGION_TYPES}
+        self.region_edit_kind = candidate if candidate in allowed else REGION_TYPES[0][0]
+        self.region_edit_new_custom = False
+        self.region_edit_points = list(normalize_points(item.get("points")))
+        self.region_edit_drag_index = None
+        self.region_edit_error = ""
+        self.task.notify(f"正在编辑{item.get('name', '自定义区域')}：拖动顶点或点击边线添加点")
+
+    def _cancel_region_edit(self) -> None:
+        self.region_edit_target = None
+        self.region_edit_custom_id = None
+        self.region_edit_kind = None
+        self.region_edit_new_custom = False
+        self.region_edit_points = []
+        self.region_edit_drag_index = None
+        self.region_edit_error = ""
+
+    def _clear_region_edit(self) -> None:
+        self.region_edit_points = []
+        self.region_edit_drag_index = None
+        self.region_edit_error = ""
+
+    def _save_region_edit(self) -> bool:
+        points = normalize_points(self.region_edit_points)
+        error = validate_polygon(points)
+        if error is not None:
+            self.region_edit_error = error
+            self.task.notify(f"区域不能保存：{error}")
+            return False
+        if self.region_edit_target is not None:
+            self.map_zone_overrides[self.region_edit_target] = points
+            self.map_layer_visibility[f"zone:{self.region_edit_target}"] = True
+            self._sync_task_zone_overrides()
+            zone = self._zone_named(self.region_edit_target)
+            self.task.notify(f"已保存{zone.label if zone else self.region_edit_target}")
+        else:
+            if self.region_edit_custom_id is None:
+                identifier = f"custom_{self.region_edit_counter}"
+                while any(item.get("id") == identifier for item in self.custom_map_polygons):
+                    self.region_edit_counter += 1
+                    identifier = f"custom_{self.region_edit_counter}"
+                self.region_edit_counter += 1
+                definition = next(
+                    (item for item in REGION_DEFINITIONS
+                     if item.name == self.region_edit_kind),
+                    REGION_DEFINITIONS[0],
+                )
+                self.custom_map_polygons.append({
+                    "id": identifier,
+                    "kind": canonical_region_id(definition.name),
+                    "name": f"{definition.label} {len(self.custom_map_polygons) + 1}",
+                    "points": [[x, y] for x, y in points],
+                    "color": list(definition.color),
+                    "visible": True,
+                })
+                self.map_layer_visibility[f"custom:{identifier}"] = True
+                self.map_layer_visibility[f"zone:{definition.name}"] = True
+                self.task.notify(f"已添加{definition.label}")
+            else:
+                item = next(
+                    (item for item in self.custom_map_polygons
+                     if item.get("id") == self.region_edit_custom_id),
+                    None,
+                )
+                if item is None:
+                    self.region_edit_error = "区域已不存在"
+                    return False
+                item["points"] = [[x, y] for x, y in points]
+                if self.region_edit_kind:
+                    item["kind"] = canonical_region_id(self.region_edit_kind)
+                self.task.notify(f"已保存{item.get('name', '自定义区域')}")
+        self._cancel_region_edit()
+        return True
+
+    def _delete_region(self, target: tuple[str, str]) -> None:
+        kind, identifier = target
+        region_kind: str | None = None
+        if kind == "zone":
+            region_kind = canonical_region_id(identifier)
+            if self._zone_named(region_kind) is None:
+                return
+        elif kind == "custom":
+            item = next(
+                (item for item in self.custom_map_polygons
+                 if str(item.get("id")) == str(identifier)),
+                None,
+            )
+            if item is None:
+                return
+            region_kind = canonical_region_id(item.get("kind") or REGION_TYPES[0][0])
+        else:
+            return
+
+        # A type can have one base polygon plus any number of extra polygons.
+        # Deleting it means deleting every polygon of that type and leaving an
+        # explicit empty slot so validation requires a replacement.
+        self.map_zone_overrides[region_kind] = ()
+        removed_ids = {
+            str(item.get("id"))
+            for item in self.custom_map_polygons
+            if canonical_region_id(item.get("kind") or REGION_TYPES[0][0]) == region_kind
+        }
+        self.custom_map_polygons = [
+            item for item in self.custom_map_polygons
+            if str(item.get("id")) not in removed_ids
+        ]
+        self.map_layer_visibility[f"zone:{region_kind}"] = False
+        for removed_id in removed_ids:
+            self.map_layer_visibility.pop(f"custom:{removed_id}", None)
+        self._sync_task_zone_overrides()
+        if (
+            self.region_edit_target == region_kind
+            or self.region_edit_custom_id in removed_ids
+        ):
+            self._cancel_region_edit()
+        zone = self._zone_named(region_kind)
+        self.task.notify(
+            f"已删除{zone.label if zone else region_kind}的全部区域，请重新添加后才能开始验证"
+        )
+
+    def _region_editor_click(self, position: tuple[int, int]) -> bool:
+        if not (
+            self.region_edit_new_custom
+            or self.region_edit_target is not None
+            or self.region_edit_custom_id is not None
+        ):
+            return False
+        viewport = self._viewport()
+        if not viewport.contains(*position):
+            return False
+        world = viewport.screen_to_world(*position)
+        world = self.arena.clamp(*world)
+        screen_points = [viewport.world_to_screen(*point) for point in self.region_edit_points]
+        nearest_index = None
+        nearest_distance = float("inf")
+        for index, point in enumerate(screen_points):
+            distance = math.hypot(point[0] - position[0], point[1] - position[1])
+            if distance < nearest_distance:
+                nearest_index, nearest_distance = index, distance
+
+        is_new_custom = self.region_edit_new_custom
+        if is_new_custom:
+            if (
+                len(self.region_edit_points) >= 3
+                and nearest_index == 0
+                and nearest_distance <= MAP_EDITOR_HIT_RADIUS
+            ):
+                self._save_region_edit()
+                return True
+            if nearest_index is not None and nearest_distance <= MAP_EDITOR_HIT_RADIUS:
+                self.region_edit_drag_index = nearest_index
+                return True
+            self.region_edit_points.append(world)
+            return True
+
+        if nearest_index is not None and nearest_distance <= MAP_EDITOR_HIT_RADIUS:
+            self.region_edit_drag_index = nearest_index
+            return True
+        if len(self.region_edit_points) >= 2:
+            insert_after = nearest_segment_index(world, self.region_edit_points)
+            self.region_edit_points.insert(insert_after + 1, world)
+        else:
+            self.region_edit_points.append(world)
+        return True
+
+    def _region_editor_right_click(self, position: tuple[int, int]) -> bool:
+        active = (
+            self.region_edit_new_custom
+            or self.region_edit_target is not None
+            or self.region_edit_custom_id is not None
+        )
+        if not active or not self._viewport().contains(*position):
+            return False
+        if self.region_edit_points:
+            self.region_edit_points.pop()
+            self.region_edit_drag_index = None
+            self.region_edit_error = ""
+        return True
+
+    def _region_editor_motion(self, position: tuple[int, int]) -> None:
+        index = self.region_edit_drag_index
+        if index is None or not 0 <= index < len(self.region_edit_points):
+            return
+        viewport = self._viewport()
+        if not viewport.contains(*position):
+            return
+        world = self.arena.clamp(*viewport.screen_to_world(*position))
+        self.region_edit_points[index] = world
+
+    def _region_editor_release(self) -> None:
+        self.region_edit_drag_index = None
 
     def _handle_mouse_click(self, position: tuple[int, int]) -> bool:
         for rect, action, target_id, direction in reversed(self.click_regions):
@@ -1436,6 +1753,26 @@ class SimulatorApp:
                 self._set_all_map_layers(True)
             elif action == "hide_all_map_layers":
                 self._set_all_map_layers(False)
+            elif action == "new_custom_region":
+                self._start_custom_region()
+            elif action == "new_region_instance":
+                self._start_custom_region(str(target_id))
+            elif action == "region_editor_new_instance":
+                self._start_custom_region(
+                    str(target_id) if target_id else self.region_edit_kind
+                )
+            elif action == "edit_zone_region":
+                self._start_region_edit(str(target_id))
+            elif action == "edit_custom_region":
+                self._start_custom_edit(str(target_id))
+            elif action == "delete_map_region":
+                self._delete_region(target_id)
+            elif action == "region_editor_save":
+                self._save_region_edit()
+            elif action == "region_editor_cancel":
+                self._cancel_region_edit()
+            elif action == "region_editor_clear":
+                self._clear_region_edit()
             elif action == "toggle_subsystem_panel":
                 self.subsystem_panel_open = not self.subsystem_panel_open
             elif action == "close_subsystem":
@@ -1610,6 +1947,10 @@ class SimulatorApp:
         self.task.notify("比赛时间、位置和全部属性已复位")
 
     def _restart_validation(self) -> None:
+        missing = self._missing_required_regions()
+        if missing:
+            self.task.notify("请先重新添加：" + "、".join(missing[:4]))
+            return
         self._switch_to_auto_control(notify=False)
         was_finished = self.task.game_finished
         self.task.game_running = True
@@ -1627,6 +1968,10 @@ class SimulatorApp:
         self.task.notify("验证已重新启动，行为树正在复位")
 
     def _save_snapshot(self) -> None:
+        missing = self._missing_required_regions()
+        if missing:
+            self.task.notify("场景不能保存，需重新添加：" + "、".join(missing[:4]))
+            return
         existing_names = {str(snapshot.get("name") or "") for snapshot in self.snapshots}
         number = 1
         while f"场景 {number}" in existing_names:
@@ -1638,6 +1983,7 @@ class SimulatorApp:
             self.sentry,
             self.controlled_robot_id,
             self.controlled_robot_team,
+            geometry_payload(self.map_zone_overrides, self.custom_map_polygons),
         )
         self.snapshots.append(snapshot)
         self.active_snapshot_index = len(self.snapshots) - 1
@@ -1653,6 +1999,17 @@ class SimulatorApp:
     def _load_snapshot(self, index: int) -> None:
         if not 0 <= index < len(self.snapshots):
             return
+        if not hasattr(self, "map_layer_visibility"):
+            self.map_layer_visibility = {
+                f"zone:{kind}": False for kind, _ in FIELD_ZONE_KIND_LABELS
+            }
+            self.map_layer_visibility.update(
+                {name: False for name, _ in MAP_OVERLAY_LABELS}
+            )
+        if not hasattr(self, "custom_map_polygons"):
+            self.custom_map_polygons = []
+        if not hasattr(self, "map_zone_overrides"):
+            self.map_zone_overrides = {}
         try:
             task, sentry, controlled_robot_id = restore_snapshot(
                 self.snapshots[index]
@@ -1662,6 +2019,38 @@ class SimulatorApp:
             return
         self.task = task
         self.sentry = sentry
+        raw_geometry = self.snapshots[index].get("map_geometry")
+        if isinstance(raw_geometry, dict) and raw_geometry:
+            self.map_zone_overrides, self.custom_map_polygons = restore_geometry_payload(
+                raw_geometry
+            )
+        else:
+            self.map_zone_overrides = {
+                canonical_region_id(name): normalize_points(points)
+                for name, points in getattr(self.task, "field_zone_overrides", {}).items()
+                if canonical_region_id(name) in {identifier for identifier, _ in REGION_TYPES}
+            }
+            self.custom_map_polygons = []
+        self._sync_task_zone_overrides()
+        self.map_layer_visibility = {
+            key: value
+            for key, value in self.map_layer_visibility.items()
+            if not key.startswith("custom:")
+        }
+        for item in self.custom_map_polygons:
+            identifier = str(item.get("id"))
+            self.map_layer_visibility[f"custom:{identifier}"] = bool(item.get("visible", False))
+            if item.get("visible", False):
+                kind = str(item.get("kind") or REGION_TYPES[0][0])
+                self.map_layer_visibility[f"zone:{kind}"] = True
+        self.region_edit_target = None
+        self.region_edit_custom_id = None
+        self.region_edit_kind = None
+        self.region_edit_new_custom = False
+        self.region_edit_points = []
+        self.region_edit_drag_index = None
+        self.region_edit_error = ""
+        self._cancel_region_edit()
         self.controlled_robot_id = controlled_robot_id
         restored_team = self.snapshots[index].get("controlled_robot_team")
         self.controlled_robot_team = (
@@ -2508,15 +2897,15 @@ class SimulatorApp:
             return
 
         entries = [
-            ("show_all_map_layers", "全部显示", True),
-            ("hide_all_map_layers", "全部隐藏", False),
+            ("show_all_map_layers", "全部显示", True, 0),
+            ("hide_all_map_layers", "全部隐藏", False, 0),
         ]
         entries.extend(
-            ("toggle_map_layer", label, self.map_layer_visibility[f"zone:{kind}"])
+            ("toggle_map_layer", label, self.map_layer_visibility[f"zone:{kind}"], f"zone:{kind}")
             for kind, label in FIELD_ZONE_KIND_LABELS
         )
         entries.extend(
-            ("toggle_map_layer", label, self.map_layer_visibility[name])
+            ("toggle_map_layer", label, self.map_layer_visibility[name], name)
             for name, label in MAP_OVERLAY_LABELS
         )
 
@@ -2525,7 +2914,7 @@ class SimulatorApp:
         columns = max(2, min(8, panel.width // 150))
         button_width = (panel.width - 20 - gap * (columns - 1)) // columns
         button_height = 30
-        for index, (action, label, active) in enumerate(entries):
+        for index, (action, label, active, target) in enumerate(entries):
             row, column = divmod(index, columns)
             rect = self.pg.Rect(
                 panel.left + 10 + column * (button_width + gap),
@@ -2533,17 +2922,6 @@ class SimulatorApp:
                 button_width,
                 button_height,
             )
-            if action == "toggle_map_layer":
-                if index < 2 + len(FIELD_ZONE_KIND_LABELS):
-                    target = (
-                        f"zone:{FIELD_ZONE_KIND_LABELS[index - 2][0]}"
-                        if index >= 2
-                        else ""
-                    )
-                else:
-                    target = MAP_OVERLAY_LABELS[index - 2 - len(FIELD_ZONE_KIND_LABELS)][0]
-            else:
-                target = 0
             hovered = rect.collidepoint(self.pg.mouse.get_pos())
             if action == "toggle_map_layer":
                 background = (40, 117, 87) if active else (50, 58, 63)
@@ -2551,12 +2929,140 @@ class SimulatorApp:
                     background = (54, 137, 103) if active else (75, 86, 92)
                 self.pg.draw.rect(self.screen, background, rect)
                 self.pg.draw.rect(self.screen, (104, 117, 123), rect, 1)
-                button_label = f"{label}：{'开' if active else '关'}"
-                rendered = self.panel_label_font.render(button_label, True, (236, 239, 240))
+                suffix = f"：{'开' if active else '关'}"
+                display_label = label
+                while (
+                    self.panel_label_font.size(display_label + suffix)[0] > rect.width - 8
+                    and len(display_label) > 3
+                ):
+                    display_label = display_label[:-1]
+                if display_label != label:
+                    display_label = display_label[:-1] + "..."
+                button_label = display_label + suffix
+                rendered = self.small_font.render(button_label, True, (236, 239, 240))
                 self.screen.blit(rendered, rendered.get_rect(center=rect.center))
             else:
                 self._draw_click_button(rect, label)
             self.click_regions.append((rect, action, target, 0))
+
+        overlay_rows = math.ceil(len(entries) / columns)
+        editor_top = content_top + overlay_rows * (button_height + 6) + 4
+        editor_active = (
+            self.region_edit_new_custom
+            or
+            self.region_edit_target is not None
+            or self.region_edit_custom_id is not None
+            or bool(self.region_edit_points)
+        )
+        if editor_active:
+            definition = next(
+                (item for item in REGION_DEFINITIONS
+                 if item.name == self.region_edit_kind),
+                None,
+            )
+            status = f"正在新建：{definition.label}" if definition else "正在新建区域"
+            if self.region_edit_target is not None:
+                zone = self._zone_named(self.region_edit_target)
+                status = f"正在编辑：{zone.label if zone else self.region_edit_target}"
+            elif self.region_edit_custom_id is not None:
+                item = next(
+                    (item for item in self.custom_map_polygons
+                     if item.get("id") == self.region_edit_custom_id),
+                    None,
+                )
+                status = f"正在编辑：{item.get('name', '自定义区域') if item else '自定义区域'}"
+            status_text = self.panel_label_font.render(status, True, (244, 211, 115))
+            self.screen.blit(status_text, (panel.left + 12, editor_top + 3))
+            editor_buttons = (
+                ("保存区域", "region_editor_save", 82),
+                ("清空重画", "region_editor_clear", 82),
+                ("取消", "region_editor_cancel", 68),
+            )
+            if self.region_edit_kind:
+                editor_buttons = (
+                    ("再画一个", "region_editor_new_instance", 96),
+                    *editor_buttons,
+                )
+            button_x = panel.right - 12
+            for label, action, width in reversed(editor_buttons):
+                button_x -= width
+                rect = self.pg.Rect(button_x, editor_top, width - 4, 28)
+                self._draw_click_button(rect, label)
+                action_target = self.region_edit_kind if action == "region_editor_new_instance" else 0
+                self.click_regions.append((rect, action, action_target, 0))
+                button_x -= 5
+            if self.region_edit_error:
+                error = self.panel_label_font.render(self.region_edit_error, True, (236, 103, 103))
+                self.screen.blit(error, (panel.left + 12, editor_top + 32))
+            editor_top += 56
+
+        section = self.panel_label_font.render("可编辑区域", True, (191, 202, 206))
+        self.screen.blit(section, (panel.left + 12, editor_top + 2))
+        editor_top += 27
+        region_items: list[tuple[str, str, str, bool, str]] = []
+        for zone in REGION_DEFINITIONS:
+            missing = zone.name in self.map_zone_overrides and not self._region_type_configured(zone.name)
+            region_items.append(("zone", zone.name, zone.label or zone.name, not missing, zone.name))
+        for item in self.custom_map_polygons:
+            identifier = str(item.get("id"))
+            region_items.append((
+                "custom", identifier, str(item.get("name", identifier)), True,
+                str(item.get("kind") or REGION_TYPES[0][0]),
+            ))
+        region_columns = max(1, min(3, panel.width // 360))
+        region_gap = 8
+        cell_width = (panel.width - 20 - region_gap * (region_columns - 1)) // region_columns
+        for index, (kind, identifier, label, configured, region_kind) in enumerate(region_items):
+            row, column = divmod(index, region_columns)
+            cell = self.pg.Rect(
+                panel.left + 10 + column * (cell_width + region_gap),
+                editor_top + row * 32,
+                cell_width,
+                28,
+            )
+            self.pg.draw.rect(self.screen, (42, 49, 53), cell)
+            self.pg.draw.rect(self.screen, (83, 95, 100), cell, 1)
+            state = "未设置" if not configured else "已设置"
+            label_area = self.pg.Rect(cell.left + 6, cell.top, max(1, cell.width - 174), cell.height)
+            display_label = f"{label}｜{state}"
+            while (
+                self.small_font.size(display_label)[0] > label_area.width - 4
+                and len(display_label) > 4
+            ):
+                display_label = display_label[:-1]
+            if display_label != f"{label}｜{state}":
+                display_label = display_label[:-1] + "..."
+            label_text = self.small_font.render(
+                display_label,
+                True,
+                (235, 112, 112) if not configured else (218, 226, 228),
+            )
+            self.screen.blit(label_text, label_text.get_rect(midleft=label_area.midleft))
+            edit_rect = self.pg.Rect(cell.right - 168, cell.top + 3, 52, 22)
+            delete_rect = self.pg.Rect(cell.right - 112, cell.top + 3, 52, 22)
+            visibility_rect = self.pg.Rect(cell.right - 56, cell.top + 3, 50, 22)
+            self._draw_click_button(edit_rect, "编辑")
+            self._draw_click_button(delete_rect, "删除")
+            self._draw_click_button(
+                visibility_rect,
+                "隐藏" if self.map_layer_visibility.get(
+                    f"custom:{identifier}" if kind == "custom" else f"zone:{next((z.kind for z in REGION_DEFINITIONS if z.name == identifier), '')}",
+                    False,
+                ) else "显示",
+            )
+            self.click_regions.append((
+                edit_rect,
+                "edit_custom_region" if kind == "custom" else "edit_zone_region",
+                identifier,
+                0,
+            ))
+            self.click_regions.append((delete_rect, "delete_map_region", (kind, identifier), 0))
+            visibility_target = (
+                f"custom:{identifier}"
+                if kind == "custom"
+                else f"zone:{next((z.kind for z in REGION_DEFINITIONS if z.name == identifier), '')}"
+            )
+            self.click_regions.append((visibility_rect, "toggle_map_layer", visibility_target, 0))
 
     def _draw_subsystem_panel(self) -> None:
         if not self.subsystem_panel_open:
@@ -2706,11 +3212,8 @@ class SimulatorApp:
         )
 
     def _engineer_in_assembly_zone(self) -> bool:
-        from .field_rules import FIELD_ZONES
-
-        zone = next((item for item in FIELD_ZONES if item.name == "red_assembly"), None)
-        position = self.task.own_robot_position(2)
-        return zone is not None and zone.contains(*position)
+        # Region attributes are intentionally not implemented yet.
+        return False
 
     def _draw_robot_property_popup(self) -> None:
         active = self.pinned_robot_key or self.hovered_robot_key
@@ -3519,6 +4022,8 @@ class SimulatorApp:
         self.screen.set_clip(rect)
         self._draw_grid(viewport)
         self._draw_field_zones(viewport)
+        self._draw_custom_map_polygons(viewport)
+        self._draw_region_editor(viewport)
         if self.map_layer_visibility["energy_rune"]:
             self._draw_energy_rune(viewport)
         if self.map_layer_visibility["sensor_view"]:
@@ -3559,30 +4064,6 @@ class SimulatorApp:
             label = self.small_font.render(f"{y}m", True, (173, 182, 186))
             self.screen.blit(label, label.get_rect(midright=(round(screen_x) - 7, round(screen_y))))
 
-    def _draw_supply_zone(self, viewport: Viewport) -> None:
-        zone = next(item for item in FIELD_ZONES if item.name == "red_supply")
-        points = [
-            tuple(round(value) for value in viewport.world_to_screen(x, y))
-            for x, y in zone.polygon
-        ]
-        overlay = self.pg.Surface(self.screen.get_size(), self.pg.SRCALPHA)
-        self.pg.draw.polygon(overlay, (*zone.color, 58), points)
-        self.screen.blit(overlay, (0, 0))
-        self.pg.draw.polygon(self.screen, zone.color, points, 2)
-
-        bounds = self.pg.Rect(
-            min(point[0] for point in points),
-            min(point[1] for point in points),
-            max(point[0] for point in points) - min(point[0] for point in points),
-            max(point[1] for point in points) - min(point[1] for point in points),
-        )
-        label = self.small_font.render("补给区", True, (20, 112, 62))
-        label_background = label.get_rect(
-            midtop=(bounds.centerx, bounds.top + 4)
-        ).inflate(8, 4)
-        self.pg.draw.rect(self.screen, (231, 247, 237), label_background)
-        self.screen.blit(label, label.get_rect(midtop=(bounds.centerx, bounds.top + 6)))
-
     def _draw_field_zones(self, viewport: Viewport) -> None:
         visible_kinds = {
             kind
@@ -3596,50 +4077,97 @@ class SimulatorApp:
             return
         overlay = self.pg.Surface(self.screen.get_size(), self.pg.SRCALPHA)
         regions: list[tuple[object, object, list[tuple[int, int]]]] = []
-        for zone in FIELD_ZONES:
+        for zone in REGION_DEFINITIONS:
             if zone.kind not in visible_kinds:
                 continue
-            if zone.polygon:
-                points = [
-                    tuple(round(value) for value in viewport.world_to_screen(x, y))
-                    for x, y in zone.polygon
-                ]
-                left = min(point[0] for point in points)
-                top = min(point[1] for point in points)
-                right = max(point[0] for point in points)
-                bottom = max(point[1] for point in points)
-                rect = self.pg.Rect(left, top, max(1, right - left), max(1, bottom - top))
-                self.pg.draw.polygon(overlay, (*zone.color, 28), points)
-            else:
-                left, top = viewport.world_to_screen(zone.min_x, zone.max_y)
-                right, bottom = viewport.world_to_screen(zone.max_x, zone.min_y)
-                rect = self.pg.Rect(
-                    round(left),
-                    round(top),
-                    max(1, round(right - left)),
-                    max(1, round(bottom - top)),
-                )
-                points = []
-                self.pg.draw.rect(overlay, (*zone.color, 28), rect)
+            world_points = self._zone_points(zone)
+            if len(world_points) < 3:
+                continue
+            points = [
+                tuple(round(value) for value in viewport.world_to_screen(x, y))
+                for x, y in world_points
+            ]
+            left = min(point[0] for point in points)
+            top = min(point[1] for point in points)
+            right = max(point[0] for point in points)
+            bottom = max(point[1] for point in points)
+            rect = self.pg.Rect(left, top, max(1, right - left), max(1, bottom - top))
+            self.pg.draw.polygon(overlay, (*zone.color, 28), points)
             regions.append((zone, rect, points))
         self.screen.blit(overlay, (0, 0))
         for zone, rect, points in regions:
             if points:
                 self.pg.draw.polygon(self.screen, zone.color, points, 1)
-            else:
-                self.pg.draw.rect(self.screen, zone.color, rect, 1)
             if zone.label:
                 label = self.small_font.render(zone.label, True, zone.color)
-                if points:
-                    self.screen.blit(
-                        label,
-                        label.get_rect(midbottom=(rect.centerx, rect.top - 2)),
-                    )
-                elif label.get_width() < rect.width + 20:
-                    self.screen.blit(
-                        label,
-                        (rect.centerx - label.get_width() // 2, rect.top + 2),
-                    )
+                self.screen.blit(
+                    label,
+                    label.get_rect(midbottom=(rect.centerx, rect.top - 2)),
+                )
+
+    def _draw_custom_map_polygons(self, viewport: Viewport) -> None:
+        for item in self.custom_map_polygons:
+            identifier = str(item.get("id"))
+            kind = str(item.get("kind") or REGION_TYPES[0][0])
+            if (
+                not self.map_layer_visibility.get(f"custom:{identifier}", False)
+                or not self.map_layer_visibility.get(f"zone:{kind}", False)
+            ):
+                continue
+            points = normalize_points(item.get("points"))
+            if len(points) < 3:
+                continue
+            screen_points = [
+                tuple(round(value) for value in viewport.world_to_screen(x, y))
+                for x, y in points
+            ]
+            definition = next(
+                (entry for entry in REGION_DEFINITIONS if entry.name == kind),
+                REGION_DEFINITIONS[0],
+            )
+            color_values = item.get("color", definition.color)
+            color = tuple(int(value) for value in color_values[:3])
+            overlay = self.pg.Surface(self.screen.get_size(), self.pg.SRCALPHA)
+            self.pg.draw.polygon(overlay, (*color, 34), screen_points)
+            self.screen.blit(overlay, (0, 0))
+            self.pg.draw.polygon(self.screen, color, screen_points, 2)
+            bounds = self.pg.Rect(
+                min(point[0] for point in screen_points),
+                min(point[1] for point in screen_points),
+                max(1, max(point[0] for point in screen_points) - min(point[0] for point in screen_points)),
+                max(1, max(point[1] for point in screen_points) - min(point[1] for point in screen_points)),
+            )
+            label = self.small_font.render(str(item.get("name", identifier)), True, color)
+            self.screen.blit(label, label.get_rect(midbottom=(bounds.centerx, bounds.top - 2)))
+
+    def _draw_region_editor(self, viewport: Viewport) -> None:
+        if (
+            not self.region_edit_new_custom
+            and self.region_edit_target is None
+            and self.region_edit_custom_id is None
+            and not self.region_edit_points
+        ):
+            return
+        points = [
+            tuple(round(value) for value in viewport.world_to_screen(x, y))
+            for x, y in self.region_edit_points
+        ]
+        if len(points) >= 2:
+            self.pg.draw.lines(self.screen, (248, 211, 90), len(points) >= 3, points, 3)
+        if len(points) >= 3:
+            overlay = self.pg.Surface(self.screen.get_size(), self.pg.SRCALPHA)
+            self.pg.draw.polygon(overlay, (248, 211, 90, 32), points)
+            self.screen.blit(overlay, (0, 0))
+        if points:
+            mouse = self.pg.mouse.get_pos()
+            if viewport.contains(*mouse):
+                self.pg.draw.line(self.screen, (252, 232, 151), points[-1], mouse, 1)
+        for index, point in enumerate(points, start=1):
+            center = (round(point[0]), round(point[1]))
+            self.pg.draw.circle(self.screen, (25, 31, 35), center, MAP_EDITOR_VERTEX_RADIUS)
+            self.pg.draw.circle(self.screen, (255, 218, 90), center, MAP_EDITOR_VERTEX_RADIUS, 2)
+            label = self.small_font.render(str(index), True, (255, 239, 170))
+            self.screen.blit(label, label.get_rect(center=(center[0], center[1] - 20)))
 
     def _draw_energy_rune(self, viewport: Viewport) -> None:
         for team, (x, y) in RUNE_POSITIONS.items():
