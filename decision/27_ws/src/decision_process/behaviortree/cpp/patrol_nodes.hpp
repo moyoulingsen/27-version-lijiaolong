@@ -32,17 +32,6 @@ public:
   BT::NodeStatus tick() override;
 };
 
-class AggressivePatrolRequestedCondition : public BT::ConditionNode
-{
-public:
-  AggressivePatrolRequestedCondition(
-    const std::string & name, const BT::NodeConfig & config);
-
-  static BT::PortsList providedPorts();
-
-  BT::NodeStatus tick() override;
-};
-
 void registerPatrolNodes(BT::BehaviorTreeFactory & factory);
 
 }  // namespace decision_process

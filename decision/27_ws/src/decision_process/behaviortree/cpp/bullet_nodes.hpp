@@ -9,7 +9,7 @@
 namespace decision_process
 {
 
-/** Returns SUCCESS when the robot has at least one round in its own magazine. */
+/** Returns SUCCESS when carried ammunition reaches the configured minimum. */
 class HasAmmoCondition : public BT::ConditionNode
 {
 public:
@@ -18,6 +18,20 @@ public:
   static BT::PortsList providedPorts();
 
   BT::NodeStatus tick() override;
+};
+
+/** Latches a low-ammunition supply trip until ammo and health are restored. */
+class AmmoRecoveryNeededCondition : public BT::ConditionNode
+{
+public:
+  AmmoRecoveryNeededCondition(const std::string & name, const BT::NodeConfig & config);
+
+  static BT::PortsList providedPorts();
+
+  BT::NodeStatus tick() override;
+
+private:
+  bool recovering_{false};
 };
 
 /** Returns SUCCESS when a positive amount of ammunition is available to pick up. */

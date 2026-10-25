@@ -2,9 +2,6 @@
 <root BTCPP_format="4">
   <!-- Generated from the providedPorts() declarations in the decision nodes. -->
   <TreeNodesModel>
-    <Condition ID="AggressivePatrolRequested">
-      <input_port name="requested" type="bool" default="false"/>
-    </Condition>
     <Action ID="AdvancePatrolPoint">
       <input_port name="index" type="int" default="0"/>
       <input_port name="point_count" type="int"/>
@@ -32,6 +29,7 @@
     <Action ID="BuildAttackTargetList">
       <input_port name="targets" type="std::string"/>
       <input_port name="persistent_targets" type="std::string"/>
+      <input_port name="invincible_target_ids" type="std::string" default=""/>
       <output_port name="attack_targets" type="std::string"/>
       <output_port name="target_count" type="int"/>
       <output_port name="visible_target_count" type="int"/>
@@ -125,6 +123,13 @@
     </Condition>
     <Condition ID="HasAmmo">
       <input_port name="ammo_count" type="int" default="0"/>
+      <input_port name="minimum_ammo" type="int" default="1"/>
+    </Condition>
+    <Condition ID="AmmoRecoveryNeeded">
+      <input_port name="ammo_count" type="int" default="0"/>
+      <input_port name="trigger_threshold" type="int" default="25"/>
+      <input_port name="health" type="double" default="0.0"/>
+      <input_port name="full_health" type="double" default="400.0"/>
     </Condition>
     <Condition ID="HasAttackTargets">
       <input_port name="target_count" type="int" default="0"/>
@@ -153,6 +158,9 @@
     <Condition ID="MatchStarted">
       <input_port name="game_period" type="int" default="0"/>
     </Condition>
+    <Condition ID="SystemStatusOK">
+      <input_port name="system_status_ok" type="bool" default="false"/>
+    </Condition>
     <Condition ID="PositionReached">
       <input_port name="current_x" type="double" default="0.0"/>
       <input_port name="current_y" type="double" default="0.0"/>
@@ -169,6 +177,10 @@
       <input_port name="enemy_health" type="double" default="0.0"/>
       <input_port name="health_advantage" type="double" default="200.0"/>
       <input_port name="weak_enemy_health" type="double" default="30.0"/>
+    </Condition>
+    <Condition ID="PursuitSupportReady">
+      <input_port name="friendly_count" type="int" default="0"/>
+      <input_port name="minimum_count" type="int" default="3"/>
     </Condition>
     <Action ID="RememberAmmo">
       <input_port name="ammo_count" type="int" default="0"/>
@@ -197,6 +209,7 @@
     </Condition>
     <Action ID="SelectAttackTarget">
       <input_port name="attack_targets" type="std::string"/>
+      <input_port name="invincible_target_ids" type="std::string" default=""/>
       <input_port name="low_health_threshold" type="double" default="50.0"/>
       <input_port name="require_in_range" type="bool" default="true"/>
       <input_port name="require_low_health" type="bool" default="false"/>
@@ -227,6 +240,21 @@
       <output_port name="goal_yaw" type="double"/>
       <output_port name="goal_frame_id" type="std::string"/>
       <output_port name="goal_enabled" type="bool"/>
+    </Action>
+    <Action ID="SafeStop">
+      <output_port name="goal_enabled" type="bool"/>
+      <output_port name="posture_command" type="int"/>
+      <output_port name="gyro_mode_command" type="int"/>
+      <output_port name="gimbal_enabled_command" type="bool"/>
+      <output_port name="gimbal_rotate_command" type="bool"/>
+      <output_port name="target_lock_command" type="bool"/>
+      <output_port name="fire_command" type="bool"/>
+      <output_port name="confirm_respawn" type="bool"/>
+      <output_port name="pursuit_enabled_command" type="bool"/>
+      <output_port name="pursuit_target_id" type="std::string"/>
+      <output_port name="pursuit_direction" type="std::string"/>
+      <output_port name="pursuit_desired_distance" type="double"/>
+      <output_port name="selected_target_id" type="std::string"/>
     </Action>
     <Action ID="SetPosture">
       <input_port name="posture" type="int" default="3"/>

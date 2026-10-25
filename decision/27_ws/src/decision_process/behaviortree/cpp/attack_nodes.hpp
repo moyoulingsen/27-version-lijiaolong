@@ -150,6 +150,17 @@ public:
   BT::NodeStatus tick() override;
 };
 
+/** Requires more than the configured number of friendlies in the pursuit costmap. */
+class PursuitSupportReadyCondition : public BT::ConditionNode
+{
+public:
+  PursuitSupportReadyCondition(const std::string & name, const BT::NodeConfig & config);
+
+  static BT::PortsList providedPorts();
+
+  BT::NodeStatus tick() override;
+};
+
 /** Drives the low-speed pursuit until range is held or the timeout expires. */
 class PursueAction : public BT::StatefulActionNode
 {

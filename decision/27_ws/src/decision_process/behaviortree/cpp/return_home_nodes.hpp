@@ -57,6 +57,28 @@ public:
   BT::NodeStatus tick() override;
 };
 
+/** Returns SUCCESS only while the unified input/robot status is healthy. */
+class SystemStatusOKCondition : public BT::ConditionNode
+{
+public:
+  SystemStatusOKCondition(const std::string & name, const BT::NodeConfig & config);
+
+  static BT::PortsList providedPorts();
+
+  BT::NodeStatus tick() override;
+};
+
+/** Actively clears every motion and combat command when the system is unhealthy. */
+class SafeStopAction : public BT::SyncActionNode
+{
+public:
+  SafeStopAction(const std::string & name, const BT::NodeConfig & config);
+
+  static BT::PortsList providedPorts();
+
+  BT::NodeStatus tick() override;
+};
+
 /** Sets the requested chassis posture through a blackboard output. */
 class SetPostureAction : public BT::SyncActionNode
 {

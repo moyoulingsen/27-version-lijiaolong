@@ -12,17 +12,61 @@ HasAmmoCondition::HasAmmoCondition(const std::string & name, const BT::NodeConfi
 
 BT::PortsList HasAmmoCondition::providedPorts()
 {
-  return {BT::InputPort<int>("ammo_count", 0, "Current number of rounds")};
+  return {
+    BT::InputPort<int>("ammo_count", 0, "Current number of rounds"),
+    BT::InputPort<int>("minimum_ammo", 1, "Minimum rounds required to continue fighting")};
 }
 
 BT::NodeStatus HasAmmoCondition::tick()
 {
   const auto ammo_count = getInput<int>("ammo_count");
-  if(!ammo_count || ammo_count.value() < 0)
+  const auto minimum_ammo = getInput<int>("minimum_ammo");
+  if(!ammo_count || !minimum_ammo || ammo_count.value() < 0 || minimum_ammo.value() < 0)
   {
     return BT::NodeStatus::FAILURE;
   }
-  return ammo_count.value() > 0 ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+  return ammo_count.value() >= minimum_ammo.value() ?
+           BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
+AmmoRecoveryNeededCondition::AmmoRecoveryNeededCondition(
+  const std::string & name, const BT::NodeConfig & config)
+: BT::ConditionNode(name, config)
+{
+}
+
+BT::PortsList AmmoRecoveryNeededCondition::providedPorts()
+{
+  return {
+    BT::InputPort<int>("ammo_count", 0, "Current number of rounds"),
+    BT::InputPort<int>("trigger_threshold", 25, "Start supply below this ammunition count"),
+    BT::InputPort<double>("health", 0.0, "Current health value"),
+    BT::InputPort<double>("full_health", 400.0, "Health required to finish supply")};
+}
+
+BT::NodeStatus AmmoRecoveryNeededCondition::tick()
+{
+  const auto ammo_count = getInput<int>("ammo_count");
+  const auto threshold = getInput<int>("trigger_threshold");
+  const auto health = getInput<double>("health");
+  const auto full_health = getInput<double>("full_health");
+  if(!ammo_count || !threshold || !health || !full_health || ammo_count.value() < 0 ||
+    threshold.value() <= 0 || !std::isfinite(health.value()) ||
+    !std::isfinite(full_health.value()) || health.value() < 0.0 || full_health.value() <= 0.0)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+
+  if(ammo_count.value() < threshold.value())
+  {
+    recovering_ = true;
+  }
+  if(recovering_ && ammo_count.value() >= threshold.value() &&
+    health.value() >= full_health.value())
+  {
+    recovering_ = false;
+  }
+  return recovering_ ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
 HasPickupAmmoCondition::HasPickupAmmoCondition(
@@ -218,6 +262,7 @@ BT::NodeStatus HealthRecoveryNeededCondition::tick()
 void registerBulletNodes(BT::BehaviorTreeFactory & factory)
 {
   factory.registerNodeType<HasAmmoCondition>("HasAmmo");
+  factory.registerNodeType<AmmoRecoveryNeededCondition>("AmmoRecoveryNeeded");
   factory.registerNodeType<HasPickupAmmoCondition>("HasPickupAmmo");
   factory.registerNodeType<RememberAmmoAction>("RememberAmmo");
   factory.registerNodeType<RememberPositionAction>("RememberPosition");

@@ -8,6 +8,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace decision_process
@@ -136,6 +137,19 @@ bool readTargetList(BT::TreeNode & node, const char * port, std::vector<Target> 
   return text && parseTargets(text.value(), targets);
 }
 
+std::unordered_set<std::string> parseTargetIdSet(const std::string & text)
+{
+  std::unordered_set<std::string> result;
+  for(const auto & item : split(text, ','))
+  {
+    if(!item.empty())
+    {
+      result.insert(item);
+    }
+  }
+  return result;
+}
+
 }  // namespace
 
 ConfigureAttackAction::ConfigureAttackAction(
@@ -221,6 +235,8 @@ BT::PortsList BuildAttackTargetListAction::providedPorts()
   return {
     BT::InputPort<std::string>("targets", "Observed targets"),
     BT::InputPort<std::string>("persistent_targets", "Persistent or preset targets"),
+    BT::InputPort<std::string>(
+      "invincible_target_ids", "", "Comma-separated target ids excluded from attack"),
     BT::OutputPort<std::string>("attack_targets"),
     BT::OutputPort<int>("target_count"),
     BT::OutputPort<int>("visible_target_count"),
@@ -233,10 +249,12 @@ BT::NodeStatus BuildAttackTargetListAction::tick()
 {
   const auto observed = getInput<std::string>("targets");
   const auto persistent = getInput<std::string>("persistent_targets");
-  if(!observed || !persistent)
+  const auto invincible_target_ids = getInput<std::string>("invincible_target_ids");
+  if(!observed || !persistent || !invincible_target_ids)
   {
     return BT::NodeStatus::FAILURE;
   }
+  const auto configured_invincible = parseTargetIdSet(invincible_target_ids.value());
 
   std::vector<Target> parsed;
   if(!parseTargets(persistent.value(), parsed))
@@ -273,7 +291,7 @@ BT::NodeStatus BuildAttackTargetListAction::tick()
   int in_range_count = 0;
   for(const auto & target : parsed)
   {
-    if(target.invincible)
+    if(target.invincible || configured_invincible.count(target.id) != 0U)
     {
       continue;
     }
@@ -308,6 +326,8 @@ BT::PortsList SelectAttackTargetAction::providedPorts()
     BT::InputPort<bool>("require_low_health", false, "Only select targets below the threshold"),
     BT::InputPort<bool>("require_observed", false, "Only select currently observed non-persistent targets"),
     BT::InputPort<bool>("persistent_only", false, "Only select persistent targets"),
+    BT::InputPort<std::string>(
+      "invincible_target_ids", "", "Comma-separated target ids excluded from selection"),
     BT::OutputPort<std::string>("selected_target_id"),
     BT::OutputPort<double>("selected_health"),
     BT::OutputPort<double>("selected_distance"),
@@ -322,12 +342,14 @@ BT::NodeStatus SelectAttackTargetAction::tick()
   const auto require_low_health = getInput<bool>("require_low_health");
   const auto require_observed = getInput<bool>("require_observed");
   const auto persistent_only = getInput<bool>("persistent_only");
+  const auto invincible_target_ids = getInput<std::string>("invincible_target_ids");
   if(!threshold || !require_in_range || !require_low_health || !require_observed ||
-    !persistent_only ||
+    !persistent_only || !invincible_target_ids ||
     !finite(threshold.value()) || threshold.value() < 0.0)
   {
     return BT::NodeStatus::FAILURE;
   }
+  const auto configured_invincible = parseTargetIdSet(invincible_target_ids.value());
   std::vector<Target> targets;
   if(!readTargetList(*this, "attack_targets", targets))
   {
@@ -337,7 +359,8 @@ BT::NodeStatus SelectAttackTargetAction::tick()
   const Target * selected = nullptr;
   for(const auto & target : targets)
   {
-    if(target.invincible || (require_in_range.value() && !target.in_range) ||
+    if(target.invincible || configured_invincible.count(target.id) != 0U ||
+      (require_in_range.value() && !target.in_range) ||
       (require_low_health.value() && target.health >= threshold.value()) ||
       (require_observed.value() && target.persistent) ||
       (persistent_only.value() && !target.persistent))
@@ -704,6 +727,31 @@ BT::NodeStatus PursuitEligibilityCondition::tick()
   return eligible ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
+PursuitSupportReadyCondition::PursuitSupportReadyCondition(
+  const std::string & name, const BT::NodeConfig & config)
+: BT::ConditionNode(name, config)
+{
+}
+
+BT::PortsList PursuitSupportReadyCondition::providedPorts()
+{
+  return {
+    BT::InputPort<int>("friendly_count", 0, "Living friendly ground robots in costmap"),
+    BT::InputPort<int>("minimum_count", 3, "Minimum friendly count required for pursuit")};
+}
+
+BT::NodeStatus PursuitSupportReadyCondition::tick()
+{
+  const auto friendly_count = getInput<int>("friendly_count");
+  const auto minimum_count = getInput<int>("minimum_count");
+  if(!friendly_count || !minimum_count || friendly_count.value() < 0 || minimum_count.value() < 0)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+  return friendly_count.value() >= minimum_count.value() ?
+    BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
 PursueAction::PursueAction(const std::string & name, const BT::NodeConfig & config)
 : BT::StatefulActionNode(name, config)
 {
@@ -919,6 +967,7 @@ void registerAttackNodes(BT::BehaviorTreeFactory & factory)
   factory.registerNodeType<EvasiveManeuverAction>("EvasiveManeuver");
   factory.registerNodeType<AimAndFireAction>("AimAndFire");
   factory.registerNodeType<PursuitEligibilityCondition>("PursuitEligible");
+  factory.registerNodeType<PursuitSupportReadyCondition>("PursuitSupportReady");
   factory.registerNodeType<PursueAction>("DrivePursuit");
 }
 

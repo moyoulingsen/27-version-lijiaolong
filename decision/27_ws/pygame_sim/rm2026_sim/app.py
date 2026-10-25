@@ -625,14 +625,15 @@ class SimulatorApp:
         ) <= tolerance
 
     def _bridge_state(self) -> dict:
-        # Deliberately publish only the existing sentry/enemy referee inputs.
-        # Other friendly robots are local visualization/collision entities and
-        # must not become behavior-tree or ROS decision inputs.
         enemy_hp = self._enemy_health_snapshot()
         radar_data: list[float] = []
         for target_id in (1, 2, 3, 4, 5, 8):
             x, y = self.task.robot_position(target_id)
             radar_data.extend((x, y))
+        friendly_ground_positions: list[float] = []
+        for target_id in (1, 2, 3, 4):
+            x, y = self.task.own_robot_position(target_id)
+            friendly_ground_positions.extend((x, y))
         return {
             "game_period": 2 if self.task.game_running else 0,
             "time": max(
@@ -648,6 +649,19 @@ class SimulatorApp:
             "hp_base": max(0, round(self.task.own_base_hp)),
             "hp_enemy": enemy_hp,
             "radar_data": radar_data,
+            "hp_friend": [
+                max(0, round(self.task.own_robot_hp.get(target_id, 0.0)))
+                for target_id in (1, 2, 3, 4)
+            ],
+            "friendly_ground_positions": friendly_ground_positions,
+            # V1 has no editable tactical region, so its compatibility region
+            # covers the complete arena and preserves the legacy behavior.
+            "pursuit_costmap_polygon": [
+                [0.0, 15.0],
+                [28.0, 15.0],
+                [28.0, 0.0],
+                [0.0, 0.0],
+            ],
             "pending_ammo": max(0, round(self.task.pending_ammo)),
             "economy": max(0, round(self.task.economy)),
             "x": self.sentry.x,

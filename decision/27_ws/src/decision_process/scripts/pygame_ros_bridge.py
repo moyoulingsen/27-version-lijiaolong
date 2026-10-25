@@ -124,9 +124,17 @@ class PygameRosBridge(Node):
         referee.radar_data = self._bounded_sequence(
             state.get("radar_data"), 12, float
         )
+        referee.hp_friend = self._bounded_sequence(
+            state.get("hp_friend"), 4, int
+        )
+        referee.friendly_ground_positions = self._bounded_sequence(
+            state.get("friendly_ground_positions"), 8, float
+        )
+        referee.pursuit_costmap_polygon = self._flatten_points(
+            state.get("pursuit_costmap_polygon")
+        )
         referee.pending_ammo = max(0, int(state.get("pending_ammo", 0)))
         referee.economy = max(0, min(1000, int(state.get("economy", 0))))
-        referee.aggressive_patrol = bool(state.get("aggressive_patrol", False))
         referee.conservative_patrol_points = self._flatten_points(
             state.get("conservative_patrol_points")
         )

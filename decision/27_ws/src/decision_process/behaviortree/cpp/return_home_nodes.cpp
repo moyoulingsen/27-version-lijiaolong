@@ -123,6 +123,65 @@ BT::NodeStatus MatchStartedCondition::tick()
   return game_period.value() == 2 ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
+SystemStatusOKCondition::SystemStatusOKCondition(
+  const std::string & name, const BT::NodeConfig & config)
+: BT::ConditionNode(name, config)
+{
+}
+
+BT::PortsList SystemStatusOKCondition::providedPorts()
+{
+  return {BT::InputPort<bool>("system_status_ok", false, "Unified input and robot health")};
+}
+
+BT::NodeStatus SystemStatusOKCondition::tick()
+{
+  const auto status = getInput<bool>("system_status_ok");
+  return status && status.value() ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
+SafeStopAction::SafeStopAction(
+  const std::string & name, const BT::NodeConfig & config)
+: BT::SyncActionNode(name, config)
+{
+}
+
+BT::PortsList SafeStopAction::providedPorts()
+{
+  return {
+    BT::OutputPort<bool>("goal_enabled"),
+    BT::OutputPort<int>("posture_command"),
+    BT::OutputPort<int>("gyro_mode_command"),
+    BT::OutputPort<bool>("gimbal_enabled_command"),
+    BT::OutputPort<bool>("gimbal_rotate_command"),
+    BT::OutputPort<bool>("target_lock_command"),
+    BT::OutputPort<bool>("fire_command"),
+    BT::OutputPort<bool>("confirm_respawn"),
+    BT::OutputPort<bool>("pursuit_enabled_command"),
+    BT::OutputPort<std::string>("pursuit_target_id"),
+    BT::OutputPort<std::string>("pursuit_direction"),
+    BT::OutputPort<double>("pursuit_desired_distance"),
+    BT::OutputPort<std::string>("selected_target_id")};
+}
+
+BT::NodeStatus SafeStopAction::tick()
+{
+  setOutput("goal_enabled", false);
+  setOutput("posture_command", 3);
+  setOutput("gyro_mode_command", 0);
+  setOutput("gimbal_enabled_command", false);
+  setOutput("gimbal_rotate_command", false);
+  setOutput("target_lock_command", false);
+  setOutput("fire_command", false);
+  setOutput("confirm_respawn", false);
+  setOutput("pursuit_enabled_command", false);
+  setOutput("pursuit_target_id", std::string{});
+  setOutput("pursuit_direction", std::string{});
+  setOutput("pursuit_desired_distance", 0.0);
+  setOutput("selected_target_id", std::string{});
+  return BT::NodeStatus::SUCCESS;
+}
+
 SetPostureAction::SetPostureAction(
   const std::string & name, const BT::NodeConfig & config)
 : BT::SyncActionNode(name, config)
@@ -280,6 +339,8 @@ void registerReturnHomeNodes(BT::BehaviorTreeFactory & factory)
   registerNavigationNodes(factory);
   factory.registerNodeType<MatchFinishedCondition>("MatchFinished");
   factory.registerNodeType<MatchStartedCondition>("MatchStarted");
+  factory.registerNodeType<SystemStatusOKCondition>("SystemStatusOK");
+  factory.registerNodeType<SafeStopAction>("SafeStop");
 }
 
 }  // namespace decision_process

@@ -88,14 +88,18 @@ BT::NodeStatus SelectPatrolPointAction::tick()
   }
 
   std::vector<Point> points;
-  if(!parsePoints(points_text.value(), points) ||
-    static_cast<std::size_t>(index.value()) >= points.size())
+  if(!parsePoints(points_text.value(), points))
   {
     return BT::NodeStatus::FAILURE;
   }
 
-  setOutput("target_x", points[static_cast<std::size_t>(index.value())].x);
-  setOutput("target_y", points[static_cast<std::size_t>(index.value())].y);
+  // Conservative and aggressive routes intentionally share one blackboard
+  // index.  Their point counts may differ, so normalize the index whenever
+  // the active route changes instead of failing on a stale larger index.
+  const std::size_t normalized_index =
+    static_cast<std::size_t>(index.value()) % points.size();
+  setOutput("target_x", points[normalized_index].x);
+  setOutput("target_y", points[normalized_index].y);
   setOutput("point_count", static_cast<int>(points.size()));
   return BT::NodeStatus::SUCCESS;
 }
@@ -118,8 +122,7 @@ BT::NodeStatus AdvancePatrolPointAction::tick()
 {
   const auto index = getInput<int>("index");
   const auto point_count = getInput<int>("point_count");
-  if(!index || !point_count || index.value() < 0 || point_count.value() <= 0 ||
-    index.value() >= point_count.value())
+  if(!index || !point_count || index.value() < 0 || point_count.value() <= 0)
   {
     return BT::NodeStatus::FAILURE;
   }
@@ -128,29 +131,10 @@ BT::NodeStatus AdvancePatrolPointAction::tick()
   return BT::NodeStatus::SUCCESS;
 }
 
-AggressivePatrolRequestedCondition::AggressivePatrolRequestedCondition(
-  const std::string & name, const BT::NodeConfig & config)
-: BT::ConditionNode(name, config)
-{
-}
-
-BT::PortsList AggressivePatrolRequestedCondition::providedPorts()
-{
-  return {BT::InputPort<bool>("requested", false, "Use the aggressive patrol route")};
-}
-
-BT::NodeStatus AggressivePatrolRequestedCondition::tick()
-{
-  const auto requested = getInput<bool>("requested");
-  return requested && requested.value() ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
-}
-
 void registerPatrolNodes(BT::BehaviorTreeFactory & factory)
 {
   factory.registerNodeType<SelectPatrolPointAction>("SelectPatrolPoint");
   factory.registerNodeType<AdvancePatrolPointAction>("AdvancePatrolPoint");
-  factory.registerNodeType<AggressivePatrolRequestedCondition>(
-    "AggressivePatrolRequested");
 }
 
 }  // namespace decision_process

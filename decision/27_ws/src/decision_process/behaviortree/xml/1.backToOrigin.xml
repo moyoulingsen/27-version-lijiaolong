@@ -28,15 +28,15 @@
           <SubTree ID="PositionCheck"
                    current_x="{current_x}"
                    current_y="{current_y}"
-                   target_x="4.971"
-                   target_y="7.5"
+                   target_x="3.725"
+                   target_y="7.975"
                    tolerance="0.25"
                    localization_valid="{localization_valid}"/>
           <DisableGoal goal_enabled="{goal_enabled}"/>
         </Sequence>
 
-        <SendGoalPose target_x="4.971"
-                      target_y="7.5"
+        <SendGoalPose target_x="3.725"
+                      target_y="7.975"
                       target_z="1.0"
                       target_yaw="0.0"
                       frame_id="map"

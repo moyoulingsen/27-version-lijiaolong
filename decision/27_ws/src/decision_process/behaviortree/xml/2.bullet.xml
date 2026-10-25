@@ -10,20 +10,21 @@
       ammo_count        = ammunition currently carried by the robot;
       pickup_ammo_count = ammunition currently available at the pickup point.
 
-    The route stores the own-ammo baseline before leaving, and only
-    succeeds when the own-ammo message increases.
+    Ammunition below 25 latches a supply trip. The trip only releases after
+    carried ammunition is back to at least 25 and health reaches 400, so an
+    ammunition pickup also waits for full healing at the same supply point.
   -->
   <BehaviorTree ID="GoToAmmoPickup">
     <ReactiveFallback name="AmmoPickupPointReached">
       <SubTree ID="PositionCheck"
                current_x="{current_x}"
                current_y="{current_y}"
-               target_x="2.0"
-               target_y="1.0"
+               target_x="2.10"
+               target_y="1.30"
                tolerance="{tolerance}"
                localization_valid="{localization_valid}"/>
-      <SendGoalPose target_x="2.0"
-                    target_y="1.0"
+      <SendGoalPose target_x="2.10"
+                    target_y="1.30"
                     target_z="1.0"
                     target_yaw="0.0"
                     frame_id="map"
@@ -61,18 +62,16 @@
   </BehaviorTree>
 
   <!--
-    Patrol boundary from the task specification:
-      health < 150 AND economy < 400 -> conservative patrol;
-      health >= 150 OR economy >= 400 -> aggressive patrol.
-    Economy is an independent referee/simulator attribute.
+    Patrol thresholds are supplied by the parent XML tree. Pygame only sends
+    health, economy, and the two editable route point lists.
   -->
   <BehaviorTree ID="NoAmmoPatrolDecision">
     <ReactiveFallback name="PatrolByResources">
       <ReactiveSequence name="ConservativeWhenResourcesLow">
         <ResourcesLow health="{health}"
-                      health_threshold="150.0"
+                      health_threshold="{health_threshold}"
                       economy="{economy}"
-                      economy_threshold="400.0"/>
+                      economy_threshold="{economy_threshold}"/>
         <SubTree ID="ConservativePatrol"
                  conservative_patrol_points="{conservative_patrol_points}"
                  current_x="{current_x}"
@@ -112,10 +111,20 @@
   <!-- Main no-ammo tree. -->
   <BehaviorTree ID="BulletCheck">
     <ReactiveFallback name="AmmoPolicy">
-      <!-- This is the robot's own carried-ammo message. -->
-      <HasAmmo ammo_count="{ammo_count}"/>
+      <ReactiveSequence name="AmmoAndHealthRestored">
+        <HasAmmo ammo_count="{ammo_count}"
+                 minimum_ammo="25"/>
+        <Inverter>
+          <HealthRecoveryNeeded health="{health}"
+                                defense_buff="0.0"
+                                normal_threshold="400.0"
+                                enhanced_threshold="400.0"
+                                enhanced_buff_threshold="0.6"
+                                full_health="400.0"/>
+        </Inverter>
+      </ReactiveSequence>
 
-      <Sequence name="OwnAmmoEmpty">
+      <Sequence name="LowAmmoRecovery">
         <!-- Saved once before leaving for the pickup point. -->
         <RememberPosition current_x="{current_x}"
                           current_y="{current_y}"
@@ -127,6 +136,32 @@
              becomes available after the robot has started patrolling would
              otherwise be ignored until the whole subtree resets. -->
         <ReactiveFallback name="PickupOrPatrol">
+          <!-- If ammunition was restored by another source while this trip
+               was latched, still visit the supply point and heal to full. -->
+          <Sequence name="AmmoRestoredWaitForFullHealth">
+            <HasAmmo ammo_count="{ammo_count}"
+                     minimum_ammo="25"/>
+            <SubTree ID="GoToAmmoPickup"
+                     current_x="{current_x}"
+                     current_y="{current_y}"
+                     localization_valid="{localization_valid}"
+                     tolerance="{tolerance}"
+                     goal_x="{goal_x}"
+                     goal_y="{goal_y}"
+                     goal_z="{goal_z}"
+                     goal_yaw="{goal_yaw}"
+                     goal_frame_id="{goal_frame_id}"
+                     goal_enabled="{goal_enabled}"/>
+            <KeepRunningUntilFailure>
+              <HealthRecoveryNeeded health="{health}"
+                                    defense_buff="0.0"
+                                    normal_threshold="400.0"
+                                    enhanced_threshold="400.0"
+                                    enhanced_buff_threshold="0.6"
+                                    full_health="400.0"/>
+            </KeepRunningUntilFailure>
+          </Sequence>
+
           <Sequence name="PickupAvailable">
             <!-- This is the independent available-pickup-ammo message. -->
             <HasPickupAmmo pickup_ammo_count="{pickup_ammo_count}"/>
@@ -146,9 +181,20 @@
             <!-- One direct post-arrival check: increase means SUCCESS. -->
             <AmmoIncreased ammo_count="{ammo_count}"
                            ammo_before="{ammo_before}"/>
+            <HasAmmo ammo_count="{ammo_count}"
+                     minimum_ammo="25"/>
+            <KeepRunningUntilFailure>
+              <HealthRecoveryNeeded health="{health}"
+                                    defense_buff="0.0"
+                                    normal_threshold="400.0"
+                                    enhanced_threshold="400.0"
+                                    enhanced_buff_threshold="0.6"
+                                    full_health="400.0"/>
+            </KeepRunningUntilFailure>
           </Sequence>
 
-          <!-- Pickup failed or no pickup existed: go back, then patrol. -->
+          <!-- Pickup failed or no pickup existed: go back, then conserve the
+               remaining ammunition instead of entering aggressive patrol. -->
           <Sequence name="PickupFailed">
             <SubTree ID="ReturnToPrePickupPosition"
                      current_x="{current_x}"
@@ -163,19 +209,13 @@
                      goal_yaw="{goal_yaw}"
                      goal_frame_id="{goal_frame_id}"
                      goal_enabled="{goal_enabled}"/>
-            <SubTree ID="NoAmmoPatrolDecision"
+            <SubTree ID="ConservativePatrol"
                      conservative_patrol_points="{conservative_patrol_points}"
-                     aggressive_patrol_points="{aggressive_patrol_points}"
                      current_x="{current_x}"
                      current_y="{current_y}"
                      localization_valid="{localization_valid}"
                      tolerance="{tolerance}"
                      waypoint_index="{waypoint_index}"
-                     health="{health}"
-                     health_threshold="{health_threshold}"
-                     economy="{economy}"
-                     economy_threshold="{economy_threshold}"
-                     aggressive_patrol="{aggressive_patrol}"
                      goal_x="{goal_x}"
                      goal_y="{goal_y}"
                      goal_z="{goal_z}"

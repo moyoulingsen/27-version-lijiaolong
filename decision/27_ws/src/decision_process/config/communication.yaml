@@ -3,3 +3,9 @@ decision_process:
     tick_rate_hz: 20.0
     tree_file: ""
     goal_tolerance: 0.25
+    # Empty means: $HOME/.ros/decision_logs
+    bt_log_directory: ""
+    # Groot2 Monitor port. Set to 0 to disable live monitoring.
+    groot2_port: 1667
+    # x/y pairs. Pygame may override this with its live map-editor polygon.
+    pursuit_costmap_polygon: [20.0, 14.4, 28.0, 14.4, 28.0, 4.8, 20.0, 4.8, 15.3, 2.2, 17.8, 5.0, 17.8, 11.2, 20.0, 11.2]

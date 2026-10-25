@@ -10,6 +10,10 @@
     Example:
       outpost:100:8.2:0:0:1;enemy_1:35:3.1:1:0:0
 
+    Robot 2 (engineer) and robot 5 (aerial) are configured below as
+    invincible targets. They may remain visible to perception, but can never
+    enter attack, pursuit, or low-health finishing target selection.
+
     Fresh observations replace persistent entries with the same id. The
     parent application must update target_lost_seconds, gimbal_aligned,
     damage_confirmed, target_in_range_seconds, pursuit_elapsed_seconds,
@@ -30,6 +34,7 @@
 
       <BuildAttackTargetList targets="{targets}"
                              persistent_targets="{persistent_targets}"
+                             invincible_target_ids="2,5"
                              attack_targets="{attack_targets}"
                              target_count="{target_count}"
                              visible_target_count="{visible_target_count}"
@@ -69,6 +74,7 @@
                outpost even when that robot is still outside attack range. -->
           <ReactiveSequence name="DetectedLowHealthPriority">
             <SelectAttackTarget attack_targets="{attack_targets}"
+                                invincible_target_ids="2,5"
                                 low_health_threshold="50.0"
                                 require_in_range="false"
                                 require_low_health="true"
@@ -105,25 +111,30 @@
                             target_lock_command="{target_lock}"
                             fire_command="{fire_command}"/>
               </ReactiveSequence>
-              <SubTree ID="Pursue"
-                       selected_target_id="{selected_target_id}"
-                       selected_in_range="{selected_in_range}"
-                       selected_distance="{selected_distance}"
-                       target_in_range_seconds="{target_in_range_seconds}"
-                       pursuit_elapsed_seconds="{pursuit_elapsed_seconds}"
-                       posture_command="{posture_command}"
-                       gyro_mode_command="{gyro_mode_command}"
-                       gimbal_enabled="{gimbal_enabled}"
-                       pursuit_enabled="{pursuit_enabled}"
-                       pursuit_target_id="{pursuit_target_id}"
-                       pursuit_direction="{pursuit_direction}"
-                       pursuit_desired_distance="{pursuit_desired_distance}"/>
+              <ReactiveSequence name="PursueLowHealthWithFriendlySupport">
+                <PursuitSupportReady friendly_count="{pursuit_costmap_friendly_count}"
+                                     minimum_count="3"/>
+                <SubTree ID="Pursue"
+                         selected_target_id="{selected_target_id}"
+                         selected_in_range="{selected_in_range}"
+                         selected_distance="{selected_distance}"
+                         target_in_range_seconds="{target_in_range_seconds}"
+                         pursuit_elapsed_seconds="{pursuit_elapsed_seconds}"
+                         posture_command="{posture_command}"
+                         gyro_mode_command="{gyro_mode_command}"
+                         gimbal_enabled="{gimbal_enabled}"
+                         pursuit_enabled="{pursuit_enabled}"
+                         pursuit_target_id="{pursuit_target_id}"
+                         pursuit_direction="{pursuit_direction}"
+                         pursuit_desired_distance="{pursuit_desired_distance}"/>
+              </ReactiveSequence>
             </ReactiveFallback>
           </ReactiveSequence>
 
           <ReactiveSequence name="AttackInRangeTarget">
             <HasInRangeTarget in_range_count="{in_range_count}"/>
             <SelectAttackTarget attack_targets="{attack_targets}"
+                                invincible_target_ids="2,5"
                                 low_health_threshold="50.0"
                                 require_in_range="true"
                                 persistent_only="false"
@@ -169,6 +180,7 @@
 
           <ReactiveSequence name="PursueOutOfRangeTarget">
             <SelectAttackTarget attack_targets="{attack_targets}"
+                                invincible_target_ids="2,5"
                                 low_health_threshold="50.0"
                                 require_in_range="false"
                                 require_observed="true"
@@ -185,6 +197,8 @@
                               enemy_health="{enemy_health}"
                               health_advantage="200.0"
                               weak_enemy_health="30.0"/>
+            <PursuitSupportReady friendly_count="{pursuit_costmap_friendly_count}"
+                                 minimum_count="3"/>
             <SubTree ID="Pursue"
                      selected_target_id="{selected_target_id}"
                      selected_in_range="{selected_in_range}"
@@ -206,6 +220,7 @@
                by the ROS adapter for target 6. -->
           <ReactiveSequence name="PursuePersistentOutpostWithoutDetection">
             <SelectAttackTarget attack_targets="{attack_targets}"
+                                invincible_target_ids="2,5"
                                 low_health_threshold="50.0"
                                 require_in_range="false"
                                 require_low_health="false"
