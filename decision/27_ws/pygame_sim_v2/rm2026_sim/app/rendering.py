@@ -58,9 +58,9 @@ class RenderingMixin:
             mode = (
                 "行为树自动控制"
                 if self.bridge.connected
-                else "本地决策自动控制"
+                else "行为树离线｜自动控制已停止"
             )
-            mode_color = (245, 180, 65)
+            mode_color = (245, 180, 65) if self.bridge.connected else (224, 83, 83)
         if self.task.game_paused:
             mode = f"比赛暂停｜{mode}"
             mode_color = (224, 83, 83)
@@ -137,7 +137,11 @@ class RenderingMixin:
             "决策来源",
             "SQLite 时间序列（只读回放）"
             if self.replay_mode
-            else ("ROS 行为树在线" if self.bridge.connected else "Python 本地回退"),
+            else (
+                "ROS 行为树在线"
+                if self.bridge.connected
+                else "ROS 行为树离线（安全停止）"
+            ),
             bar_width,
         )
         if not self.replay_mode:

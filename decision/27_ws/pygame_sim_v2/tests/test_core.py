@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -21,6 +20,7 @@ from rm2026_sim.task_state import (
     ATTACK_RANGE,
     CONSERVATIVE_PATROL_POINTS,
     DETECTION_RANGE,
+    DecisionView,
     HOME,
     PATROL_POINTS,
     PURSUIT_COST_ZONE_ID,
@@ -37,6 +37,29 @@ from rm2026_sim.task_state import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def external_decision(
+    *,
+    goal=None,
+    posture: int = 3,
+    spin_mode: int = 0,
+    tripod_mode: int = 1,
+    shoot_mode: int = 0,
+    target: int = 0,
+    confirm_respawn: int = 0,
+) -> DecisionView:
+    return DecisionView(
+        "测试外部行为树命令",
+        posture,
+        goal,
+        spin_mode,
+        tripod_mode,
+        shoot_mode,
+        target,
+        confirm_respawn,
+        200,
+    )
 
 
 class CoordinateTests(unittest.TestCase):
@@ -195,32 +218,6 @@ class TaskScenarioTests(unittest.TestCase):
             (RED_START_POSITIONS[5][0] + 1.5, RED_START_POSITIONS[5][1]),
         )
 
-    def test_other_friendly_robots_do_not_change_decision_output(self) -> None:
-        scenario = TaskScenario()
-        sentry = SentryState()
-        before = scenario.evaluate(sentry)
-        scenario.own_robot_positions[1] = [17.0, 10.0]
-        scenario.own_robot_hp[1] = 1.0
-        scenario.own_robot_ammo[1] = 0
-        self.assertEqual(scenario.evaluate(sentry), before)
-
-    def test_initial_priority_is_attack_outpost(self) -> None:
-        decision = TaskScenario().evaluate(SentryState())
-        self.assertEqual(decision.behavior, "攻击敌方前哨")
-        self.assertEqual(decision.goal, ATTACK)
-        self.assertEqual(decision.target, 6)
-        self.assertEqual(decision.spin_mode, 1)
-        self.assertEqual(decision.tripod_mode, 1)
-
-    def test_behavior_selects_spin_mode_without_outpost_gate(self) -> None:
-        scenario = TaskScenario()
-        scenario.destroy_enemy_outpost()
-        self.assertEqual(scenario.evaluate(SentryState()).spin_mode, 1)
-        self.assertEqual(scenario.evaluate(SentryState()).tripod_mode, 1)
-        scenario.toggle_patrol_mode()
-        self.assertEqual(scenario.patrol_name, "保守巡逻")
-        self.assertEqual(scenario.evaluate(SentryState()).behavior, "巡逻")
-
     def test_local_patrol_mode_is_not_recomputed_from_resources(self) -> None:
         scenario = TaskScenario(
             enemy_outpost_hp=0.0,
@@ -231,19 +228,15 @@ class TaskScenarioTests(unittest.TestCase):
         scenario.toggle_patrol_mode()
         self.assertEqual(scenario.patrol_name, "保守巡逻")
 
-    def test_attack_lock_stops_gimbal_and_enables_shooting(self) -> None:
-        scenario = TaskScenario()
-        sentry = SentryState(x=ATTACK[0], y=ATTACK[1])
-        target_x, target_y = scenario.target_position(6)
-        sentry.turret_angle = math.atan2(target_y - sentry.y, target_x - sentry.x)
-        decision = scenario.evaluate(sentry)
-        self.assertEqual(decision.shoot_mode, 1)
-        self.assertEqual(decision.tripod_mode, 0)
-
     def test_fire_request_without_barrel_alignment_does_not_deal_damage(self) -> None:
         scenario = TaskScenario()
         sentry = SentryState(x=ATTACK[0], y=ATTACK[1], turret_angle=math.pi)
-        decision = scenario.evaluate(sentry)
+        decision = external_decision(
+            goal=ATTACK,
+            posture=1,
+            shoot_mode=1,
+            target=6,
+        )
         original_health = scenario.enemy_outpost_hp
 
         scenario.update(
@@ -284,7 +277,9 @@ class TaskScenarioTests(unittest.TestCase):
         scenario.update(
             0.5,
             sentry,
-            decision_override=scenario.evaluate(sentry),
+            decision_override=external_decision(
+                goal=ATTACK, posture=1, shoot_mode=1, target=6
+            ),
             fire_request=True,
             hit_target_id=shot.target_id,
             critical_zone=False,
@@ -302,6 +297,9 @@ class TaskScenarioTests(unittest.TestCase):
             scenario.update(
                 0.1,
                 sentry,
+                decision_override=external_decision(
+                    goal=ATTACK, posture=1, shoot_mode=1, target=6
+                ),
                 fire_request=True,
                 hit_target_id=6,
                 critical_zone=False,
@@ -324,7 +322,9 @@ class TaskScenarioTests(unittest.TestCase):
         scenario.update(
             0.25,
             sentry,
-            decision_override=scenario.evaluate(sentry),
+            decision_override=external_decision(
+                goal=ATTACK, posture=1, shoot_mode=1, target=6
+            ),
             fire_request=True,
             hit_target_id=shot.target_id,
             critical_zone=False,
@@ -343,7 +343,9 @@ class TaskScenarioTests(unittest.TestCase):
         scenario.update(
             0.5,
             sentry,
-            decision_override=scenario.evaluate(sentry),
+            decision_override=external_decision(
+                goal=ATTACK, posture=1, shoot_mode=1, target=6
+            ),
             fire_request=True,
             hit_target_id=6,
         )
@@ -439,23 +441,6 @@ class TaskScenarioTests(unittest.TestCase):
         self.assertEqual(scenario.enemy_base_hp, 5000)
         self.assertEqual(scenario.own_base_hp, 5000)
 
-    def test_defence_buff_uses_lower_recovery_threshold(self) -> None:
-        scenario = TaskScenario(defence_buff=60, sentry_hp=170.0)
-        scenario.enemy_outpost_hp = 0.0
-        self.assertEqual(scenario.evaluate(SentryState()).behavior, "巡逻")
-        scenario.sentry_hp = 150.0
-        decision = scenario.evaluate(SentryState())
-        self.assertEqual(decision.behavior, "低血量回血")
-        self.assertEqual(decision.goal, SUPPLY)
-        self.assertEqual(decision.health_threshold, 160)
-
-        scenario.sentry_hp = 250.0
-        self.assertEqual(scenario.evaluate(SentryState()).behavior, "低血量回血")
-        scenario.sentry_hp = 399.0
-        self.assertEqual(scenario.evaluate(SentryState()).behavior, "低血量回血")
-        scenario.sentry_hp = 400.0
-        self.assertEqual(scenario.evaluate(SentryState()).behavior, "巡逻")
-
     def test_default_sentry_has_no_manual_defence_override(self) -> None:
         scenario = TaskScenario()
 
@@ -467,9 +452,6 @@ class TaskScenarioTests(unittest.TestCase):
         sentry = SentryState()
         scenario.kill_sentry()
         scenario.update(10.1, sentry)
-        decision = scenario.evaluate(sentry)
-        self.assertEqual(decision.behavior, "复活后补给解锁")
-        self.assertEqual(decision.goal, SUPPLY)
         self.assertEqual(scenario.sentry_hp, 40.0)
         self.assertTrue(scenario.respawn_fire_locked)
 
@@ -481,7 +463,7 @@ class TaskScenarioTests(unittest.TestCase):
         scenario = TaskScenario(enemy_outpost_hp=0.0, ammo=77)
         sentry = SentryState(heat=200.0)
         scenario.kill_sentry()
-        confirmation = replace(scenario.evaluate(sentry), confirm_respawn=1)
+        confirmation = external_decision(confirm_respawn=1)
 
         scenario.update(4.9, sentry, decision_override=confirmation)
         self.assertEqual(scenario.sentry_hp, 0.0)
@@ -491,7 +473,6 @@ class TaskScenarioTests(unittest.TestCase):
         self.assertEqual(scenario.ammo, 77)
         self.assertEqual(sentry.heat, 0.0)
         self.assertTrue(scenario.respawn_fire_locked)
-        self.assertEqual(scenario.evaluate(sentry).goal, SUPPLY)
 
     def test_any_position_inside_supply_zone_can_recover_and_receive_ammo(self) -> None:
         scenario = TaskScenario(
@@ -532,7 +513,6 @@ class TaskScenarioTests(unittest.TestCase):
         sentry = SentryState()
         self.assertEqual(scenario.patrol_name, "激进巡逻")
         self.assertEqual(scenario.patrol_points, AGGRESSIVE_PATROL_POINTS)
-        self.assertEqual(scenario.evaluate(sentry).goal, AGGRESSIVE_PATROL_POINTS[0])
 
         scenario.toggle_patrol_mode()
         self.assertEqual(scenario.patrol_name, "保守巡逻")
@@ -541,7 +521,6 @@ class TaskScenarioTests(unittest.TestCase):
         scenario.toggle_patrol_mode()
         self.assertEqual(scenario.patrol_name, "激进巡逻")
         self.assertEqual(scenario.patrol_points, AGGRESSIVE_PATROL_POINTS)
-        self.assertEqual(scenario.evaluate(sentry).goal, AGGRESSIVE_PATROL_POINTS[0])
 
     def test_patrol_route_loops_from_last_point_back_to_first(self) -> None:
         scenario = TaskScenario(
@@ -563,13 +542,12 @@ class TaskScenarioTests(unittest.TestCase):
         self.assertEqual(scenario.patrol_name, "保守巡逻")
         self.assertEqual(scenario.patrol_points[scenario.patrol_index], CONSERVATIVE_PATROL_POINTS[0])
 
-    def test_manual_patrol_routes_drive_local_decision_and_survive_reset(self) -> None:
+    def test_manual_patrol_routes_survive_reset(self) -> None:
         conservative = [[2.0, 2.0], [4.0, 2.0]]
         aggressive = [[11.0, 3.0], [15.0, 7.5], [11.0, 12.0]]
         scenario = TaskScenario(enemy_outpost_hp=0.0)
         scenario.configure_patrol_routes(conservative, aggressive)
 
-        self.assertEqual(scenario.evaluate(SentryState()).goal, tuple(aggressive[0]))
         scenario.aggressive_patrol = False
         self.assertEqual(scenario.patrol_points, tuple(tuple(point) for point in conservative))
 
@@ -618,15 +596,13 @@ class TaskScenarioTests(unittest.TestCase):
         own_decision = own_base_destroyed.update(0.0, SentryState())
         self.assertTrue(own_base_destroyed.game_finished)
         self.assertFalse(own_base_destroyed.game_running)
-        self.assertEqual(own_base_destroyed.evaluate(SentryState()).goal, HOME)
-        self.assertEqual(own_decision.goal, HOME)
+        self.assertIsNone(own_decision.goal)
 
         enemy_base_destroyed = TaskScenario(enemy_base_hp=0.0)
         enemy_decision = enemy_base_destroyed.update(0.0, SentryState())
         self.assertTrue(enemy_base_destroyed.game_finished)
         self.assertFalse(enemy_base_destroyed.game_running)
-        self.assertEqual(enemy_base_destroyed.evaluate(SentryState()).goal, HOME)
-        self.assertEqual(enemy_decision.goal, HOME)
+        self.assertIsNone(enemy_decision.goal)
 
     def test_match_time_can_be_adjusted_and_is_clamped(self) -> None:
         scenario = TaskScenario(remaining_time=200.0)
@@ -654,7 +630,9 @@ class TaskScenarioTests(unittest.TestCase):
         scenario.update(
             1.0,
             sentry,
-            decision_override=scenario.evaluate(sentry),
+            decision_override=external_decision(
+                goal=ATTACK, posture=1, shoot_mode=1, target=6
+            ),
             fire_request=True,
             hit_target_id=hit_target,
         )
@@ -668,7 +646,9 @@ class TaskScenarioTests(unittest.TestCase):
         scenario.update(
             1.0,
             sentry,
-            decision_override=scenario.evaluate(sentry),
+            decision_override=external_decision(
+                goal=ATTACK, posture=1, shoot_mode=1, target=6
+            ),
             fire_request=True,
             hit_target_id=hit_target,
         )
@@ -753,17 +733,11 @@ class TaskScenarioTests(unittest.TestCase):
         scenario.inject_unseen_damage(moving_sentry)
         self.assertGreater(scenario.dodge_remaining, 0.0)
         first_goal = scenario.dodge_goal
-        decision = scenario.evaluate(moving_sentry)
-        self.assertEqual(decision.behavior, "视野外显著受伤不规则回避")
-        self.assertEqual(decision.posture, 2)
-        self.assertEqual(decision.spin_mode, 3)
-        self.assertEqual(decision.tripod_mode, 1)
 
         scenario.update(0.8, moving_sentry)
         self.assertNotEqual(scenario.dodge_goal, first_goal)
         scenario.update(5.0, moving_sentry)
         self.assertEqual(scenario.dodge_remaining, 0.0)
-        self.assertNotIn("回避", scenario.evaluate(moving_sentry).behavior)
 
     def test_two_manual_25_health_drops_trigger_accumulated_evasion(self) -> None:
         scenario = TaskScenario(enemy_outpost_hp=0.0, sentry_hp=400.0)

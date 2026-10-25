@@ -22,6 +22,7 @@ from rm2026_sim.task_state import (
     ATTACK,
     BUFFER_ENERGY_CAP,
     CRITICAL_HALF_WIDTH,
+    DecisionView,
     FIRE_ALIGNMENT_TOLERANCE,
     HOME,
     PENDING_AMMO_CAP,
@@ -30,6 +31,20 @@ from rm2026_sim.task_state import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def external_attack_decision() -> DecisionView:
+    return DecisionView(
+        "测试外部行为树攻击命令",
+        1,
+        ATTACK,
+        0,
+        0,
+        1,
+        6,
+        0,
+        200,
+    )
 
 
 class V2RuleTests(unittest.TestCase):
@@ -44,7 +59,7 @@ class V2RuleTests(unittest.TestCase):
         self.assertFalse(scenario.game_running)
         self.assertEqual(scenario.winner_team, "red")
         self.assertEqual(scenario.result_label, "己方获胜")
-        self.assertEqual(decision.goal, HOME)
+        self.assertIsNone(decision.goal)
         self.assertEqual(scenario.remaining_time, 0.0)
 
     def test_winner_tiebreak_uses_outposts_then_damage(self) -> None:
@@ -115,7 +130,7 @@ class V2RuleTests(unittest.TestCase):
         scenario.update(
             0.5,
             sentry,
-            decision_override=scenario.evaluate(sentry),
+            decision_override=external_attack_decision(),
             fire_request=True,
             hit_target_id=shot.target_id,
             critical_zone=False,
@@ -187,25 +202,19 @@ class V2RuleTests(unittest.TestCase):
         self.assertFalse(grid.is_free_world(27.8, 7.5))
         self.assertTrue(grid.is_free_world(*ATTACK))
 
-    def test_outpost_shoot_mode_waits_for_barrel_alignment(self) -> None:
+    def test_outpost_aim_error_tracks_barrel_alignment(self) -> None:
         scenario = TaskScenario()
         sentry = SentryState(x=ATTACK[0], y=ATTACK[1])
         target_x, target_y = scenario.target_position(6)
         bearing = math.atan2(target_y - sentry.y, target_x - sentry.x)
 
         sentry.turret_angle = bearing + math.radians(20.0)
-        waiting = scenario.evaluate(sentry)
-        self.assertEqual(waiting.shoot_mode, 0)
-        self.assertEqual(waiting.tripod_mode, 1)
         self.assertGreater(
             scenario.aim_error(sentry, 6),
             FIRE_ALIGNMENT_TOLERANCE,
         )
 
         sentry.turret_angle = bearing
-        ready = scenario.evaluate(sentry)
-        self.assertEqual(ready.shoot_mode, 1)
-        self.assertEqual(ready.tripod_mode, 0)
         self.assertLessEqual(
             scenario.aim_error(sentry, 6),
             FIRE_ALIGNMENT_TOLERANCE,

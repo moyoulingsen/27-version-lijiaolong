@@ -3323,10 +3323,21 @@ class TaskScenario:
                 self.dodge_goal = None
                 self._dodge_phase = -1
 
-        decision = decision_override or self.evaluate(sentry)
-        if self.game_finished:
-            decision = self.evaluate(sentry)
-        elif decision.confirm_respawn:
+        # Live tactical decisions are owned exclusively by BehaviorTree.CPP.
+        # Rule-only callers without a decision receive a neutral actuator hold
+        # instead of the former Python policy fallback.
+        decision = decision_override or DecisionView(
+            behavior="等待 ROS 行为树连接",
+            posture=3,
+            goal=None,
+            spin_mode=0,
+            tripod_mode=1,
+            shoot_mode=0,
+            target=0,
+            confirm_respawn=0,
+            health_threshold=self.health_threshold,
+        )
+        if decision.confirm_respawn:
             self._confirm_task_respawn(sentry)
         if not self.game_paused and not self.game_finished:
             self._update_posture(decision.posture, simulation_elapsed)
@@ -3630,78 +3641,6 @@ class TaskScenario:
             self.finish_game("敌方基地被摧毁，比赛结束")
             return True
         return False
-
-    def evaluate(self, sentry: SentryState) -> DecisionView:
-        if self.sentry_hp >= 400.0:
-            self._health_recovery_active = False
-        elif self.sentry_hp < self.health_threshold:
-            self._health_recovery_active = True
-
-        spin_mode = 0
-        behavior = "巡逻"
-        posture = 3
-        goal: tuple[float, float] | None = self.patrol_points[self.patrol_index]
-        shoot_mode = 0
-        target = 0
-        confirm_respawn = 0
-
-        if self.game_finished:
-            behavior, goal = "比赛结束归位", HOME
-        elif self.sentry_hp <= 0.0:
-            behavior, goal = "等待复活", None
-            confirm_respawn = int(
-                self.death_elapsed is not None and self.death_elapsed >= 5.0
-            )
-        elif self.respawn_fire_locked:
-            behavior, goal = "复活后补给解锁", SUPPLY
-        elif self._health_recovery_active:
-            behavior, goal = "低血量回血", SUPPLY
-        elif self.dodge_remaining > 0.0 and self.dodge_goal is not None:
-            behavior, posture, goal = "视野外显著受伤不规则回避", 2, self.dodge_goal
-        elif self.enemy_outpost_hp > 0.0:
-            behavior, posture, goal, target = "攻击敌方前哨", 1, ATTACK, 6
-            at_attack = _distance((sentry.x, sentry.y), ATTACK) <= 0.20
-            alignment = self.aim_error(sentry, 6)
-            aligned = (
-                alignment is not None
-                and alignment <= FIRE_ALIGNMENT_TOLERANCE
-            )
-            shoot_mode = int(
-                at_attack
-                and aligned
-                and self.robot_available_shots(8, team="red") > 0
-                and not self.respawn_fire_locked
-            )
-        elif self.robot_available_shots(8, team="red") == 0:
-            behavior = "前往补给领弹" if self.pending_ammo > 0 else "无弹站桩"
-            goal = SUPPLY if self.pending_ammo > 0 else HOME
-        if self.game_running and self.sentry_hp > 0.0:
-            if "巡逻" in behavior:
-                spin_mode = 1 if self.patrol_is_aggressive else 3
-            elif "回避" in behavior:
-                spin_mode = 3
-            elif target > 0:
-                spin_mode = 0 if shoot_mode else 1
-
-        if "回避" in behavior:
-            tripod_mode = 1
-        elif "巡逻" in behavior:
-            tripod_mode = int(self.patrol_is_aggressive)
-        else:
-            tripod_mode = int(target > 0 and shoot_mode == 0)
-        if self.sentry_fire_locked:
-            shoot_mode = 0
-        return DecisionView(
-            behavior=behavior,
-            posture=posture,
-            goal=goal,
-            spin_mode=spin_mode,
-            tripod_mode=tripod_mode,
-            shoot_mode=shoot_mode,
-            target=target,
-            confirm_respawn=confirm_respawn,
-            health_threshold=self.health_threshold,
-        )
 
     def destroy_own_outpost(self) -> None:
         self.own_outpost_hp = 0

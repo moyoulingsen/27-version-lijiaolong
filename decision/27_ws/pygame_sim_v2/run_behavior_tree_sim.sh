@@ -41,4 +41,4 @@ else
   .venv/bin/python -m pip install -r requirements.txt
   python_bin=".venv/bin/python"
 fi
-"$python_bin" main.py
+"$python_bin" main.py "$@"

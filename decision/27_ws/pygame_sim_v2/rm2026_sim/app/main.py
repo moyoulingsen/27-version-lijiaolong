@@ -194,7 +194,17 @@ class SimulatorApp(
         self.controlled_robot_id: int | None = None
         self.controlled_robot_team: str | None = None
         self.task = TaskScenario()
-        self.decision = self.task.evaluate(self.sentry)
+        self.decision = DecisionView(
+            "等待 ROS 行为树连接",
+            3,
+            None,
+            0,
+            1,
+            0,
+            0,
+            0,
+            self.task.health_threshold,
+        )
         self.bridge = BehaviorTreeBridgeClient()
         self.scenario_store = ScenarioStore(SNAPSHOT_PATH)
         self.snapshots = self.scenario_store.load()

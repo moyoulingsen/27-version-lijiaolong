@@ -882,85 +882,7 @@ class SimulationMixin:
             return decision
         return replace(decision, tripod_mode=1, shoot_mode=0)
 
-    def _local_decision(self) -> DecisionView:
-        base = self.task.evaluate(self.sentry)
-        if (
-            self.task.game_finished
-            or not self.task.game_running
-            or self.task.sentry_hp <= 0.0
-            or self.task.respawn_fire_locked
-            or self.task.ammo <= 0
-        ):
-            return base
-
-        autoaim = self._simulated_autoaim(self._enemy_health_snapshot())
-        candidates = []
-        # Target 5 is an aerial robot and is invulnerable in the Pygame
-        # armour model, so the local fallback must never pursue it either.
-        # The base is an ordinary visual target once its outpost protection
-        # has ended; unlike the outpost it has no dedicated attack point.
-        for target_id in (1, 3, 4, 7, 8):
-            health = self.task.enemy_health(target_id)
-            if (
-                autoaim["target"][target_id]
-                and 0.0 < health < 50.0
-                and health != 1001.0
-                and (target_id != 7 or self.task.enemy_outpost_hp <= 0.0)
-            ):
-                candidates.append(
-                    (autoaim["target_distance"][target_id], target_id)
-                )
-        if not candidates:
-            return base
-
-        distance, target_id = min(candidates)
-        if distance > ATTACK_RANGE:
-            if not self.task.pursuit_cost_support_ready(self.sentry):
-                return base
-            polar_radius = autoaim["target_polar_r"][target_id]
-            polar_angle = autoaim["target_polar_angle"][target_id]
-            map_angle = self.sentry.turret_angle + polar_angle
-            target_x = self.sentry.x + polar_radius * math.cos(map_angle)
-            target_y = self.sentry.y + polar_radius * math.sin(map_angle)
-            delta_x = target_x - self.sentry.x
-            delta_y = target_y - self.sentry.y
-            length = max(1e-6, math.hypot(delta_x, delta_y))
-            desired_distance = 2.8
-            goal = self.arena.clamp(
-                target_x - delta_x / length * desired_distance,
-                target_y - delta_y / length * desired_distance,
-            )
-            return DecisionView(
-                behavior="追击残血目标",
-                posture=3,
-                goal=goal,
-                spin_mode=1,
-                tripod_mode=1,
-                shoot_mode=0,
-                target=target_id,
-                confirm_respawn=0,
-                health_threshold=base.health_threshold,
-            )
-
-        return DecisionView(
-            behavior="攻击残血目标",
-            posture=1,
-            goal=None,
-            spin_mode=0,
-            tripod_mode=1,
-            shoot_mode=1,
-            target=target_id,
-            confirm_respawn=0,
-            health_threshold=base.health_threshold,
-        )
-
     def _bridge_decision(self) -> DecisionView | None:
-        # Do not let the last cached BehaviorTree output keep controlling the
-        # chassis after the match ends.  The local match-end decision owns the
-        # return-home route, even if the external bridge stops publishing at
-        # the whistle.
-        if self.task.game_finished:
-            return None
         if not self.bridge.connected:
             return None
         output = self.bridge.latest_output()
@@ -1013,6 +935,20 @@ class SimulationMixin:
             shoot_mode=int(serial.get("shoot_mode", 0)),
             target=target,
             confirm_respawn=int(serial.get("confirm_respawn", 0)),
+            health_threshold=self.task.health_threshold,
+        )
+
+    def _behavior_tree_unavailable_decision(self) -> DecisionView:
+        """Hold every automatic actuator until BehaviorTree.CPP is online."""
+        return DecisionView(
+            behavior="等待 ROS 行为树连接",
+            posture=3,
+            goal=None,
+            spin_mode=0,
+            tripod_mode=1,
+            shoot_mode=0,
+            target=0,
+            confirm_respawn=0,
             health_threshold=self.task.health_threshold,
         )
 

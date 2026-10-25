@@ -1,10 +1,8 @@
 # RMUC 2026 Pygame 二维验证器 v2
 
 ## 运行
-
-
-
-推荐直接用 v2 专用启动脚本：
+实时模式只允许 ROS 2/BehaviorTree.CPP 作为决策源。顶层只保留
+`run_behavior_tree_sim.sh`，它会启动完整的行为树、ROS/UDP 桥和 Pygame：
 
 ```bash
 cd "/home/lijiaolong/桌面/27-version-lijiaolong/decision/27_ws/pygame_sim_v2"
@@ -14,9 +12,9 @@ cd "/home/lijiaolong/桌面/27-version-lijiaolong/decision/27_ws/pygame_sim_v2"
 真实数据集通过同一个 v2 裁判系统和可视化入口加载，不再提供独立启动方式：
 
 ```bash
-./run_pygame_sim_v2.sh --dataset-replay
+python3 main.py --dataset-replay
 # 或指定某一局
-./run_pygame_sim_v2.sh --dataset-replay --game-id 1778631047459
+python3 main.py --dataset-replay --game-id 1778631047459
 ```
 
 该模式直接复用正常启动时的场地图、裁判状态、机器人属性面板、建筑血量、
@@ -47,7 +45,8 @@ cd "/home/lijiaolong/桌面/27-version-lijiaolong/decision/27_ws/pygame_sim_v2"
 0.25x～8x，`L` 循环，`N/B` 切换下一局/上一局，`Home/End` 跳到首尾；底部时间
 轴支持鼠标拖动。可用 `--region`、`--school` 筛选局列表。
 
-这是一个与 ROS 2/Gazebo 解耦的轻量二维验证程序，用于先行确认哨兵坐标、任务场景输入、人工移动、小陀螺、云台和高层决策输出。
+这是一个二维验证程序，用于确认哨兵坐标、任务场景输入、人工移动、
+小陀螺、云台和行为树输出。实时自动控制不再包含 Python 本地备用决策。
 
 > 本目录是 `decision/27_ws/pygame_sim` 的独立副本；v1 目录保持原样。
 > v2 相对 v1 的规则增强见 [`V2_CHANGES.md`](V2_CHANGES.md)。
@@ -68,10 +67,11 @@ cd "/home/lijiaolong/桌面/27-version-lijiaolong/decision/27_ws/pygame_sim_v2"
 - 特殊墙对双方完全对称：红方和蓝方的 2/3/4 号机器人均需对同一面特殊墙保持连续移动输入 1 秒后才能穿越；离开后再次进入需重新计时。
 - 自动导航对决策发布的目标点执行最基础的 8 邻域 A* 搜索，黄色折线显示当前路径。真实碰撞仍按官方底盘外接圆检查，但 A* 模板额外将障碍外扩 `0.07m`，使规划路线主动远离墙角，降低连续运动卡角概率。原激进巡逻点 `(12.0, 12.0)` 落在膨胀后障碍内，因此依官方地图修正为附近可通行点 `(12.3, 11.7)`。
 
-脚本会优先使用本目录 `.venv`，其次复用 `../pygame_sim/.venv`，最后才创建新环境；
-不会修改 v1 的虚拟环境。
+行为树启动脚本会优先使用本目录 `.venv`，其次复用
+`../pygame_sim/.venv`，最后才创建新环境；不会修改 v1 的虚拟环境。
 
-Windows PowerShell：
+Windows PowerShell 可单独启动界面或数据集回放，但没有 ROS 行为树时
+实时自动控制将保持安全停止：
 
 ```powershell
 cd "decision/27_ws/pygame_sim_v2"
@@ -80,7 +80,7 @@ python -m venv ".venv"
 & ".venv/Scripts/python.exe" "main.py"
 ```
 
-Linux：
+Linux 直接运行 `main.py` 也只用于界面检查和回放：
 
 ```bash
 cd "decision/27_ws/pygame_sim_v2"
@@ -89,14 +89,14 @@ python3 -m venv ".venv"
 ".venv/bin/python" "main.py"
 ```
 
-本机已经创建虚拟环境时，直接运行下面两行即可。Python 二维界面无需 `colcon` 编译：
+单独运行 Python 二维界面不会执行任何本地备用决策：
 
 ```bash
 cd "/home/lijiaolong/桌面/27-version-lijiaolong/decision/27_ws/pygame_sim_v2"
 .venv/bin/python main.py
 ```
 
-Linux 下接入真实 ROS 2/BehaviorTree.CPP 的一键启动方式：
+Linux 下实时自动控制的唯一启动方式：
 
 ```bash
 ./run_behavior_tree_sim.sh
@@ -104,7 +104,8 @@ Linux 下接入真实 ROS 2/BehaviorTree.CPP 的一键启动方式：
 
 脚本会构建 `decision_process`，启动 C++ 行为树与 ROS/UDP 桥接，再启动
 Pygame。左侧“决策来源”显示“ROS 行为树在线”时表示真实行为树已经接管；
-连接失败时会自动显示“Python 本地回退”。集成模式需要 ROS 2 Jazzy
+连接失败时显示“ROS 行为树离线（安全停止）”，并停止自动移动和射击。
+不再存在 Python 本地回退。集成模式需要 ROS 2 Jazzy
 和 `behaviortree_cpp` 4.x。
 
 ## v2 规则增强

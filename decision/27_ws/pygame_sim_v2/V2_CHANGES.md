@@ -7,7 +7,7 @@ v2 的目标不是替换 v1，而是把上一轮规则书对比中“已有但�
 
 ```bash
 cd "/home/lijiaolong/桌面/27-version-lijiaolong/decision/27_ws/pygame_sim_v2"
-./run_pygame_sim_v2.sh
+./run_behavior_tree_sim.sh
 ```
 
 脚本会优先使用本目录 `.venv`，其次复用 `../pygame_sim/.venv`，最后才创建新环境。

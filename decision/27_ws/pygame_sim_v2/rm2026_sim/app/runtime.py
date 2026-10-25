@@ -234,9 +234,8 @@ class RuntimeMixin:
                 viewport = self._viewport()
                 move_x, move_y = self._movement_input()
                 bridge_decision = self._bridge_decision()
-                local_decision = self._local_decision()
                 motion_decision = self._gate_gimbal_by_alignment(
-                    bridge_decision or local_decision
+                    bridge_decision or self._behavior_tree_unavailable_decision()
                 )
                 self.task.set_robot_turntable_mode(
                     8,

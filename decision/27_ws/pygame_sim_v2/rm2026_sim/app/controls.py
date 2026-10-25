@@ -345,7 +345,7 @@ class ControlsMixin:
         self._normalize_robot_positions()
         self._planning_robot_signature = None
         self._refresh_dynamic_planning_grid(force=True)
-        self.decision = self.task.evaluate(self.sentry)
+        self.decision = self._behavior_tree_unavailable_decision()
         self.task.notify("比赛时间、位置和全部属性已复位")
 
     def _restart_validation(self) -> None:
@@ -366,7 +366,7 @@ class ControlsMixin:
         self.hit_target_id = None
         self.bridge.clear_output()
         self.navigator.clear()
-        self.decision = self.task.evaluate(self.sentry)
+        self.decision = self._behavior_tree_unavailable_decision()
         self.task.notify("验证已重新启动，行为树正在复位")
 
     def _save_snapshot(self) -> None:
@@ -558,7 +558,7 @@ class ControlsMixin:
         self._normalize_robot_positions()
         self._planning_robot_signature = None
         self._refresh_dynamic_planning_grid(force=True)
-        self.decision = self.task.evaluate(self.sentry)
+        self.decision = self._behavior_tree_unavailable_decision()
         self.task.notify(
             f"已载入{self.snapshots[index].get('name', f'场景 {index + 1}')}"
         )
