@@ -1,0 +1,13 @@
+{
+  "checkpoint": "checkpoints/final.pt",
+  "policy_mode": "stochastic",
+  "environment": "CPU reference full-map red-home assault",
+  "episodes": 10,
+  "successes": 10,
+  "success_rate": 1.0,
+  "mean_raw_score": 61241.79841845685,
+  "mean_remaining_time": 363.9899999999873,
+  "mean_completion_time": 56.01000000001269,
+  "all_replays_destroyed_outpost_and_base": true,
+  "replay_directory": "stochastic_replays"
+}
