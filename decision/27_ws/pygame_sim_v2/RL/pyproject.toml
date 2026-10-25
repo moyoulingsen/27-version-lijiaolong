@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rmuc-sentry-rl"
+version = "1.1.0"
+description = "PPO-LSTM training stack for the RMUC 2026 sentry assault task"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=2.0,<3.0",
+  "torch>=2.7,<3.0",
+  "pygame>=2.6,<3.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+rl-train = "rl.cli.train:main"
+rl-evaluate = "rl.cli.evaluate:main"
+rl-monitor = "rl.cli.monitor:main"
+rl-replay = "rl.replay.pygame_player:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+

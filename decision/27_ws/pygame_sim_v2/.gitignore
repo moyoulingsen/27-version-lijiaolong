@@ -1,6 +1,8 @@
 .venv/
+.venv-rl/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+*.egg-info/
 scenario_saves.json
 map_regions_backups/
