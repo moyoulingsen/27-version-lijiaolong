@@ -74,11 +74,60 @@ def main() -> None:
     )
     try:
         state = base_state()
+        route_state = copy.deepcopy(state)
+        route_state["time"] = 100
+        route_state["hp_enemy"][5] = 0
+        route_state["aggressive_patrol_points"] = [
+            [11.0, 3.0],
+            [15.0, 7.5],
+            [11.0, 12.0],
+        ]
+        stopped = copy.deepcopy(route_state)
+        stopped["game_period"] = 0
+        for _ in range(5):
+            client.publish_state(stopped)
+            time.sleep(0.05)
+        wait_for(
+            client,
+            route_state,
+            lambda output: near_goal(output, (11.0, 3.0)),
+            "Pygame manual patrol route reaches behavior-tree blackboard",
+        )
+
+        dead_state = copy.deepcopy(state)
+        dead_state["hp_sentry"] = 0
+        dead_state["x"], dead_state["y"] = 10.0, 8.0
+        wait_for(
+            client,
+            dead_state,
+            lambda output: output["serial"]["confirm_respawn"] == 1
+            and output.get("goal") is None,
+            "dead sentry confirms respawn after the wait without moving",
+            timeout=7.0,
+        )
+
+        revived_state = copy.deepcopy(dead_state)
+        revived_state["hp_sentry"] = 400
+        wait_for(
+            client,
+            revived_state,
+            lambda output: output["serial"]["confirm_respawn"] == 0
+            and near_goal(output, (2.10, 1.30)),
+            "revived sentry returns to the supply point",
+        )
+        revived_state["x"], revived_state["y"] = 2.10, 1.30
+        wait_for(
+            client,
+            revived_state,
+            lambda output: near_goal(output, (13.44, 11.14)),
+            "respawn flow releases normal policy after reaching supply",
+        )
+
         wait_for(
             client,
             state,
             lambda output: output["autoaim"]["target"] == 6
-            and near_goal(output, (17.0, 10.0))
+            and near_goal(output, (13.44, 11.14))
             and output["serial"]["spin_mode"] == 1
             and output["serial"]["tripod_mode"] == 1,
             "enemy outpost pursuit uses low-speed gyro and scans with gimbal",
@@ -92,7 +141,7 @@ def main() -> None:
             client,
             state,
             lambda output: output["autoaim"]["target"] == 6
-            and near_goal(output, (17.0, 10.0)),
+            and near_goal(output, (13.44, 11.14)),
             "engineer robot 2 is excluded from target selection",
         )
 
@@ -134,7 +183,7 @@ def main() -> None:
             client,
             state,
             lambda output: output["autoaim"]["target"] == 6
-            and near_goal(output, (17.0, 10.0)),
+            and near_goal(output, (13.44, 11.14)),
             "outpost pursuit resumes after detected robot disappears",
         )
 
@@ -142,12 +191,12 @@ def main() -> None:
         wait_for(
             client,
             state,
-            lambda output: near_goal(output, (17.0, 10.0))
+            lambda output: near_goal(output, (13.44, 11.14))
             and output["serial"]["shoot_mode"] == 0,
             "outpost pursuit does not stop or fire early",
         )
 
-        state["x"], state["y"] = 17.0, 10.0
+        state["x"], state["y"] = 13.44, 11.14
         wait_for(
             client,
             state,
@@ -368,18 +417,6 @@ def main() -> None:
             "both-low patrol boundary remains below health-recovery priority",
         )
         state["hp_sentry"] = 400
-
-        state["aggressive_patrol_points"] = [
-            [11.0, 3.0],
-            [15.0, 7.5],
-            [11.0, 12.0],
-        ]
-        wait_for(
-            client,
-            state,
-            lambda output: near_goal(output, (11.0, 3.0)),
-            "Pygame manual patrol route reaches behavior-tree blackboard",
-        )
 
         running = copy.deepcopy(state)
         running["time"] = 10

@@ -30,6 +30,7 @@
 #include "bullet_nodes.hpp"
 #include "conservative_patrol_nodes.hpp"
 #include "patrol_nodes.hpp"
+#include "respawn_nodes.hpp"
 #include "return_home_nodes.hpp"
 
 using namespace std::chrono_literals;
@@ -37,8 +38,8 @@ using namespace std::chrono_literals;
 namespace
 {
 constexpr double kAttackRange = 4.0;
-constexpr double kOutpostAttackX = 17.0;
-constexpr double kOutpostAttackY = 10.0;
+constexpr double kOutpostAttackX = 13.440;
+constexpr double kOutpostAttackY = 11.140;
 constexpr uint32_t kMatchDurationSeconds = 420U;
 constexpr uint32_t kOpeningOutpostSeconds = 300U;
 constexpr uint32_t kSignificantDamageThreshold = 30U;
@@ -126,6 +127,7 @@ public:
     registerConservativePatrolNodes(factory_);
     registerAggressivePatrolNodes(factory_);
     registerAttackNodes(factory_);
+    registerRespawnNodes(factory_);
 
     initialiseBlackboard();
     tree_ = std::make_unique<BT::Tree>(factory_.createTreeFromFile(tree_file_, blackboard_));
@@ -173,11 +175,12 @@ private:
     }
     pursuit_started_.reset();
     in_range_started_.reset();
-    death_started_.reset();
     previous_hp_.reset();
     health_decreased_ = false;
     accumulated_damage_ = 0U;
     last_selected_target_.clear();
+    last_conservative_patrol_points_.clear();
+    last_aggressive_patrol_points_.clear();
     last_goal_enabled_ = false;
     last_target_seen_time_ = std::chrono::steady_clock::now() - 60s;
     last_damage_time_ = std::chrono::steady_clock::now() - 60s;
@@ -233,6 +236,7 @@ private:
     blackboard_->set("gimbal_rotate", true);
     blackboard_->set("target_lock", false);
     blackboard_->set("fire_command", false);
+    blackboard_->set("confirm_respawn", false);
     blackboard_->set("pursuit_enabled", false);
     blackboard_->set("pursuit_target_id", std::string{});
     blackboard_->set("pursuit_direction", std::string{});
@@ -418,9 +422,10 @@ private:
       return {};
     }
     const double tactical_range = tacticalDistance(6);
-    // Target 6 is a fixed building with a prescribed firing point at (17, 10).
+    // Target 6 is a fixed building with a prescribed firing point on the
+    // dataset-backed v2 map.
     // The generic pursuit node stops 4.1 m short of a moving target, therefore
-    // encode the fixed-point distance so its generated goal remains (17, 10).
+    // encode the fixed-point distance so pursuit stops at that firing point.
     const double pursuit_range = tactical_range + 4.1;
     std::ostringstream stream;
     stream << "6:" << health << ':' << pursuit_range << ':'
@@ -510,16 +515,22 @@ private:
     blackboard_->set("defense_buff", static_cast<double>(referee_.defence_buff) / 100.0);
     blackboard_->set("economy", static_cast<double>(referee_.economy));
     blackboard_->set("aggressive_patrol", referee_.aggressive_patrol);
-    blackboard_->set(
-      "conservative_patrol_points",
-      patrolPointsText(
-        referee_.conservative_patrol_points,
-        "5.0,5.0;9.0,5.0;9.0,9.0"));
-    blackboard_->set(
-      "aggressive_patrol_points",
-      patrolPointsText(
-        referee_.aggressive_patrol_points,
-        "12.0,3.0;14.0,7.5;12.3,11.7"));
+    const std::string conservative_patrol_points = patrolPointsText(
+      referee_.conservative_patrol_points,
+      "5.0,5.0;9.0,5.0;9.0,9.0");
+    const std::string aggressive_patrol_points = patrolPointsText(
+      referee_.aggressive_patrol_points,
+      "12.0,3.0;14.0,7.5;12.3,11.7");
+    if(
+      conservative_patrol_points != last_conservative_patrol_points_ ||
+      aggressive_patrol_points != last_aggressive_patrol_points_)
+    {
+      blackboard_->set("waypoint_index", 0);
+      last_conservative_patrol_points_ = conservative_patrol_points;
+      last_aggressive_patrol_points_ = aggressive_patrol_points;
+    }
+    blackboard_->set("conservative_patrol_points", conservative_patrol_points);
+    blackboard_->set("aggressive_patrol_points", aggressive_patrol_points);
     blackboard_->set("targets", observedTargets());
     blackboard_->set("persistent_targets", persistentTargets());
     blackboard_->set("health_decreased", health_decreased_);
@@ -542,6 +553,7 @@ private:
 
     blackboard_->set("goal_enabled", false);
     blackboard_->set("fire_command", false);
+    blackboard_->set("confirm_respawn", false);
     blackboard_->set("target_lock", false);
     blackboard_->set("gimbal_enabled", false);
     blackboard_->set("gimbal_rotate", true);
@@ -597,20 +609,8 @@ private:
     msg::DesicionSendData serial;
     serial.posture = static_cast<uint8_t>(std::clamp(
       blackboardValue<int>(blackboard_, "posture_command", 3), 1, 3));
-    serial.confirm_respawn = 0U;
-    if(referee_.hp_sentry == 0U)
-    {
-      if(!death_started_)
-      {
-        death_started_ = std::chrono::steady_clock::now();
-      }
-      serial.confirm_respawn =
-        std::chrono::steady_clock::now() - *death_started_ >= 5s ? 1U : 0U;
-    }
-    else
-    {
-      death_started_.reset();
-    }
+    serial.confirm_respawn =
+      blackboardValue<bool>(blackboard_, "confirm_respawn", false) ? 1U : 0U;
     const int gyro = blackboardValue<int>(blackboard_, "gyro_mode_command", 0);
     serial.spin_mode = referee_.game_period == 2U ?
       static_cast<uint8_t>(std::clamp(gyro, 0, 3)) : 0U;
@@ -710,6 +710,8 @@ private:
   BT::Blackboard::Ptr blackboard_;
   std::unique_ptr<BT::Tree> tree_;
   std::string tree_file_;
+  std::string last_conservative_patrol_points_;
+  std::string last_aggressive_patrol_points_;
 
   msg::ReceiveData referee_;
   msg::AutoaimToDecision autoaim_;
@@ -729,7 +731,6 @@ private:
   std::chrono::steady_clock::time_point last_target_seen_time_;
   std::optional<std::chrono::steady_clock::time_point> in_range_started_;
   std::optional<std::chrono::steady_clock::time_point> pursuit_started_;
-  std::optional<std::chrono::steady_clock::time_point> death_started_;
   std::string last_selected_target_;
   bool last_goal_enabled_{false};
   double last_goal_x_{0.0};

@@ -37,6 +37,7 @@ add_executable(decision_process_node
   behaviortree/cpp/bullet_nodes.cpp
   behaviortree/cpp/conservative_patrol_nodes.cpp
   behaviortree/cpp/patrol_nodes.cpp
+  behaviortree/cpp/respawn_nodes.cpp
   behaviortree/cpp/return_home_nodes.cpp
 )
 set_target_properties(decision_process_node PROPERTIES OUTPUT_NAME decision_process)

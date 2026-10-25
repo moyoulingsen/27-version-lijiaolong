@@ -186,6 +186,15 @@
       <input_port name="economy" type="double" default="0.0"/>
       <input_port name="economy_threshold" type="double" default="0.0"/>
     </Condition>
+    <Condition ID="RespawnActive">
+      <input_port name="health" type="double" default="0.0"/>
+      <input_port name="current_x" type="double" default="0.0"/>
+      <input_port name="current_y" type="double" default="0.0"/>
+      <input_port name="supply_x" type="double" default="2.10"/>
+      <input_port name="supply_y" type="double" default="1.30"/>
+      <input_port name="tolerance" type="double" default="0.25"/>
+      <input_port name="localization_valid" type="bool" default="false"/>
+    </Condition>
     <Action ID="SelectAttackTarget">
       <input_port name="attack_targets" type="std::string"/>
       <input_port name="low_health_threshold" type="double" default="50.0"/>
@@ -226,6 +235,11 @@
     <Action ID="SetGyroMode">
       <input_port name="mode" type="int" default="0"/>
       <output_port name="gyro_mode_command" type="int"/>
+    </Action>
+    <Action ID="WaitForRespawn">
+      <input_port name="health" type="double" default="0.0"/>
+      <input_port name="wait_seconds" type="double" default="5.0"/>
+      <output_port name="confirm_respawn" type="bool"/>
     </Action>
   </TreeNodesModel>
 </root>

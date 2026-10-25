@@ -1,0 +1,57 @@
+<?xml version="1.0"?>
+<root BTCPP_format="4">
+  <include path="tree_nodes_model.xml"/>
+  <include path="common_position.xml"/>
+  <include path="mechanism_policy.xml"/>
+
+  <BehaviorTree ID="RespawnRecovery">
+    <ReactiveSequence name="RespawnRecoverySequence">
+      <MatchStarted game_period="{game_period}"/>
+      <RespawnActive health="{health}"
+                     current_x="{current_x}"
+                     current_y="{current_y}"
+                     supply_x="{supply_x}"
+                     supply_y="{supply_y}"
+                     tolerance="{tolerance}"
+                     localization_valid="{localization_valid}"/>
+      <SubTree ID="MechanismPolicy"
+               posture="3"
+               gyro_mode="0"
+               gimbal_enabled="false"
+               gimbal_rotate="false"
+               posture_command="{posture_command}"
+               gyro_mode_command="{gyro_mode_command}"
+               gimbal_enabled_command="{gimbal_enabled}"
+               gimbal_rotate_command="{gimbal_rotate}"/>
+
+      <Sequence name="WaitForReviveThenReturnSupply">
+        <WaitForRespawn health="{health}"
+                        wait_seconds="{respawn_wait_seconds}"
+                        confirm_respawn="{confirm_respawn}"/>
+        <ReactiveFallback name="ReturnToSupplyAfterRespawn">
+          <Sequence name="AlreadyAtSupply">
+            <SubTree ID="PositionCheck"
+                     current_x="{current_x}"
+                     current_y="{current_y}"
+                     target_x="{supply_x}"
+                     target_y="{supply_y}"
+                     tolerance="{tolerance}"
+                     localization_valid="{localization_valid}"/>
+            <DisableGoal goal_enabled="{goal_enabled}"/>
+          </Sequence>
+          <SendGoalPose target_x="{supply_x}"
+                        target_y="{supply_y}"
+                        target_z="1.0"
+                        target_yaw="0.0"
+                        frame_id="map"
+                        goal_x="{goal_x}"
+                        goal_y="{goal_y}"
+                        goal_z="{goal_z}"
+                        goal_yaw="{goal_yaw}"
+                        goal_frame_id="{goal_frame_id}"
+                        goal_enabled="{goal_enabled}"/>
+        </ReactiveFallback>
+      </Sequence>
+    </ReactiveSequence>
+  </BehaviorTree>
+</root>

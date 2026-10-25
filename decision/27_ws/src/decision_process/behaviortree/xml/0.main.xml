@@ -184,6 +184,15 @@
       <input_port name="economy" type="double" default="0.0"/>
       <input_port name="economy_threshold" type="double" default="0.0"/>
     </Condition>
+    <Condition ID="RespawnActive">
+      <input_port name="health" type="double" default="0.0"/>
+      <input_port name="current_x" type="double" default="0.0"/>
+      <input_port name="current_y" type="double" default="0.0"/>
+      <input_port name="supply_x" type="double" default="2.10"/>
+      <input_port name="supply_y" type="double" default="1.30"/>
+      <input_port name="tolerance" type="double" default="0.25"/>
+      <input_port name="localization_valid" type="bool" default="false"/>
+    </Condition>
     <Action ID="SelectAttackTarget">
       <input_port name="attack_targets" type="std::string"/>
       <input_port name="low_health_threshold" type="double" default="50.0"/>
@@ -225,6 +234,11 @@
       <input_port name="mode" type="int" default="0"/>
       <output_port name="gyro_mode_command" type="int"/>
     </Action>
+    <Action ID="WaitForRespawn">
+      <input_port name="health" type="double" default="0.0"/>
+      <input_port name="wait_seconds" type="double" default="5.0"/>
+      <output_port name="confirm_respawn" type="bool"/>
+    </Action>
   </TreeNodesModel>
 
   <!--
@@ -242,6 +256,7 @@
   <include path="2.bullet.xml"/>
   <include path="3.health.xml"/>
   <include path="4.attack.xml"/>
+  <include path="6.respawn.xml"/>
   <include path="mechanism_policy.xml"/>
 
   <BehaviorTree ID="MainTree">
@@ -261,6 +276,29 @@
                goal_enabled="{goal_enabled}"
                posture_command="{posture_command}"
                gyro_mode_command="{gyro_mode_command}"/>
+
+      <!-- During a match, death preempts every combat/resource behavior. -->
+      <SubTree ID="RespawnRecovery"
+               game_period="{game_period}"
+               health="{health}"
+               current_x="{current_x}"
+               current_y="{current_y}"
+               localization_valid="{localization_valid}"
+               tolerance="{tolerance}"
+               supply_x="2.10"
+               supply_y="1.30"
+               respawn_wait_seconds="5.0"
+               confirm_respawn="{confirm_respawn}"
+               goal_x="{goal_x}"
+               goal_y="{goal_y}"
+               goal_z="{goal_z}"
+               goal_yaw="{goal_yaw}"
+               goal_frame_id="{goal_frame_id}"
+               goal_enabled="{goal_enabled}"
+               posture_command="{posture_command}"
+               gyro_mode_command="{gyro_mode_command}"
+               gimbal_enabled="{gimbal_enabled}"
+               gimbal_rotate="{gimbal_rotate}"/>
 
       <!-- MatchStarted is a gate, not a motion action. Before phase 2 this
            branch returns FAILURE and therefore emits no playing commands. -->
