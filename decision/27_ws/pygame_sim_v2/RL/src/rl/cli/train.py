@@ -61,6 +61,22 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Checkpoint file or previous run directory to continue from.",
     )
+    parser.add_argument(
+        "--warm-start",
+        type=Path,
+        help="Load Actor features from a checkpoint with a fresh Critic and optimizer.",
+    )
+    parser.add_argument(
+        "--reset-movement-head",
+        action="store_true",
+        help="Warm-start perception/shooting while relearning route selection.",
+    )
+    parser.add_argument(
+        "--reward-version",
+        type=int,
+        choices=(1, 2, 3),
+        help="Reward profile number. V1 remains the original guided reward.",
+    )
     return parser.parse_args()
 
 
@@ -93,14 +109,30 @@ def main() -> None:
     if args.rollout_steps is not None and args.rollout_steps <= 0:
         raise ValueError("rollout-steps must be positive")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if args.resume is not None and args.warm_start is not None:
+        raise ValueError("--resume and --warm-start are mutually exclusive")
+    if args.reset_movement_head and args.warm_start is None:
+        raise ValueError("--reset-movement-head requires --warm-start")
     resume_checkpoint = (
         resolve_resume_checkpoint(args.resume) if args.resume is not None else None
+    )
+    warm_start_checkpoint = (
+        resolve_resume_checkpoint(args.warm_start)
+        if args.warm_start is not None
+        else None
     )
     if resume_checkpoint is not None:
         install_legacy_checkpoint_aliases()
         payload = torch.load(resume_checkpoint, map_location="cpu", weights_only=False)
         checkpoint_metadata = payload["metadata"]
         assault = AssaultConfig(**checkpoint_metadata["assault"])
+        if (
+            args.reward_version is not None
+            and args.reward_version != assault.reward_version
+        ):
+            raise ValueError(
+                "--resume cannot change reward versions; use --warm-start instead"
+            )
         if args.curriculum_max_progress is not None:
             assault = replace(
                 assault,
@@ -131,19 +163,55 @@ def main() -> None:
         )
         run_name = args.run_name or f"{args.resume.name}_resume_{timestamp}"
     else:
+        reward_version = args.reward_version or 1
         assault = replace(
             AssaultConfig(),
             time_step=args.time_step,
             episode_seconds=args.episode_seconds,
             curriculum_enabled=args.curriculum,
+            reward_version=reward_version,
             curriculum_max_progress=(
                 args.curriculum_max_progress
                 if args.curriculum_max_progress is not None
-                else AssaultConfig().curriculum_max_progress
+                else (
+                    1.0
+                    if reward_version in (2, 3)
+                    else AssaultConfig().curriculum_max_progress
+                )
             ),
         )
-        network = NetworkConfig()
+        if warm_start_checkpoint is not None:
+            install_legacy_checkpoint_aliases()
+            warm_payload = torch.load(
+                warm_start_checkpoint,
+                map_location="cpu",
+                weights_only=False,
+            )
+            warm_metadata = warm_payload.get("metadata", {})
+            network = NetworkConfig(**warm_metadata.get("network", {}))
+        else:
+            network = NetworkConfig()
         ppo = PPOConfig()
+        if reward_version == 2:
+            ppo = replace(
+                ppo,
+                learning_rate=3e-5,
+                clip_ratio=0.10,
+                target_kl=0.01,
+                entropy_coefficient=0.02,
+                fire_entropy_coefficient=0.03,
+                continuous_entropy_coefficient=0.002,
+            )
+        elif reward_version == 3:
+            ppo = replace(
+                ppo,
+                learning_rate=3e-5,
+                clip_ratio=0.10,
+                target_kl=0.01,
+                entropy_coefficient=0.04,
+                fire_entropy_coefficient=0.02,
+                continuous_entropy_coefficient=0.003,
+            )
         training = replace(
             TrainingConfig(),
             duration_hours=args.duration_hours,
@@ -163,7 +231,7 @@ def main() -> None:
             checkpoint_minutes=args.checkpoint_minutes,
             log_seconds=args.log_seconds,
         )
-        run_name = args.run_name or f"sentry_assault_{timestamp}"
+        run_name = args.run_name or f"sentry_reward_v{reward_version}_{timestamp}"
     runner = run_gpu_training if args.backend == "gpu" else run_training
     runner(
         RL_ROOT / "artifacts" / "runs" / run_name,
@@ -172,6 +240,8 @@ def main() -> None:
         ppo=ppo,
         training=training,
         resume_checkpoint=resume_checkpoint,
+        warm_start_checkpoint=warm_start_checkpoint,
+        reset_movement_head=args.reset_movement_head,
     )
 
 

@@ -50,7 +50,7 @@ from rm2026_sim.task_state import (
 )
 
 from rl.config import AssaultConfig
-from .field import AssaultField
+from .field import AssaultField, TUNNEL_CURRICULUM_STARTS
 from .local_map import LOCAL_MAP_CHANNELS
 from .cpu_env import (
     CRITIC_OBSERVATION_SIZE,
@@ -136,6 +136,58 @@ class GpuSentryAssaultEnv:
         self.blocked = torch.as_tensor(
             blocked, dtype=torch.bool, device=self.device
         )
+        terrain_speed = np.ones_like(blocked, dtype=np.float32)
+        for row in range(grid.height):
+            for column in range(grid.width):
+                world_x, world_y = grid.cell_to_world((row, column))
+                terrain_speed[row, column] = self.field.terrain_speed_multiplier(
+                    world_x,
+                    world_y,
+                )
+        self.terrain_speed = torch.as_tensor(
+            terrain_speed,
+            dtype=torch.float32,
+            device=self.device,
+        )
+        if self.config.reward_version == 3:
+            tactical = self.field.tactical_fields(
+                minimum_fire_range=self.config.reward_v3.preferred_fire_min_range,
+                maximum_fire_range=self.config.reward_v3.preferred_fire_max_range,
+                minimum_clearance=self.config.reward_v3.preferred_fire_clearance,
+            )
+            self.outpost_attack_distance = torch.as_tensor(
+                tactical.outpost_distance,
+                dtype=torch.float32,
+                device=self.device,
+            )
+            self.base_attack_distance = torch.as_tensor(
+                tactical.base_distance,
+                dtype=torch.float32,
+                device=self.device,
+            )
+            self.wall_clearance = torch.as_tensor(
+                tactical.wall_clearance,
+                dtype=torch.float32,
+                device=self.device,
+            )
+        else:
+            self.outpost_attack_distance = None
+            self.base_attack_distance = None
+            self.wall_clearance = None
+        fly_slope_direction = np.zeros_like(blocked, dtype=np.int8)
+        for points in self.field.fly_slope_polygons:
+            centre_y = sum(point[1] for point in points) / len(points)
+            direction = 1 if centre_y < self.arena_height / 2.0 else -1
+            for row in range(grid.height):
+                for column in range(grid.width):
+                    world_x, world_y = grid.cell_to_world((row, column))
+                    if self.field._point_in_polygon(world_x, world_y, points):
+                        fly_slope_direction[row, column] = direction
+        self.fly_slope_direction = torch.as_tensor(
+            fly_slope_direction,
+            dtype=torch.int8,
+            device=self.device,
+        )
         self.move_directions = torch.tensor(
             MOVE_DIRECTIONS, dtype=torch.float32, device=self.device
         )
@@ -147,6 +199,11 @@ class GpuSentryAssaultEnv:
         )
         self.home_position = torch.tensor(
             RED_HOME, dtype=torch.float32, device=self.device
+        )
+        self.tunnel_curriculum_positions = torch.tensor(
+            TUNNEL_CURRICULUM_STARTS,
+            dtype=torch.float32,
+            device=self.device,
         )
         self.diagonal = math.hypot(self.arena_width, self.arena_height)
         self.hit_rolls = torch.tensor(
@@ -230,6 +287,7 @@ class GpuSentryAssaultEnv:
         self.base_bonus_paid = torch.zeros(n, dtype=torch.bool, device=d)
         self.shaping_target = torch.zeros(n, dtype=torch.long, device=d)
         self.best_target_distance = zeros()
+        self.previous_attack_distance = zeros()
         self.best_target_angle_error = zeros()
         self.aim_tracking_active = torch.zeros(n, dtype=torch.bool, device=d)
         self.distance_milestones_paid = torch.zeros(
@@ -259,6 +317,7 @@ class GpuSentryAssaultEnv:
             device=d,
         )
         self.exploration_reward_total = zeros()
+        self.seconds_since_damage = zeros()
         self.distance_reward_thresholds = torch.tensor(
             (12.0, 8.0, DETECTION_RANGE),
             dtype=torch.float32,
@@ -351,9 +410,35 @@ class GpuSentryAssaultEnv:
         if not self.config.curriculum_enabled:
             return
         bootstrap = 1.0 - self.curriculum_progress
-        near_outpost_probability = 0.35 * bootstrap
-        random_field_probability = 0.30 * bootstrap
-        near_base_probability = 0.25 * bootstrap
+        if self.config.reward_version == 3:
+            reward = self.config.reward_v3
+            near_outpost_probability = reward.curriculum_floor_near_outpost + (
+                0.20 - reward.curriculum_floor_near_outpost
+            ) * bootstrap
+            random_field_probability = reward.curriculum_floor_random_field + (
+                0.15 - reward.curriculum_floor_random_field
+            ) * bootstrap
+            near_base_probability = reward.curriculum_floor_near_base + (
+                0.10 - reward.curriculum_floor_near_base
+            ) * bootstrap
+            upper_tunnel_probability = reward.curriculum_floor_upper_tunnel + (
+                0.20 - reward.curriculum_floor_upper_tunnel
+            ) * bootstrap
+            vertical_tunnel_probability = reward.curriculum_floor_vertical_tunnel + (
+                0.15 - reward.curriculum_floor_vertical_tunnel
+            ) * bootstrap
+        elif self.config.reward_version == 2:
+            near_outpost_probability = 0.20 * bootstrap
+            random_field_probability = 0.15 * bootstrap
+            near_base_probability = 0.10 * bootstrap
+            upper_tunnel_probability = 0.20 * bootstrap
+            vertical_tunnel_probability = 0.15 * bootstrap
+        else:
+            near_outpost_probability = 0.35 * bootstrap
+            random_field_probability = 0.30 * bootstrap
+            near_base_probability = 0.25 * bootstrap
+            upper_tunnel_probability = 0.0
+            vertical_tunnel_probability = 0.0
         sample = torch.rand(self.num_envs, device=self.device)
         selected_mode = torch.zeros(
             self.num_envs, dtype=torch.long, device=self.device
@@ -372,10 +457,36 @@ class GpuSentryAssaultEnv:
                 + near_base_probability
             )
         ] = 3
+        selected_mode[
+            (sample
+             >= near_outpost_probability
+             + random_field_probability
+             + near_base_probability)
+            & (sample
+               < near_outpost_probability
+               + random_field_probability
+               + near_base_probability
+               + upper_tunnel_probability)
+        ] = 4
+        selected_mode[
+            (sample
+             >= near_outpost_probability
+             + random_field_probability
+             + near_base_probability
+             + upper_tunnel_probability)
+            & (sample
+               < near_outpost_probability
+               + random_field_probability
+               + near_base_probability
+               + upper_tunnel_probability
+               + vertical_tunnel_probability)
+        ] = 5
         self.curriculum_mode[mask] = selected_mode[mask]
         near_outpost = mask & (self.curriculum_mode == 1)
         random_field = mask & (self.curriculum_mode == 2)
         near_base = mask & (self.curriculum_mode == 3)
+        upper_tunnel = mask & (self.curriculum_mode == 4)
+        vertical_tunnel = mask & (self.curriculum_mode == 5)
         self._sample_free_positions(
             near_outpost,
             center=self.outpost_position,
@@ -399,15 +510,33 @@ class GpuSentryAssaultEnv:
             minimum_radius=2.0,
             maximum_radius=3.7,
         )
+        self._sample_free_positions(
+            upper_tunnel,
+            center=self.tunnel_curriculum_positions[0],
+            minimum_radius=0.0,
+            maximum_radius=0.45,
+        )
+        self._sample_free_positions(
+            vertical_tunnel,
+            center=self.tunnel_curriculum_positions[1],
+            minimum_radius=0.0,
+            maximum_radius=0.45,
+        )
         non_home = mask & (self.curriculum_mode != 0)
         random_angle = (
             torch.rand(self.num_envs, device=self.device) * math.tau - math.pi
         )
         self.spin_angle[non_home] = random_angle[non_home]
         self.turret_angle[non_home] = random_angle[non_home]
-        self.outpost_hp[near_base] = 0.0
-        self.lowest_outpost_hp[near_base] = 0.0
-        self.outpost_bonus_paid[near_base] = True
+        # The vertical tunnel is a base-assault route that only becomes useful
+        # after the outpost is gone.  Keep the upper tunnel in the outpost
+        # phase, but initialise both near-base and vertical-tunnel curricula in
+        # the base phase so their gradients do not conflict with opening-route
+        # learning.
+        base_phase = near_base | vertical_tunnel
+        self.outpost_hp[base_phase] = 0.0
+        self.lowest_outpost_hp[base_phase] = 0.0
+        self.outpost_bonus_paid[base_phase] = True
 
     def reset(self, mask: Tensor | None = None) -> TensorAssaultObservation:
         if mask is None:
@@ -434,6 +563,7 @@ class GpuSentryAssaultEnv:
             self.power_cut,
             self.posture_cooldown,
             self.stuck_seconds,
+            self.seconds_since_damage,
         ):
             self._assign(value, 0.0, mask)
         self._assign(self.sentry_hp, 400.0, mask)
@@ -482,6 +612,8 @@ class GpuSentryAssaultEnv:
         )
         self.shaping_target[mask] = target_id[mask]
         self.best_target_distance[mask] = distance[mask]
+        attack_distance = self._attack_route_distance(target_id)
+        self.previous_attack_distance[mask] = attack_distance[mask]
         self.best_target_angle_error[mask] = angle[mask]
         self.distance_milestones_paid[mask] = False
         self.aim_milestones_paid[mask] = False
@@ -522,6 +654,27 @@ class GpuSentryAssaultEnv:
             torch.full_like(self.shaping_target, 7),
         )
         return target_id, target_x, target_y
+
+    def _grid_values_at(self, values: Tensor) -> Tensor:
+        column = torch.clamp(
+            (self.x / self.map_resolution).to(torch.long),
+            0,
+            self.grid_width - 1,
+        )
+        row = torch.clamp(
+            ((self.arena_height - self.y) / self.map_resolution).to(torch.long),
+            0,
+            self.grid_height - 1,
+        )
+        return values[row, column]
+
+    def _attack_route_distance(self, target_id: Tensor) -> Tensor:
+        if self.outpost_attack_distance is None or self.base_attack_distance is None:
+            _, target_x, target_y = self._active_target()
+            return torch.hypot(target_x - self.x, target_y - self.y)
+        outpost = self._grid_values_at(self.outpost_attack_distance)
+        base = self._grid_values_at(self.base_attack_distance)
+        return torch.where(target_id == 6, outpost, base)
 
     def _pid_step(
         self,
@@ -730,7 +883,7 @@ class GpuSentryAssaultEnv:
         best_y = torch.gather(candidates_y, 1, choice).squeeze(1)
         return torch.where(reached, direct_x, best_x), torch.where(reached, direct_y, best_y)
 
-    def _apply_motion(self, action: TensorSentryAction) -> None:
+    def _apply_motion(self, action: TensorSentryAction) -> Tensor:
         direction = self.move_directions[action.move_direction.long()]
         move_x = direction[:, 0]
         move_y = direction[:, 1]
@@ -752,9 +905,46 @@ class GpuSentryAssaultEnv:
         )
         start_x = self.x
         start_y = self.y
-        distance = self.config.movement_speed * self.config.time_step
+        terrain_column = torch.clamp(
+            (start_x / self.map_resolution).to(torch.long),
+            0,
+            self.grid_width - 1,
+        )
+        terrain_row = torch.clamp(
+            ((self.arena_height - start_y) / self.map_resolution).to(torch.long),
+            0,
+            self.grid_height - 1,
+        )
+        distance = (
+            self.config.movement_speed
+            * self.config.time_step
+            * self.terrain_speed[terrain_row, terrain_column]
+        )
         requested_x = torch.clamp(start_x + move_x * distance, 0.0, self.arena_width)
         requested_y = torch.clamp(start_y + move_y * distance, 0.0, self.arena_height)
+        requested_column = torch.clamp(
+            (requested_x / self.map_resolution).to(torch.long),
+            0,
+            self.grid_width - 1,
+        )
+        requested_row = torch.clamp(
+            ((self.arena_height - requested_y) / self.map_resolution).to(torch.long),
+            0,
+            self.grid_height - 1,
+        )
+        start_slope = self.fly_slope_direction[terrain_row, terrain_column]
+        requested_slope = self.fly_slope_direction[requested_row, requested_column]
+        slope_direction = torch.where(
+            requested_slope != 0,
+            requested_slope,
+            start_slope,
+        )
+        forbidden_slope = (
+            ((slope_direction > 0) & (requested_x - start_x <= 1e-9))
+            | ((slope_direction < 0) & (requested_x - start_x >= -1e-9))
+        )
+        requested_x = torch.where(forbidden_slope, start_x, requested_x)
+        requested_y = torch.where(forbidden_slope, start_y, requested_y)
         resolved_x, resolved_y = self._move_with_collision(
             start_x, start_y, requested_x, requested_y
         )
@@ -775,6 +965,7 @@ class GpuSentryAssaultEnv:
             & (actual > 0.05)
         )
         self.last_collision = collision
+        return actual
 
     def _posture_mode_masks(self) -> tuple[Tensor, Tensor]:
         index = self.active_posture - 1
@@ -965,7 +1156,7 @@ class GpuSentryAssaultEnv:
         )
         self.posture_reinforced = self.posture_reinforced & ~expired
 
-    def _shaping_reward(
+    def _shaping_reward_v1(
         self,
         *,
         fire_requested: Tensor,
@@ -1183,13 +1374,317 @@ class GpuSentryAssaultEnv:
         )
         return shaping, distance
 
+    def _shaping_reward_v2(
+        self,
+        *,
+        permanent_lock_triggered: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        reward = self.config.reward_v2
+        target_id, target_x, target_y = self._active_target()
+        delta_x = target_x - self.x
+        delta_y = target_y - self.y
+        distance = torch.hypot(delta_x, delta_y)
+        angle_error = torch.abs(
+            _normalize_angle(torch.atan2(delta_y, delta_x) - self.turret_angle)
+        )
+        changed = target_id != self.shaping_target
+        distance_improvement = torch.clamp_min(
+            self.best_target_distance - distance,
+            0.0,
+        )
+        distance_score = torch.where(
+            changed,
+            torch.zeros_like(distance),
+            distance_improvement * reward.distance_progress_scale,
+        )
+        self.best_target_distance = torch.where(
+            changed,
+            distance,
+            torch.minimum(self.best_target_distance, distance),
+        )
+        in_detection_range = distance <= DETECTION_RANGE
+        start_aim_tracking = in_detection_range & (~self.aim_tracking_active | changed)
+        continue_aim_tracking = in_detection_range & self.aim_tracking_active & ~changed
+        aim_improvement = torch.clamp_min(
+            self.best_target_angle_error - angle_error,
+            0.0,
+        )
+        aim_score = torch.where(
+            continue_aim_tracking,
+            aim_improvement * reward.aim_progress_scale,
+            torch.zeros_like(distance),
+        )
+        self.best_target_angle_error = torch.where(
+            start_aim_tracking,
+            angle_error,
+            torch.where(
+                continue_aim_tracking,
+                torch.minimum(self.best_target_angle_error, angle_error),
+                self.best_target_angle_error,
+            ),
+        )
+        self.aim_tracking_active = in_detection_range & ~changed
+
+        reward_column = torch.clamp(
+            (self.x / self.config.exploration_cell_size).to(torch.long),
+            0,
+            self.reward_grid_width - 1,
+        )
+        reward_row = torch.clamp(
+            (self.y / self.config.exploration_cell_size).to(torch.long),
+            0,
+            self.reward_grid_height - 1,
+        )
+        env_index = torch.arange(self.num_envs, device=self.device)
+        is_new_cell = ~self.reward_visited[env_index, reward_row, reward_column]
+        reward_room = torch.clamp_min(
+            reward.exploration_reward_cap - self.exploration_reward_total,
+            0.0,
+        )
+        exploration_score = torch.where(
+            is_new_cell & (reward_room > 0.0),
+            torch.minimum(
+                torch.full_like(distance, reward.exploration_cell_bonus),
+                reward_room,
+            ),
+            torch.zeros_like(distance),
+        )
+        self.reward_visited[env_index, reward_row, reward_column] = True
+        self.exploration_reward_total += exploration_score
+        self.shaping_target = target_id
+        collision_score = -self.last_collision.to(torch.float32) * reward.collision_penalty
+        stuck_multiplier = torch.clamp(
+            self.stuck_seconds / reward.stuck_penalty_after_seconds,
+            max=3.0,
+        )
+        stuck_score = -reward.stuck_penalty * stuck_multiplier
+        time_score = torch.full_like(
+            distance,
+            -reward.time_penalty_per_second * self.config.time_step,
+        )
+        permanent_lock_score = -(
+            permanent_lock_triggered.to(torch.float32)
+            * reward.permanent_heat_lock_penalty
+        )
+        shaping = (
+            distance_score
+            + aim_score
+            + exploration_score
+            + collision_score
+            + stuck_score
+            + time_score
+            + permanent_lock_score
+        )
+        return shaping, distance
+
+    def _shaping_reward_v3(
+        self,
+        *,
+        fire_requested: Tensor,
+        valid_fire: Tensor,
+        fire_target_id: Tensor,
+        permanent_lock_triggered: Tensor,
+        movement_distance: Tensor,
+        damage_hp: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        reward = self.config.reward_v3
+        target_id, target_x, target_y = self._active_target()
+        delta_x = target_x - self.x
+        delta_y = target_y - self.y
+        direct_distance = torch.hypot(delta_x, delta_y)
+        angle_error = torch.abs(
+            _normalize_angle(torch.atan2(delta_y, delta_x) - self.turret_angle)
+        )
+        route_distance = self._attack_route_distance(target_id)
+        changed = target_id != self.shaping_target
+        route_progress_score = torch.where(
+            changed,
+            torch.zeros_like(route_distance),
+            (self.previous_attack_distance - route_distance)
+            * reward.route_progress_scale,
+        )
+        self.previous_attack_distance = route_distance
+        movement_score = -movement_distance * reward.movement_cost_per_meter
+
+        in_detection_range = direct_distance <= DETECTION_RANGE
+        start_aim_tracking = in_detection_range & (
+            ~self.aim_tracking_active | changed
+        )
+        continue_aim_tracking = (
+            in_detection_range & self.aim_tracking_active & ~changed
+        )
+        aim_improvement = torch.clamp_min(
+            self.best_target_angle_error - angle_error,
+            0.0,
+        )
+        aim_score = torch.where(
+            continue_aim_tracking,
+            aim_improvement * reward.aim_progress_scale,
+            torch.zeros_like(direct_distance),
+        )
+        self.best_target_angle_error = torch.where(
+            start_aim_tracking,
+            angle_error,
+            torch.where(
+                continue_aim_tracking,
+                torch.minimum(self.best_target_angle_error, angle_error),
+                self.best_target_angle_error,
+            ),
+        )
+        self.aim_tracking_active = in_detection_range & ~changed
+
+        reward_column = torch.clamp(
+            (self.x / self.config.exploration_cell_size).to(torch.long),
+            0,
+            self.reward_grid_width - 1,
+        )
+        reward_row = torch.clamp(
+            (self.y / self.config.exploration_cell_size).to(torch.long),
+            0,
+            self.reward_grid_height - 1,
+        )
+        env_index = torch.arange(self.num_envs, device=self.device)
+        is_new_cell = ~self.reward_visited[env_index, reward_row, reward_column]
+        reward_room = torch.clamp_min(
+            reward.exploration_reward_cap - self.exploration_reward_total,
+            0.0,
+        )
+        exploration_score = torch.where(
+            is_new_cell & (reward_room > 0.0),
+            torch.minimum(
+                torch.full_like(direct_distance, reward.exploration_cell_bonus),
+                reward_room,
+            ),
+            torch.zeros_like(direct_distance),
+        )
+        self.reward_visited[env_index, reward_row, reward_column] = True
+        self.exploration_reward_total += exploration_score
+
+        if self.wall_clearance is None:
+            clearance = torch.full_like(direct_distance, math.inf)
+        else:
+            clearance = self._grid_values_at(self.wall_clearance)
+        preferred_position = (
+            (direct_distance >= reward.preferred_fire_min_range)
+            & (direct_distance <= reward.preferred_fire_max_range)
+            & (clearance >= reward.preferred_fire_clearance)
+        )
+        fire_matches_target = fire_target_id == target_id
+        open_fire_score = (
+            valid_fire
+            & fire_matches_target
+            & preferred_position
+        ).to(torch.float32) * (
+            reward.open_fire_bonus_per_second * self.config.time_step
+        )
+        clearance_deficit = torch.clamp_min(
+            reward.preferred_fire_clearance - clearance,
+            0.0,
+        ) / max(reward.preferred_fire_clearance, 1e-6)
+        wall_score = torch.where(
+            direct_distance <= WEAPON_RANGE,
+            -reward.wall_proximity_penalty_per_second
+            * self.config.time_step
+            * clearance_deficit,
+            torch.zeros_like(direct_distance),
+        )
+        invalid_fire_score = -(
+            (fire_requested & ~valid_fire).to(torch.float32)
+            * reward.invalid_fire_penalty
+        )
+        self.seconds_since_damage = torch.where(
+            damage_hp > 0.0,
+            torch.zeros_like(self.seconds_since_damage),
+            self.seconds_since_damage + self.config.time_step,
+        )
+        no_damage_multiplier = torch.clamp(
+            (
+                self.seconds_since_damage - reward.no_damage_grace_seconds
+            ) / reward.no_damage_grace_seconds,
+            min=0.0,
+            max=3.0,
+        )
+        no_damage_score = -(
+            reward.no_damage_penalty_per_second
+            * self.config.time_step
+            * no_damage_multiplier
+        )
+        collision_score = -(
+            self.last_collision.to(torch.float32) * reward.collision_penalty
+        )
+        stuck_multiplier = torch.clamp(
+            self.stuck_seconds / reward.stuck_penalty_after_seconds,
+            max=3.0,
+        )
+        stuck_score = -reward.stuck_penalty * stuck_multiplier
+        time_score = torch.full_like(
+            direct_distance,
+            -reward.time_penalty_per_second * self.config.time_step,
+        )
+        permanent_lock_score = -(
+            permanent_lock_triggered.to(torch.float32)
+            * reward.permanent_heat_lock_penalty
+        )
+        self.shaping_target = target_id
+        shaping = (
+            route_progress_score
+            + movement_score
+            + aim_score
+            + exploration_score
+            + open_fire_score
+            + wall_score
+            + invalid_fire_score
+            + no_damage_score
+            + collision_score
+            + stuck_score
+            + time_score
+            + permanent_lock_score
+        )
+        return shaping, direct_distance
+
+    def _shaping_reward(
+        self,
+        *,
+        fire_requested: Tensor,
+        fire_fired: Tensor,
+        fire_visible: Tensor,
+        fire_in_range: Tensor,
+        valid_fire: Tensor,
+        fire_target_id: Tensor,
+        permanent_lock_triggered: Tensor,
+        movement_distance: Tensor,
+        damage_hp: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        if self.config.reward_version == 3:
+            return self._shaping_reward_v3(
+                fire_requested=fire_requested,
+                valid_fire=valid_fire,
+                fire_target_id=fire_target_id,
+                permanent_lock_triggered=permanent_lock_triggered,
+                movement_distance=movement_distance,
+                damage_hp=damage_hp,
+            )
+        if self.config.reward_version == 2:
+            return self._shaping_reward_v2(
+                permanent_lock_triggered=permanent_lock_triggered,
+            )
+        return self._shaping_reward_v1(
+            fire_requested=fire_requested,
+            fire_fired=fire_fired,
+            fire_visible=fire_visible,
+            fire_in_range=fire_in_range,
+            valid_fire=valid_fire,
+            fire_target_id=fire_target_id,
+            permanent_lock_triggered=permanent_lock_triggered,
+        )
+
     def step(self, action: TensorSentryAction) -> TensorAssaultStep:
         outpost_before = self.outpost_hp.clone()
         base_before = self.base_hp + self.base_shield
         reward_remaining = torch.clamp_min(
             self.remaining_time - self.config.time_step, 0.0
         )
-        self._apply_motion(action)
+        movement_distance = self._apply_motion(action)
         self._toggle_reinforcement(action.reinforce)
         heat_permanent_before = self.heat_permanent.clone()
         (
@@ -1215,12 +1710,22 @@ class GpuSentryAssaultEnv:
         base_after = self.base_hp + self.base_shield
         new_low_outpost = torch.minimum(self.lowest_outpost_hp, outpost_after)
         new_low_base = torch.minimum(self.lowest_base_durability, base_after)
-        outpost_damage = (
-            self.lowest_outpost_hp - new_low_outpost
-        ) * self.config.structure_damage_scale
-        base_damage = (
-            self.lowest_base_durability - new_low_base
-        ) * self.config.structure_damage_scale
+        efficiency_reward = (
+            self.config.reward_v2
+            if self.config.reward_version == 2
+            else self.config.reward_v3
+            if self.config.reward_version == 3
+            else None
+        )
+        damage_scale = (
+            efficiency_reward.structure_damage_scale
+            if efficiency_reward is not None
+            else self.config.structure_damage_scale
+        )
+        outpost_damage_hp = self.lowest_outpost_hp - new_low_outpost
+        base_damage_hp = self.lowest_base_durability - new_low_base
+        outpost_damage = outpost_damage_hp * damage_scale
+        base_damage = base_damage_hp * damage_scale
         self.lowest_outpost_hp = new_low_outpost
         self.lowest_base_durability = new_low_base
         outpost_destroyed = (
@@ -1229,23 +1734,57 @@ class GpuSentryAssaultEnv:
         base_destroyed = (
             ~self.base_bonus_paid & (base_before > 0.0) & (base_after <= 0.0)
         )
-        outpost_time = outpost_destroyed.to(torch.float32) * reward_remaining * self.config.outpost_time_multiplier
-        base_time = base_destroyed.to(torch.float32) * reward_remaining * self.config.base_time_multiplier
+        outpost_time_multiplier = (
+            efficiency_reward.outpost_time_multiplier
+            if efficiency_reward is not None
+            else self.config.outpost_time_multiplier
+        )
+        base_time_multiplier = (
+            efficiency_reward.base_time_multiplier
+            if efficiency_reward is not None
+            else self.config.base_time_multiplier
+        )
+        outpost_time = outpost_destroyed.to(torch.float32) * reward_remaining * outpost_time_multiplier
+        base_time = base_destroyed.to(torch.float32) * reward_remaining * base_time_multiplier
         self.outpost_bonus_paid = self.outpost_bonus_paid | outpost_destroyed
         self.base_bonus_paid = self.base_bonus_paid | base_destroyed
-        outpost_destroy_score = (
-            outpost_destroyed.to(torch.float32)
-            * self.config.outpost_destroy_bonus
-        )
-        base_destroy_score = (
-            base_destroyed.to(torch.float32) * self.config.base_destroy_bonus
-        )
+        if efficiency_reward is not None:
+            outpost_destroy_score = torch.zeros_like(reward_remaining)
+            base_destroy_score = torch.zeros_like(reward_remaining)
+        else:
+            outpost_destroy_score = (
+                outpost_destroyed.to(torch.float32)
+                * self.config.outpost_destroy_bonus
+            )
+            base_destroy_score = (
+                base_destroyed.to(torch.float32) * self.config.base_destroy_bonus
+            )
         hit_target_index = torch.clamp(fire_target_id - 6, min=0, max=1)
         env_index = torch.arange(self.num_envs, device=self.device)
         first_hit = hit & ~self.hit_targets_paid[env_index, hit_target_index]
-        first_hit_score = (
-            first_hit.to(torch.float32) * self.config.first_hit_bonus
-        )
+        if self.config.reward_version == 3:
+            first_hit_multiplier = torch.where(
+                fire_target_id == 6,
+                torch.full_like(
+                    reward_remaining,
+                    self.config.reward_v3.outpost_first_hit_time_multiplier,
+                ),
+                torch.full_like(
+                    reward_remaining,
+                    self.config.reward_v3.base_first_hit_time_multiplier,
+                ),
+            )
+            first_hit_score = (
+                first_hit.to(torch.float32)
+                * reward_remaining
+                * first_hit_multiplier
+            )
+        else:
+            first_hit_score = (
+                torch.zeros_like(reward_remaining)
+                if self.config.reward_version == 2
+                else first_hit.to(torch.float32) * self.config.first_hit_bonus
+            )
         self.hit_targets_paid[env_index[first_hit], hit_target_index[first_hit]] = True
         objective = (
             outpost_damage
@@ -1264,6 +1803,8 @@ class GpuSentryAssaultEnv:
             valid_fire=valid_fire,
             fire_target_id=fire_target_id,
             permanent_lock_triggered=permanent_lock_triggered,
+            movement_distance=movement_distance,
+            damage_hp=outpost_damage_hp + base_damage_hp,
         )
         raw = objective + shaping
         terminated = base_after <= 0.0

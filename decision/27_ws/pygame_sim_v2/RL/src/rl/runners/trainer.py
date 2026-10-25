@@ -16,7 +16,7 @@ from rl.algorithms.ppo import RecurrentPPO, RecurrentRollout
 from rl.config import AssaultConfig, NetworkConfig, PPOConfig, TrainingConfig
 from rl.envs.sentry_assault import VectorSentryAssaultEnv
 from rl.replay import ReplayRecorder
-from .checkpoint import load_checkpoint, save_checkpoint
+from .checkpoint import load_checkpoint, load_warm_start, save_checkpoint
 from .metrics import append_jsonl, write_json
 
 
@@ -34,9 +34,13 @@ def run_training(
     ppo: PPOConfig,
     training: TrainingConfig,
     resume_checkpoint: Path | None = None,
+    warm_start_checkpoint: Path | None = None,
+    reset_movement_head: bool = False,
 ) -> dict[str, object]:
     if run_dir.exists():
         raise FileExistsError(run_dir)
+    if resume_checkpoint is not None and warm_start_checkpoint is not None:
+        raise ValueError("resume and warm-start checkpoints are mutually exclusive")
     checkpoint_dir = run_dir / "checkpoints"
     replay_dir = run_dir / "replays"
     checkpoint_dir.mkdir(parents=True)
@@ -79,6 +83,12 @@ def run_training(
         if resume_checkpoint is not None
         else None
     )
+    if warm_start_checkpoint is not None:
+        load_warm_start(
+            warm_start_checkpoint,
+            learner,
+            reset_movement_head=reset_movement_head,
+        )
     resume_global_step = int(resume_payload.get("global_step", 0)) if resume_payload else 0
     resume_episodes = int(resume_payload.get("episode", 0)) if resume_payload else 0
     resume_updates = int(resume_payload.get("update_round", 0)) if resume_payload else 0
@@ -105,22 +115,13 @@ def run_training(
         "ppo": asdict(ppo),
         "training": asdict(training),
         "resumed_from": str(resume_checkpoint) if resume_checkpoint else None,
+        "warm_started_from": (
+            str(warm_start_checkpoint) if warm_start_checkpoint else None
+        ),
+        "reset_movement_head": reset_movement_head,
         "resume_global_step": resume_global_step,
         "resume_episode": resume_episodes,
-        "reward": {
-            "distance_progress": "(previous_distance - distance) * 0.5",
-            "aim_progress": "(previous_angle_error - angle_error) * 0.2",
-            "first_range": 2.0,
-            "first_line_of_sight": 2.0,
-            "collision": -0.02,
-            "stuck_after_one_second": -0.05,
-            "time_per_second": -0.01,
-            "new_outpost_damage": 1.0,
-            "new_base_damage": 1.0,
-            "outpost_destroyed": "remaining_time * 10",
-            "base_destroyed": "remaining_time * 20",
-            "training_scale": assault.reward_scale,
-        },
+        "reward_profile": f"v{assault.reward_version}",
     }
     write_json(run_dir / "metadata.json", metadata)
 
@@ -321,6 +322,9 @@ def run_training(
         "elapsed_seconds": elapsed,
         "cumulative_elapsed_seconds": previous_elapsed + elapsed,
         "resumed_from": str(resume_checkpoint) if resume_checkpoint else None,
+        "warm_started_from": (
+            str(warm_start_checkpoint) if warm_start_checkpoint else None
+        ),
         "max_env_steps": training.max_env_steps,
         "stopped_by_signal": stop_requested,
         "latest_update": asdict(latest_stats) if latest_stats is not None else None,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
+from rl.config import AssaultConfig
 from rl.envs.sentry_assault import (
     GpuSentryAssaultEnv,
     SentryAction,
@@ -50,3 +51,52 @@ def test_valid_hit_reward_matches_cpu_reference() -> None:
         float(gpu_step.objective_score.item()), abs=1e-3
     )
 
+
+def test_reward_v2_valid_hit_matches_cpu_reference() -> None:
+    config = AssaultConfig(reward_version=2)
+    cpu = SentryAssaultEnv(config)
+    cpu.reset(seed=2026)
+    gpu = GpuSentryAssaultEnv(1, config, device="cuda")
+    x = BLUE_OUTPOST[0] - 3.0
+    y = BLUE_OUTPOST[1]
+    cpu.sentry.x = x
+    cpu.sentry.y = y
+    cpu.sentry.turret_angle = 0.0
+    gpu.x.fill_(x)
+    gpu.y.fill_(y)
+    gpu.turret_angle.zero_()
+    action = SentryAction(0, 0, 0, 1, 0.0, 0.0)
+    cpu_step = cpu.step(action)
+    gpu_step = gpu.step(_tensor_action(action))
+    assert cpu_step.raw_reward == pytest.approx(
+        float(gpu_step.raw_reward.item()), abs=1e-3
+    )
+    assert cpu_step.info["objective_score"] == pytest.approx(
+        float(gpu_step.objective_score.item()), abs=1e-3
+    )
+
+
+def test_reward_v3_valid_hit_matches_cpu_reference() -> None:
+    config = AssaultConfig(reward_version=3)
+    cpu = SentryAssaultEnv(config)
+    cpu.reset(seed=2026)
+    gpu = GpuSentryAssaultEnv(1, config, device="cuda")
+    x = BLUE_OUTPOST[0] - 3.0
+    y = BLUE_OUTPOST[1]
+    cpu.sentry.x = x
+    cpu.sentry.y = y
+    cpu.sentry.turret_angle = 0.0
+    cpu._previous_attack_distance = cpu._attack_route_distance(6)
+    gpu.x.fill_(x)
+    gpu.y.fill_(y)
+    gpu.turret_angle.zero_()
+    gpu.previous_attack_distance.copy_(gpu._attack_route_distance(gpu.shaping_target))
+    action = SentryAction(0, 0, 0, 1, 0.0, 0.0)
+    cpu_step = cpu.step(action)
+    gpu_step = gpu.step(_tensor_action(action))
+    assert cpu_step.raw_reward == pytest.approx(
+        float(gpu_step.raw_reward.item()), abs=1e-3
+    )
+    assert cpu_step.info["objective_score"] == pytest.approx(
+        float(gpu_step.objective_score.item()), abs=1e-3
+    )

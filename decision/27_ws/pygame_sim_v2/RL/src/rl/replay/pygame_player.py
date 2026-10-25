@@ -3,11 +3,71 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from pathlib import Path
 
 from rm2026_sim.app import SimulatorApp
 
 from .pygame_bridge import iter_replay
+
+
+SEEK_HOLD_DELAY_SECONDS = 0.28
+SEEK_INITIAL_MULTIPLIER = 8.0
+SEEK_MAX_MULTIPLIER = 32.0
+SEEK_ACCELERATION_SECONDS = 1.0
+
+
+@dataclass(slots=True)
+class HoldSeekController:
+    """Turn a short +/- press into speed control and a hold into seeking."""
+
+    direction: int = 0
+    held_seconds: float = 0.0
+    frame_accumulator: float = 0.0
+    activated: bool = False
+
+    def press(self, direction: int) -> None:
+        if direction not in (-1, 1):
+            raise ValueError("seek direction must be -1 or 1")
+        if self.direction == direction:
+            return
+        self.direction = direction
+        self.held_seconds = 0.0
+        self.frame_accumulator = 0.0
+        self.activated = False
+
+    def release(self, direction: int) -> bool:
+        if self.direction != direction:
+            return False
+        was_activated = self.activated
+        self.direction = 0
+        self.held_seconds = 0.0
+        self.frame_accumulator = 0.0
+        self.activated = False
+        return was_activated
+
+    def update(self, elapsed: float, frames_per_second: float) -> int:
+        if self.direction == 0 or elapsed <= 0.0:
+            return 0
+        previous_held = self.held_seconds
+        self.held_seconds += elapsed
+        active_elapsed = max(0.0, self.held_seconds - SEEK_HOLD_DELAY_SECONDS)
+        previous_active = max(0.0, previous_held - SEEK_HOLD_DELAY_SECONDS)
+        delta_active = active_elapsed - previous_active
+        if delta_active <= 0.0:
+            return 0
+        self.activated = True
+        acceleration = min(
+            1.0,
+            active_elapsed / SEEK_ACCELERATION_SECONDS,
+        )
+        multiplier = SEEK_INITIAL_MULTIPLIER + (
+            SEEK_MAX_MULTIPLIER - SEEK_INITIAL_MULTIPLIER
+        ) * acceleration
+        self.frame_accumulator += delta_active * frames_per_second * multiplier
+        frame_delta = int(self.frame_accumulator)
+        self.frame_accumulator -= frame_delta
+        return self.direction * frame_delta
 
 
 def load_frames(path: Path) -> list[dict[str, object]]:
@@ -57,10 +117,14 @@ def run_replay(
     except ModuleNotFoundError as error:
         raise SystemExit("Pygame is not installed in .venv-rl") from error
     app = SimulatorApp(pygame)
+    # The RL trajectory viewer uses the live SimulatorApp renderer without a
+    # DatasetReplay instance.  Keep its panels interactive but read-only.
+    app.rl_replay_mode = True
     app.pg.display.set_caption("RMUC 2026 | RL单哨兵训练回放")
     index = 0
     speed = 1.0
     paused = False
+    hold_seek = HoldSeekController()
     rendered = 0
     accumulator = 0.0
     running = True
@@ -84,9 +148,34 @@ def run_replay(
                     elif event.key == app.pg.K_END:
                         index = len(frames) - 1
                     elif event.key in (app.pg.K_EQUALS, app.pg.K_PLUS, app.pg.K_KP_PLUS):
-                        speed = min(16.0, speed * 2.0)
+                        hold_seek.press(1)
                     elif event.key in (app.pg.K_MINUS, app.pg.K_KP_MINUS):
-                        speed = max(0.25, speed / 2.0)
+                        hold_seek.press(-1)
+                elif event.type == app.pg.KEYUP:
+                    if event.key in (app.pg.K_EQUALS, app.pg.K_PLUS, app.pg.K_KP_PLUS):
+                        if not hold_seek.release(1):
+                            speed = min(16.0, speed * 2.0)
+                    elif event.key in (app.pg.K_MINUS, app.pg.K_KP_MINUS):
+                        if not hold_seek.release(-1):
+                            speed = max(0.25, speed / 2.0)
+                elif event.type == app.pg.MOUSEWHEEL:
+                    app._scroll_map_editor_list(
+                        event.y,
+                        app.pg.mouse.get_pos(),
+                    )
+                elif (
+                    event.type == app.pg.MOUSEBUTTONDOWN
+                    and event.button in (4, 5)
+                ):
+                    app._scroll_map_editor_list(
+                        1 if event.button == 4 else -1,
+                        event.pos,
+                    )
+                elif event.type == app.pg.MOUSEBUTTONDOWN and event.button == 1:
+                    app._handle_mouse_click(event.pos)
+            seek_frames = hold_seek.update(elapsed, frames_per_second)
+            if seek_frames:
+                index = max(0, min(len(frames) - 1, index + seek_frames))
             if not paused:
                 accumulator += elapsed * frames_per_second * speed
                 advance = int(accumulator)
@@ -105,6 +194,12 @@ def run_replay(
                 (255, 223, 120),
             )
             app.screen.blit(overlay, (340, 106))
+            help_overlay = app.small_font.render(
+                "短按 +/- 调速｜长按 +/- 快进/快退｜空格暂停｜左右逐帧",
+                True,
+                (185, 204, 211),
+            )
+            app.screen.blit(help_overlay, (340, 134))
             app.pg.display.flip()
             rendered += 1
             if max_frames is not None and rendered >= max_frames:
@@ -139,4 +234,4 @@ if __name__ == "__main__":
     main()
 
 
-__all__ = ["apply_frame", "load_frames", "run_replay"]
+__all__ = ["HoldSeekController", "apply_frame", "load_frames", "run_replay"]

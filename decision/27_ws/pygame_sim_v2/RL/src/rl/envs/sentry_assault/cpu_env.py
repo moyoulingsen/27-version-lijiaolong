@@ -26,7 +26,7 @@ from rm2026_sim.task_state import (
 )
 
 from rl.config import AssaultConfig
-from .field import AssaultField
+from .field import AssaultField, TacticalFields
 from .local_map import LOCAL_MAP_CHANNELS, LocalMapEncoder
 
 
@@ -85,9 +85,27 @@ class SentryAssaultEnv:
         config: AssaultConfig | None = None,
         *,
         field: AssaultField | None = None,
+        tactical_fields: TacticalFields | None = None,
     ) -> None:
         self.config = config or AssaultConfig()
         self.field = field or AssaultField.load()
+        self.tactical_fields = (
+            tactical_fields
+            if tactical_fields is not None
+            else self.field.tactical_fields(
+                minimum_fire_range=(
+                    self.config.reward_v3.preferred_fire_min_range
+                ),
+                maximum_fire_range=(
+                    self.config.reward_v3.preferred_fire_max_range
+                ),
+                minimum_clearance=(
+                    self.config.reward_v3.preferred_fire_clearance
+                ),
+            )
+            if self.config.reward_version == 3
+            else None
+        )
         self.spatial_shape = (
             LOCAL_MAP_CHANNELS,
             self.config.local_map_cells,
@@ -105,6 +123,7 @@ class SentryAssaultEnv:
         self._base_bonus_paid = False
         self._shaping_target_id = 6
         self._best_target_distance = 0.0
+        self._previous_attack_distance = 0.0
         self._best_target_angle_error = math.pi
         self._aim_tracking_active = False
         self._distance_milestones_paid: set[float] = set()
@@ -121,6 +140,7 @@ class SentryAssaultEnv:
         self._line_of_sight_bonus_paid = False
         self._step_index = 0
         self._last_observation: AssaultObservation | None = None
+        self._seconds_since_damage = 0.0
         self.reset()
 
     def reset(self, *, seed: int | None = None) -> AssaultObservation:
@@ -160,6 +180,7 @@ class SentryAssaultEnv:
         self._best_target_distance, self._best_target_angle_error = (
             self._target_metrics(BLUE_OUTPOST)
         )
+        self._previous_attack_distance = self._attack_route_distance(6)
         self._aim_tracking_active = False
         self._distance_milestones_paid.clear()
         self._aim_milestones_paid.clear()
@@ -174,6 +195,7 @@ class SentryAssaultEnv:
         self._range_bonus_paid = False
         self._line_of_sight_bonus_paid = False
         self._step_index = 0
+        self._seconds_since_damage = 0.0
         self._last_observation = self._observation(recurrent_reset=True)
         return self._last_observation
 
@@ -203,11 +225,34 @@ class SentryAssaultEnv:
             half_angle=ROBOT_VISION_HALF_ANGLE,
         )
 
+    def _tactical_field_value(self, values: np.ndarray) -> float:
+        row, column = self.field.collision_grid.world_to_cell(
+            self.sentry.x,
+            self.sentry.y,
+        )
+        return float(values[row, column])
+
+    def _attack_route_distance(self, target_id: int) -> float:
+        if self.tactical_fields is None:
+            _, target = self._active_target()
+            return self._target_metrics(target)[0]
+        values = (
+            self.tactical_fields.outpost_distance
+            if target_id == 6
+            else self.tactical_fields.base_distance
+        )
+        return self._tactical_field_value(values)
+
+    def _wall_clearance(self) -> float:
+        if self.tactical_fields is None:
+            return math.inf
+        return self._tactical_field_value(self.tactical_fields.wall_clearance)
+
     def _exploration_cell(self) -> tuple[int, int]:
         size = self.config.exploration_cell_size
         return int(self.sentry.x / size), int(self.sentry.y / size)
 
-    def _shaping_reward(
+    def _shaping_reward_v1(
         self,
         *,
         fire_requested: bool,
@@ -365,6 +410,238 @@ class SentryAssaultEnv:
         }
         return sum(components.values()), components
 
+    def _shaping_reward_v2(
+        self,
+        *,
+        permanent_lock_triggered: bool,
+    ) -> tuple[float, dict[str, float]]:
+        reward = self.config.reward_v2
+        target_id, target = self._active_target()
+        distance, angle_error = self._target_metrics(target)
+        distance_reward = 0.0
+        aim_reward = 0.0
+        if target_id != self._shaping_target_id:
+            self._shaping_target_id = target_id
+            self._best_target_distance = distance
+            self._best_target_angle_error = angle_error
+            self._aim_tracking_active = False
+        else:
+            distance_improvement = max(0.0, self._best_target_distance - distance)
+            distance_reward = distance_improvement * reward.distance_progress_scale
+            self._best_target_distance = min(self._best_target_distance, distance)
+            if distance <= DETECTION_RANGE:
+                if not self._aim_tracking_active:
+                    self._aim_tracking_active = True
+                    self._best_target_angle_error = angle_error
+                else:
+                    aim_improvement = max(
+                        0.0,
+                        self._best_target_angle_error - angle_error,
+                    )
+                    aim_reward = aim_improvement * reward.aim_progress_scale
+                    self._best_target_angle_error = min(
+                        self._best_target_angle_error,
+                        angle_error,
+                    )
+        cell = self._exploration_cell()
+        exploration_reward = 0.0
+        if (
+            cell not in self._visited_cells
+            and self._exploration_reward_total < reward.exploration_reward_cap
+        ):
+            self._visited_cells.add(cell)
+            exploration_reward = min(
+                reward.exploration_cell_bonus,
+                reward.exploration_reward_cap - self._exploration_reward_total,
+            )
+            self._exploration_reward_total += exploration_reward
+        collision_reward = -reward.collision_penalty if self._last_collision else 0.0
+        stuck_multiplier = min(
+            3.0,
+            self._stuck_seconds / reward.stuck_penalty_after_seconds,
+        )
+        components = {
+            "v2_distance_progress_score": distance_reward,
+            "v2_aim_progress_score": aim_reward,
+            "v2_exploration_score": exploration_reward,
+            "v2_collision_score": collision_reward,
+            "v2_stuck_score": -reward.stuck_penalty * stuck_multiplier,
+            "v2_time_score": -reward.time_penalty_per_second * self.config.time_step,
+            "v2_permanent_heat_lock_score": (
+                -reward.permanent_heat_lock_penalty
+                if permanent_lock_triggered
+                else 0.0
+            ),
+        }
+        return sum(components.values()), components
+
+    def _shaping_reward_v3(
+        self,
+        *,
+        fire_requested: bool,
+        valid_fire: bool,
+        fire_target_id: int,
+        permanent_lock_triggered: bool,
+        movement_distance: float,
+        damage_hp: float,
+    ) -> tuple[float, dict[str, float]]:
+        reward = self.config.reward_v3
+        target_id, target = self._active_target()
+        direct_distance, angle_error = self._target_metrics(target)
+        route_distance = self._attack_route_distance(target_id)
+        target_changed = target_id != self._shaping_target_id
+        route_progress_score = (
+            0.0
+            if target_changed
+            else (self._previous_attack_distance - route_distance)
+            * reward.route_progress_scale
+        )
+        self._previous_attack_distance = route_distance
+        movement_score = -movement_distance * reward.movement_cost_per_meter
+
+        aim_score = 0.0
+        if target_changed:
+            self._shaping_target_id = target_id
+            self._best_target_angle_error = angle_error
+            self._aim_tracking_active = False
+        elif direct_distance <= DETECTION_RANGE:
+            if not self._aim_tracking_active:
+                self._aim_tracking_active = True
+                self._best_target_angle_error = angle_error
+            else:
+                improvement = max(0.0, self._best_target_angle_error - angle_error)
+                aim_score = improvement * reward.aim_progress_scale
+                self._best_target_angle_error = min(
+                    self._best_target_angle_error,
+                    angle_error,
+                )
+
+        cell = self._exploration_cell()
+        exploration_score = 0.0
+        if (
+            cell not in self._visited_cells
+            and self._exploration_reward_total < reward.exploration_reward_cap
+        ):
+            self._visited_cells.add(cell)
+            exploration_score = min(
+                reward.exploration_cell_bonus,
+                reward.exploration_reward_cap - self._exploration_reward_total,
+            )
+            self._exploration_reward_total += exploration_score
+
+        clearance = self._wall_clearance()
+        in_preferred_range = (
+            reward.preferred_fire_min_range
+            <= direct_distance
+            <= reward.preferred_fire_max_range
+        )
+        open_fire_position = (
+            in_preferred_range
+            and clearance >= reward.preferred_fire_clearance
+        )
+        fire_matches_target = fire_target_id == target_id
+        open_fire_score = (
+            reward.open_fire_bonus_per_second * self.config.time_step
+            if valid_fire and fire_matches_target and open_fire_position
+            else 0.0
+        )
+        clearance_deficit = max(
+            0.0,
+            reward.preferred_fire_clearance - clearance,
+        ) / max(reward.preferred_fire_clearance, 1e-6)
+        wall_score = (
+            -reward.wall_proximity_penalty_per_second
+            * self.config.time_step
+            * clearance_deficit
+            if direct_distance <= WEAPON_RANGE
+            else 0.0
+        )
+        invalid_fire_score = (
+            -reward.invalid_fire_penalty
+            if fire_requested and not valid_fire
+            else 0.0
+        )
+        if damage_hp > 0.0:
+            self._seconds_since_damage = 0.0
+        else:
+            self._seconds_since_damage += self.config.time_step
+        no_damage_multiplier = min(
+            3.0,
+            max(
+                0.0,
+                self._seconds_since_damage - reward.no_damage_grace_seconds,
+            )
+            / reward.no_damage_grace_seconds,
+        )
+        no_damage_score = (
+            -reward.no_damage_penalty_per_second
+            * self.config.time_step
+            * no_damage_multiplier
+        )
+        collision_score = (
+            -reward.collision_penalty if self._last_collision else 0.0
+        )
+        stuck_multiplier = min(
+            3.0,
+            self._stuck_seconds / reward.stuck_penalty_after_seconds,
+        )
+        components = {
+            "v3_route_progress_score": route_progress_score,
+            "v3_movement_score": movement_score,
+            "v3_aim_progress_score": aim_score,
+            "v3_exploration_score": exploration_score,
+            "v3_open_fire_position_score": open_fire_score,
+            "v3_wall_proximity_score": wall_score,
+            "v3_invalid_fire_score": invalid_fire_score,
+            "v3_no_damage_score": no_damage_score,
+            "v3_collision_score": collision_score,
+            "v3_stuck_score": -reward.stuck_penalty * stuck_multiplier,
+            "v3_time_score": -reward.time_penalty_per_second
+            * self.config.time_step,
+            "v3_permanent_heat_lock_score": (
+                -reward.permanent_heat_lock_penalty
+                if permanent_lock_triggered
+                else 0.0
+            ),
+        }
+        return sum(components.values()), components
+
+    def _shaping_reward(
+        self,
+        *,
+        fire_requested: bool,
+        fire_fired: bool,
+        fire_visible: bool,
+        fire_in_range: bool,
+        valid_fire: bool,
+        fire_target_id: int,
+        permanent_lock_triggered: bool,
+        movement_distance: float,
+        damage_hp: float,
+    ) -> tuple[float, dict[str, float]]:
+        if self.config.reward_version == 3:
+            return self._shaping_reward_v3(
+                fire_requested=fire_requested,
+                valid_fire=valid_fire,
+                fire_target_id=fire_target_id,
+                permanent_lock_triggered=permanent_lock_triggered,
+                movement_distance=movement_distance,
+                damage_hp=damage_hp,
+            )
+        if self.config.reward_version == 2:
+            return self._shaping_reward_v2(
+                permanent_lock_triggered=permanent_lock_triggered,
+            )
+        return self._shaping_reward_v1(
+            fire_requested=fire_requested,
+            fire_fired=fire_fired,
+            fire_visible=fire_visible,
+            fire_in_range=fire_in_range,
+            valid_fire=valid_fire,
+            fire_target_id=fire_target_id,
+            permanent_lock_triggered=permanent_lock_triggered,
+        )
+
     @staticmethod
     def _angle_features(
         source: tuple[float, float],
@@ -519,11 +796,16 @@ class SentryAssaultEnv:
             chassis_move_y=move_y,
         )
         start = (self.sentry.x, self.sentry.y)
-        distance = self.config.movement_speed * self.config.time_step
+        distance = (
+            self.config.movement_speed
+            * self.config.time_step
+            * self.field.terrain_speed_multiplier(*start)
+        )
         requested = self.field.arena.clamp(
             start[0] + move_x * distance,
             start[1] + move_y * distance,
         )
+        requested = self.field.apply_fly_slope_one_way(start, requested)
         resolved = self.field.collision_grid.move_with_collision(
             start,
             requested,
@@ -587,7 +869,7 @@ class SentryAssaultEnv:
         self._validate_action(action)
         outpost_before = float(self.task.enemy_outpost_hp)
         base_before = self._base_durability()
-        self._apply_motion(action)
+        movement_distance, _ = self._apply_motion(action)
         decision = self._apply_posture(action)
         fire_target_id, fire_target = self._active_target()
         fire_distance, fire_angle_error = self._target_metrics(fire_target)
@@ -616,12 +898,22 @@ class SentryAssaultEnv:
         base_after = self._base_durability()
         new_outpost_low = min(self._lowest_outpost_hp, outpost_after)
         new_base_low = min(self._lowest_base_durability, base_after)
-        outpost_damage_reward = (
-            self._lowest_outpost_hp - new_outpost_low
-        ) * self.config.structure_damage_scale
-        base_damage_reward = (
-            self._lowest_base_durability - new_base_low
-        ) * self.config.structure_damage_scale
+        outpost_damage_hp = self._lowest_outpost_hp - new_outpost_low
+        base_damage_hp = self._lowest_base_durability - new_base_low
+        efficiency_reward = (
+            self.config.reward_v2
+            if self.config.reward_version == 2
+            else self.config.reward_v3
+            if self.config.reward_version == 3
+            else None
+        )
+        damage_scale = (
+            efficiency_reward.structure_damage_scale
+            if efficiency_reward is not None
+            else self.config.structure_damage_scale
+        )
+        outpost_damage_reward = outpost_damage_hp * damage_scale
+        base_damage_reward = base_damage_hp * damage_scale
         self._lowest_outpost_hp = new_outpost_low
         self._lowest_base_durability = new_base_low
 
@@ -633,17 +925,35 @@ class SentryAssaultEnv:
             and outpost_after <= 0.0
         ):
             self._outpost_bonus_paid = True
-            outpost_destroy_reward = self.config.outpost_destroy_bonus
+            outpost_destroy_reward = (
+                0.0
+                if efficiency_reward is not None
+                else self.config.outpost_destroy_bonus
+            )
             outpost_time_reward = (
-                reward_remaining_time * self.config.outpost_time_multiplier
+                reward_remaining_time
+                * (
+                    efficiency_reward.outpost_time_multiplier
+                    if efficiency_reward is not None
+                    else self.config.outpost_time_multiplier
+                )
             )
         base_time_reward = 0.0
         base_destroy_reward = 0.0
         if not self._base_bonus_paid and base_before > 0.0 and base_after <= 0.0:
             self._base_bonus_paid = True
-            base_destroy_reward = self.config.base_destroy_bonus
+            base_destroy_reward = (
+                0.0
+                if efficiency_reward is not None
+                else self.config.base_destroy_bonus
+            )
             base_time_reward = (
-                reward_remaining_time * self.config.base_time_multiplier
+                reward_remaining_time
+                * (
+                    efficiency_reward.base_time_multiplier
+                    if efficiency_reward is not None
+                    else self.config.base_time_multiplier
+                )
             )
         first_hit_reward = 0.0
         if (
@@ -652,7 +962,19 @@ class SentryAssaultEnv:
             and fire_target_id not in self._hit_targets_paid
         ):
             self._hit_targets_paid.add(fire_target_id)
-            first_hit_reward = self.config.first_hit_bonus
+            if self.config.reward_version == 3:
+                multiplier = (
+                    self.config.reward_v3.outpost_first_hit_time_multiplier
+                    if fire_target_id == 6
+                    else self.config.reward_v3.base_first_hit_time_multiplier
+                )
+                first_hit_reward = reward_remaining_time * multiplier
+            else:
+                first_hit_reward = (
+                    0.0
+                    if self.config.reward_version == 2
+                    else self.config.first_hit_bonus
+                )
         objective_reward = (
             outpost_damage_reward
             + base_damage_reward
@@ -676,6 +998,8 @@ class SentryAssaultEnv:
             valid_fire=valid_fire,
             fire_target_id=fire_target_id,
             permanent_lock_triggered=permanent_lock_triggered,
+            movement_distance=movement_distance,
+            damage_hp=outpost_damage_hp + base_damage_hp,
         )
         raw_reward = objective_reward + shaping_reward
         terminated = base_after <= 0.0

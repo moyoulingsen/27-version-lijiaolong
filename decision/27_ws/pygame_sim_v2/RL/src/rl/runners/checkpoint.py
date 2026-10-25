@@ -67,4 +67,25 @@ def load_checkpoint(path: Path, learner: RecurrentPPO) -> dict[str, object]:
     return payload
 
 
-__all__ = ["load_checkpoint", "save_checkpoint"]
+def load_warm_start(
+    path: Path,
+    learner: RecurrentPPO,
+    *,
+    reset_movement_head: bool = False,
+) -> dict[str, object]:
+    """Load only Actor-side tensors from a checkpoint into a fresh learner."""
+    install_legacy_checkpoint_aliases()
+    payload = torch.load(path, map_location=learner.device, weights_only=False)
+    if payload.get("schema") != "single-sentry-rppo-v1":
+        raise ValueError("unsupported checkpoint schema")
+    learner_state = payload.get("learner")
+    if not isinstance(learner_state, dict):
+        raise ValueError("checkpoint learner state is invalid")
+    learner.load_actor_warm_start(
+        learner_state,
+        reset_movement_head=reset_movement_head,
+    )
+    return payload
+
+
+__all__ = ["load_checkpoint", "load_warm_start", "save_checkpoint"]

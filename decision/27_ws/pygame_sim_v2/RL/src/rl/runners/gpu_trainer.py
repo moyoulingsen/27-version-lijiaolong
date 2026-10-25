@@ -15,7 +15,7 @@ import torch
 from rl.algorithms.ppo import RecurrentPPO, RecurrentRollout
 from rl.config import AssaultConfig, NetworkConfig, PPOConfig, TrainingConfig
 from rl.envs.sentry_assault import GpuSentryAssaultEnv
-from .checkpoint import load_checkpoint, save_checkpoint
+from .checkpoint import load_checkpoint, load_warm_start, save_checkpoint
 from .evaluator import evaluate_checkpoint
 from .metrics import append_jsonl, write_json
 from .trainer import resolve_device
@@ -29,9 +29,13 @@ def run_gpu_training(
     ppo: PPOConfig,
     training: TrainingConfig,
     resume_checkpoint: Path | None = None,
+    warm_start_checkpoint: Path | None = None,
+    reset_movement_head: bool = False,
 ) -> dict[str, object]:
     if run_dir.exists():
         raise FileExistsError(run_dir)
+    if resume_checkpoint is not None and warm_start_checkpoint is not None:
+        raise ValueError("resume and warm-start checkpoints are mutually exclusive")
     device = resolve_device(training.device)
     if device.type != "cuda":
         raise ValueError("GPU trainer requires a CUDA device")
@@ -74,6 +78,12 @@ def run_gpu_training(
         if resume_checkpoint is not None
         else None
     )
+    if warm_start_checkpoint is not None:
+        load_warm_start(
+            warm_start_checkpoint,
+            learner,
+            reset_movement_head=reset_movement_head,
+        )
     resume_global_step = int(resume_payload.get("global_step", 0)) if resume_payload else 0
     resume_episodes = int(resume_payload.get("episode", 0)) if resume_payload else 0
     resume_updates = int(resume_payload.get("update_round", 0)) if resume_payload else 0
@@ -94,8 +104,13 @@ def run_gpu_training(
         "ppo": asdict(ppo),
         "training": asdict(training),
         "resumed_from": str(resume_checkpoint) if resume_checkpoint else None,
+        "warm_started_from": (
+            str(warm_start_checkpoint) if warm_start_checkpoint else None
+        ),
+        "reset_movement_head": reset_movement_head,
         "resume_global_step": resume_global_step,
         "resume_episode": resume_episodes,
+        "reward_profile": f"v{assault.reward_version}",
         "replay_policy": "final checkpoint evaluated in CPU reference environment",
     }
     write_json(run_dir / "metadata.json", metadata)
@@ -340,6 +355,9 @@ def run_gpu_training(
         "elapsed_seconds": elapsed,
         "cumulative_elapsed_seconds": previous_elapsed + elapsed,
         "resumed_from": str(resume_checkpoint) if resume_checkpoint else None,
+        "warm_started_from": (
+            str(warm_start_checkpoint) if warm_start_checkpoint else None
+        ),
         "max_env_steps": training.max_env_steps,
         "stopped_by_signal": stop_requested,
         "latest_update": asdict(latest_stats) if latest_stats is not None else None,

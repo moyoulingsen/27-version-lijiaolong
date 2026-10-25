@@ -13,9 +13,24 @@ class VectorSentryAssaultEnv:
     def __init__(self, num_envs: int, config: AssaultConfig | None = None) -> None:
         if num_envs <= 0:
             raise ValueError("num_envs must be positive")
+        config = config or AssaultConfig()
         field = AssaultField.load()
+        tactical_fields = (
+            field.tactical_fields(
+                minimum_fire_range=config.reward_v3.preferred_fire_min_range,
+                maximum_fire_range=config.reward_v3.preferred_fire_max_range,
+                minimum_clearance=config.reward_v3.preferred_fire_clearance,
+            )
+            if config.reward_version == 3
+            else None
+        )
         self.envs = tuple(
-            SentryAssaultEnv(config, field=field) for _ in range(num_envs)
+            SentryAssaultEnv(
+                config,
+                field=field,
+                tactical_fields=tactical_fields,
+            )
+            for _ in range(num_envs)
         )
 
     @property

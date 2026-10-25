@@ -371,6 +371,51 @@ class RecurrentPPO:
         self.model.load_state_dict(checkpoint["model"])  # type: ignore[arg-type]
         self.optimizer.load_state_dict(checkpoint["optimizer"])  # type: ignore[arg-type]
 
+    def load_actor_warm_start(
+        self,
+        checkpoint: dict[str, object],
+        *,
+        reset_movement_head: bool = False,
+    ) -> int:
+        """Load navigation/action features while keeping a fresh critic and Adam."""
+        source = checkpoint["model"]  # type: ignore[assignment]
+        if not isinstance(source, dict):
+            raise ValueError("checkpoint model state is invalid")
+        actor_prefixes = (
+            "scalar_encoder.",
+            "spatial_encoder.",
+            "fusion.",
+            "lstm.",
+            "categorical_heads.",
+            "continuous_mean.",
+        )
+        actor_names = {"continuous_log_std"}
+        target = self.model.state_dict()
+        loaded = 0
+        for name, value in source.items():
+            if name not in target:
+                continue
+            if reset_movement_head and name.startswith(
+                "categorical_heads.move_direction."
+            ):
+                continue
+            if name not in actor_names and not name.startswith(actor_prefixes):
+                continue
+            if target[name].shape != value.shape:
+                raise ValueError(f"warm-start tensor shape mismatch for {name}")
+            target[name] = value.to(device=target[name].device)
+            loaded += 1
+        if not loaded:
+            raise ValueError("checkpoint contains no compatible actor tensors")
+        self.model.load_state_dict(target)
+        with torch.no_grad():
+            self.model.continuous_log_std.clamp_(min=-0.5)
+        self.state = self.model.initial_state(
+            self.state[0].shape[1],
+            device=self.device,
+        )
+        return loaded
+
 
 __all__ = [
     "ActionDecision",
