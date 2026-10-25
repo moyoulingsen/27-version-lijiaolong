@@ -101,7 +101,7 @@ class V2RuleTests(unittest.TestCase):
             scenario.rule_damage("42mm", 7, critical_zone=True), 300
         )
 
-    def test_live_shot_picks_armour_zone_and_center_hit(self) -> None:
+    def test_live_shot_does_not_auto_award_building_critical(self) -> None:
         scenario = TaskScenario()
         target_x, target_y = scenario.target_position(6)
         sentry = SentryState(x=ATTACK[0], y=ATTACK[1])
@@ -118,10 +118,10 @@ class V2RuleTests(unittest.TestCase):
             decision_override=scenario.evaluate(sentry),
             fire_request=True,
             hit_target_id=shot.target_id,
-            critical_zone=scenario.is_center_hit(shot),
+            critical_zone=False,
             target_armor_zone=scenario.armor_zone_for_shot(shot, sentry),
         )
-        self.assertEqual(scenario.enemy_outpost_hp, 1200.0)
+        self.assertEqual(scenario.enemy_outpost_hp, 1400.0)
 
     def test_line_of_sight_blocks_raw_wall_cells(self) -> None:
         arena = Arena(
@@ -267,19 +267,19 @@ class V2RuleTests(unittest.TestCase):
         self.assertEqual(scenario.pending_ammo, PENDING_AMMO_CAP)
         self.assertGreaterEqual(PENDING_AMMO_CAP, 600)
 
-    def test_respawn_requires_confirmation_and_keeps_ammo(self) -> None:
+    def test_respawn_always_uses_rulebook_readbar_and_keeps_ammo(self) -> None:
         scenario = TaskScenario(
             enemy_outpost_hp=0.0,
             ammo=77,
         )
         sentry = SentryState(heat=200.0)
         scenario.kill_sentry()
-        scenario.update(5.1, sentry, confirm_respawn=False)
+        scenario.update(5.1, sentry)
         self.assertEqual(scenario.sentry_hp, 0.0)
         self.assertEqual(scenario.ammo, 77)
 
-        scenario.update(0.1, sentry, confirm_respawn=True)
-        self.assertEqual(scenario.sentry_hp, 400.0)
+        scenario.update(5.0, sentry)
+        self.assertEqual(scenario.sentry_hp, 40.0)
         self.assertEqual(scenario.ammo, 77)
         self.assertEqual(sentry.heat, 0.0)
         self.assertEqual(scenario.sentry_buffer_energy, BUFFER_ENERGY_CAP)
@@ -301,14 +301,16 @@ class V2RuleTests(unittest.TestCase):
         self.assertFalse(scenario.sentry_heat_locked)
         self.assertEqual(sentry.heat, 0.0)
 
-        permanent = TaskScenario(
+        long_frame = TaskScenario(
             enemy_outpost_hp=0.0,
             ammo=300,
             fire_rate=20,
         )
-        permanent_sentry = SentryState()
-        permanent.update(2.0, permanent_sentry, fire_request=True)
-        self.assertTrue(permanent.sentry_heat_permanent_lock)
+        long_frame_sentry = SentryState()
+        long_frame.update(2.0, long_frame_sentry, fire_request=True)
+        self.assertEqual(long_frame_sentry.heat, 270.0)
+        self.assertTrue(long_frame.sentry_heat_locked)
+        self.assertFalse(long_frame.sentry_heat_permanent_lock)
 
     def test_experience_level_up_adds_health_immediately(self) -> None:
         scenario = TaskScenario()

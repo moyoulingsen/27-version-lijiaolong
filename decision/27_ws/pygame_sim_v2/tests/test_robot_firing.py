@@ -144,6 +144,25 @@ class RobotFiringTests(unittest.TestCase):
         self.assertEqual(result.damage, 5)
         self.assertEqual(scenario.enemy_base_shield, 145.0)
 
+    def test_exact_outpost_aim_does_not_imply_critical_damage(self) -> None:
+        scenario = TaskScenario()
+        scenario.own_robot_ammo[3] = 5
+        outpost = scenario.combatant_position("blue", 6)
+        shooter = (outpost[0] - 1.0, outpost[1])
+        scenario.set_robot_position(3, shooter, team="red")
+
+        result = scenario.execute_robot_fire(
+            3,
+            0.0,
+            team="red",
+            preferred_target=6,
+        )
+
+        self.assertTrue(result.fired)
+        self.assertEqual(result.target_id, 6)
+        self.assertEqual(result.damage, 20)
+        self.assertEqual(scenario.enemy_outpost_hp, 1480.0)
+
 
 if __name__ == "__main__":
     unittest.main()

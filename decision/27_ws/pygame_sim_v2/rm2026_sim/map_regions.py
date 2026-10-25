@@ -109,6 +109,9 @@ def geometry_payload(
     zone_overrides: dict[str, Sequence[Point]],
     custom_polygons: Sequence[dict],
     patrol_routes: dict[str, Sequence[Point]] | None = None,
+    wall_polygons: Sequence[dict] | None = None,
+    special_regions: Sequence[dict] | None = None,
+    slow_regions: Sequence[dict] | None = None,
 ) -> dict:
     """Build the JSON-safe map-geometry portion of a scenario snapshot."""
     payload = {
@@ -141,7 +144,200 @@ def geometry_payload(
             for key in PATROL_ROUTE_KEYS
             if len(normalize_points(patrol_routes.get(key))) >= 2
         }
+    if wall_polygons is not None:
+        payload["wall_polygons"] = _wall_items_payload(
+            wall_polygons,
+            default_name="墙体",
+            default_color=(225, 72, 72),
+        )
+    if special_regions is not None:
+        payload["special_regions"] = _wall_items_payload(
+            special_regions,
+            default_name="特殊墙体",
+            default_color=(235, 180, 70),
+        )
+    if slow_regions is not None:
+        payload["slow_regions"] = _slow_region_items_payload(slow_regions)
     return payload
+
+
+def _geometry_items_payload(
+    items: Sequence[dict],
+    *,
+    default_name: str,
+    default_color: tuple[int, int, int],
+) -> list[dict]:
+    result: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        points = normalize_points(item.get("points"))
+        if validate_polygon(points) is not None:
+            continue
+        color = item.get("color", default_color)
+        if not isinstance(color, (list, tuple)) or len(color) < 3:
+            color = default_color
+        result.append(
+            {
+                "id": str(item.get("id", "")),
+                "name": str(item.get("name", default_name)),
+                "points": [[float(x), float(y)] for x, y in points],
+                "color": [
+                    max(0, min(255, int(value))) for value in color[:3]
+                ],
+                "visible": bool(item.get("visible", True)),
+            }
+        )
+    return result
+
+
+def _wall_items_payload(
+    items: Sequence[dict],
+    *,
+    default_name: str,
+    default_color: tuple[int, int, int],
+) -> list[dict]:
+    """Serialize two-point wall segments with a physical thickness."""
+    result: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        points = normalize_points(item.get("points"))
+        if len(points) < 2:
+            continue
+        try:
+            thickness = float(item.get("thickness", 0.20))
+        except (TypeError, ValueError):
+            thickness = 0.20
+        color = item.get("color", default_color)
+        if not isinstance(color, (list, tuple)) or len(color) < 3:
+            color = default_color
+        result.append({
+            "id": str(item.get("id", "")),
+            "name": str(item.get("name", default_name)),
+            "points": [[float(x), float(y)] for x, y in points[:2]],
+            "thickness": max(0.05, min(2.0, thickness)),
+            "color": [max(0, min(255, int(value))) for value in color[:3]],
+            "visible": bool(item.get("visible", True)),
+        })
+    return result
+
+
+def _slow_region_items_payload(items: Sequence[dict]) -> list[dict]:
+    """Serialize terrain polygons that reduce movement without changing power."""
+    result: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        points = normalize_points(item.get("points"))
+        if validate_polygon(points) is not None:
+            continue
+        try:
+            speed_multiplier = float(item.get("speed_multiplier", 0.50))
+        except (TypeError, ValueError):
+            speed_multiplier = 0.50
+        color = item.get("color", (86, 174, 220))
+        if not isinstance(color, (list, tuple)) or len(color) < 3:
+            color = (86, 174, 220)
+        result.append({
+            "id": str(item.get("id", "")),
+            "name": str(item.get("name", "减速区域")),
+            "points": [[float(x), float(y)] for x, y in points],
+            "speed_multiplier": max(0.05, min(1.0, speed_multiplier)),
+            "color": [max(0, min(255, int(value))) for value in color[:3]],
+            "visible": bool(item.get("visible", True)),
+        })
+    return result
+
+
+def restore_extra_geometry_payload(
+    payload: dict | None,
+) -> tuple[list[dict], list[dict]]:
+    """Restore normal walls and infantry-traversable special walls."""
+    payload = payload if isinstance(payload, dict) else {}
+
+    def restore_items(
+        key: str,
+        *,
+        default_name: str,
+        default_color: tuple[int, int, int],
+    ) -> list[dict]:
+        raw_items = payload.get(key)
+        if not isinstance(raw_items, list):
+            return []
+        items: list[dict] = []
+        for index, item in enumerate(raw_items, start=1):
+            if not isinstance(item, dict):
+                continue
+            points = normalize_points(item.get("points"))
+            if key in ("wall_polygons", "special_regions"):
+                if len(points) < 2:
+                    continue
+                points = points[:2]
+            elif validate_polygon(points) is not None:
+                continue
+            color = item.get("color", default_color)
+            if not isinstance(color, (list, tuple)) or len(color) < 3:
+                color = default_color
+            restored = {
+                "id": str(item.get("id") or f"{key}_{index}"),
+                "name": str(item.get("name") or f"{default_name} {index}"),
+                "points": [[x, y] for x, y in points],
+                "color": [max(0, min(255, int(value))) for value in color[:3]],
+                "visible": bool(item.get("visible", True)),
+            }
+            if key in ("wall_polygons", "special_regions"):
+                try:
+                    thickness = float(item.get("thickness", 0.20))
+                except (TypeError, ValueError):
+                    thickness = 0.20
+                restored["thickness"] = max(0.05, min(2.0, thickness))
+            items.append(restored)
+        return items
+
+    return (
+        restore_items(
+            "wall_polygons",
+            default_name="墙体",
+            default_color=(225, 72, 72),
+        ),
+        restore_items(
+            "special_regions",
+            default_name="特殊墙体",
+            default_color=(235, 180, 70),
+        ),
+    )
+
+
+def restore_slow_regions_payload(payload: dict | None) -> list[dict]:
+    """Restore editable terrain polygons with a movement-speed multiplier."""
+    payload = payload if isinstance(payload, dict) else {}
+    raw_items = payload.get("slow_regions")
+    if not isinstance(raw_items, list):
+        return []
+    items: list[dict] = []
+    for index, item in enumerate(raw_items, start=1):
+        if not isinstance(item, dict):
+            continue
+        points = normalize_points(item.get("points"))
+        if validate_polygon(points) is not None:
+            continue
+        try:
+            speed_multiplier = float(item.get("speed_multiplier", 0.50))
+        except (TypeError, ValueError):
+            speed_multiplier = 0.50
+        color = item.get("color", (86, 174, 220))
+        if not isinstance(color, (list, tuple)) or len(color) < 3:
+            color = (86, 174, 220)
+        items.append({
+            "id": str(item.get("id") or f"slow_{index}"),
+            "name": str(item.get("name") or f"减速区域 {index}"),
+            "points": [[x, y] for x, y in points],
+            "speed_multiplier": max(0.05, min(1.0, speed_multiplier)),
+            "color": [max(0, min(255, int(value))) for value in color[:3]],
+            "visible": bool(item.get("visible", True)),
+        })
+    return items
 
 
 def restore_geometry_payload(payload: dict | None) -> tuple[dict[str, tuple[Point, ...]], list[dict]]:
@@ -231,12 +427,22 @@ def save_geometry_file(
     custom_polygons: Sequence[dict],
     *,
     patrol_routes: dict[str, Sequence[Point]] | None = None,
+    wall_polygons: Sequence[dict] | None = None,
+    special_regions: Sequence[dict] | None = None,
+    slow_regions: Sequence[dict] | None = None,
     backup_limit: int = 30,
 ) -> None:
     """Atomically save map annotations and retain rotating write backups."""
     path.parent.mkdir(parents=True, exist_ok=True)
     serialized = json.dumps(
-        geometry_payload(zone_overrides, custom_polygons, patrol_routes),
+        geometry_payload(
+            zone_overrides,
+            custom_polygons,
+            patrol_routes,
+            wall_polygons,
+            special_regions,
+            slow_regions,
+        ),
         ensure_ascii=False,
         indent=2,
     )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -28,6 +29,7 @@ from rm2026_sim.task_state import (
     RULE_OUTPOST_HP,
     RULE_DAMAGE_PER_SHOT,
     RULE_FIRE_RATE_MAX,
+    SENTRY_FIRE_RATE_DEFAULT,
     SUPPLY,
     TaskScenario,
 )
@@ -234,7 +236,7 @@ class TaskScenarioTests(unittest.TestCase):
 
     def test_fire_request_without_barrel_alignment_does_not_deal_damage(self) -> None:
         scenario = TaskScenario()
-        sentry = SentryState(x=ATTACK[0], y=ATTACK[1], turret_angle=0.0)
+        sentry = SentryState(x=ATTACK[0], y=ATTACK[1], turret_angle=math.pi)
         decision = scenario.evaluate(sentry)
         original_health = scenario.enemy_outpost_hp
 
@@ -266,7 +268,7 @@ class TaskScenarioTests(unittest.TestCase):
             3,
         )
 
-    def test_aligned_barrel_hit_deals_damage_to_outpost(self) -> None:
+    def test_aligned_barrel_hit_uses_normal_outpost_damage(self) -> None:
         scenario = TaskScenario()
         target_x, target_y = scenario.target_position(6)
         sentry = SentryState(x=ATTACK[0], y=ATTACK[1])
@@ -279,12 +281,31 @@ class TaskScenarioTests(unittest.TestCase):
             decision_override=scenario.evaluate(sentry),
             fire_request=True,
             hit_target_id=shot.target_id,
-            critical_zone=scenario.is_center_hit(shot),
+            critical_zone=False,
             target_armor_zone=scenario.armor_zone_for_shot(shot, sentry),
         )
 
         self.assertEqual(shot.target_id, 6)
-        self.assertEqual(scenario.enemy_outpost_hp, 1200.0)
+        self.assertEqual(scenario.enemy_outpost_hp, 1300.0)
+
+    def test_default_sentry_heat_locks_before_destroying_outpost(self) -> None:
+        scenario = TaskScenario()
+        sentry = SentryState()
+
+        for _ in range(50):
+            scenario.update(
+                0.1,
+                sentry,
+                fire_request=True,
+                hit_target_id=6,
+                critical_zone=False,
+            )
+
+        self.assertEqual(scenario.fire_rate, SENTRY_FIRE_RATE_DEFAULT)
+        self.assertEqual(scenario.ammo, 254)
+        self.assertEqual(scenario.last_hit_probability, 0.90)
+        self.assertEqual(scenario.enemy_outpost_hp, 660.0)
+        self.assertTrue(scenario.sentry_fire_locked)
 
     def test_manual_fire_hits_enemy_under_barrel_without_bt_target(self) -> None:
         scenario = TaskScenario()
@@ -300,12 +321,12 @@ class TaskScenarioTests(unittest.TestCase):
             decision_override=scenario.evaluate(sentry),
             fire_request=True,
             hit_target_id=shot.target_id,
-            critical_zone=scenario.is_center_hit(shot),
+            critical_zone=False,
             target_armor_zone=scenario.armor_zone_for_shot(shot, sentry),
         )
 
         self.assertEqual(shot.target_id, 6)
-        self.assertEqual(scenario.enemy_outpost_hp, 1350.0)
+        self.assertEqual(scenario.enemy_outpost_hp, 1400.0)
 
     def test_live_fire_uses_rule_damage_even_with_legacy_debug_value(self) -> None:
         scenario = TaskScenario(fire_rate=10, damage_per_shot=7, ammo=20)
@@ -397,11 +418,11 @@ class TaskScenarioTests(unittest.TestCase):
     def test_live_fire_uses_target_armor_and_defence_settings(self) -> None:
         scenario = TaskScenario(enemy_outpost_hp=0)
         scenario.update(
-            0.05, SentryState(), fire_request=True, hit_target_id=7,
+            0.1, SentryState(), fire_request=True, hit_target_id=7,
             critical_zone=True, target_armor_zone="upper_front", target_defence_buff=0.25,
         )
-        self.assertEqual(scenario.ammo, 299)
-        self.assertEqual(scenario.enemy_base_shield, 144)
+        self.assertEqual(scenario.ammo, 298)
+        self.assertEqual(scenario.enemy_base_shield, 138)
 
     def test_base_is_invulnerable_while_its_outpost_survives(self) -> None:
         scenario = TaskScenario()
@@ -435,19 +456,36 @@ class TaskScenarioTests(unittest.TestCase):
         self.assertEqual(scenario.defence_buff, 0)
         self.assertAlmostEqual(scenario.effective_sentry_defence, -0.25)
 
-    def test_respawn_requires_supply_before_firing_unlocks(self) -> None:
+    def test_readbar_respawn_requires_gain_point_before_firing_unlocks(self) -> None:
         scenario = TaskScenario(enemy_outpost_hp=0.0)
         sentry = SentryState()
         scenario.kill_sentry()
-        scenario.update(5.6, sentry, confirm_respawn=True)
+        scenario.update(10.1, sentry)
         decision = scenario.evaluate(sentry)
         self.assertEqual(decision.behavior, "复活后补给解锁")
         self.assertEqual(decision.goal, SUPPLY)
+        self.assertEqual(scenario.sentry_hp, 40.0)
         self.assertTrue(scenario.respawn_fire_locked)
 
         sentry.x, sentry.y = SUPPLY
         scenario.update(0.1, sentry)
         self.assertFalse(scenario.respawn_fire_locked)
+
+    def test_behavior_tree_confirmation_revives_after_five_seconds(self) -> None:
+        scenario = TaskScenario(enemy_outpost_hp=0.0, ammo=77)
+        sentry = SentryState(heat=200.0)
+        scenario.kill_sentry()
+        confirmation = replace(scenario.evaluate(sentry), confirm_respawn=1)
+
+        scenario.update(4.9, sentry, decision_override=confirmation)
+        self.assertEqual(scenario.sentry_hp, 0.0)
+        scenario.update(0.2, sentry, decision_override=confirmation)
+
+        self.assertEqual(scenario.sentry_hp, 400.0)
+        self.assertEqual(scenario.ammo, 77)
+        self.assertEqual(sentry.heat, 0.0)
+        self.assertTrue(scenario.respawn_fire_locked)
+        self.assertEqual(scenario.evaluate(sentry).goal, SUPPLY)
 
     def test_any_position_inside_supply_zone_can_recover_and_receive_ammo(self) -> None:
         scenario = TaskScenario(
@@ -561,7 +599,7 @@ class TaskScenarioTests(unittest.TestCase):
         self.assertEqual(scenario.ammo, 300)
         self.assertEqual(scenario.pending_ammo, 0)
         self.assertEqual(scenario.economy, 400)
-        self.assertEqual(scenario.fire_rate, RULE_FIRE_RATE_MAX)
+        self.assertEqual(scenario.fire_rate, SENTRY_FIRE_RATE_DEFAULT)
         self.assertEqual(scenario.damage_per_shot, RULE_DAMAGE_PER_SHOT)
         self.assertEqual(scenario.own_outpost_hp, 1500)
         self.assertEqual(scenario.own_base_hp, 5000)

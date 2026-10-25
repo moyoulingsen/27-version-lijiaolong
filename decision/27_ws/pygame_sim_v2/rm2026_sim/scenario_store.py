@@ -40,6 +40,9 @@ def restore_snapshot(
     sentry_data = dict(snapshot.get("sentry") or {})
     if not task_data or not sentry_data:
         raise ValueError("snapshot is missing task or sentry state")
+    # Legacy snapshots may contain the removed task/rulebook revive switch.
+    # The simulator now always follows the rulebook read-bar flow.
+    task_data.pop("revive_mode", None)
     if "robot_positions" in task_data:
         task_data["robot_positions"] = {
             int(target_id): [float(position[0]), float(position[1])]
@@ -74,11 +77,83 @@ def restore_snapshot(
             int(target_id): int(ammo)
             for target_id, ammo in (task_data.get("own_robot_ammo") or {}).items()
         }
+    if "robot_view_angles" in task_data:
+        task_data["robot_view_angles"] = {
+            str(team): {
+                int(target_id): float(angle)
+                for target_id, angle in (angles or {}).items()
+            }
+            for team, angles in (task_data.get("robot_view_angles") or {}).items()
+        }
+    if "robot_turntable_angles" in task_data:
+        task_data["robot_turntable_angles"] = {
+            str(team): {
+                int(target_id): float(angle)
+                for target_id, angle in (angles or {}).items()
+            }
+            for team, angles in (
+                task_data.get("robot_turntable_angles") or {}
+            ).items()
+        }
+    if "robot_turntable_modes" in task_data:
+        task_data["robot_turntable_modes"] = {
+            str(team): {
+                int(target_id): int(mode)
+                for target_id, mode in (modes or {}).items()
+            }
+            for team, modes in (
+                task_data.get("robot_turntable_modes") or {}
+            ).items()
+        }
+    if "robot_visible_positions" in task_data:
+        task_data["robot_visible_positions"] = {
+            str(team): {
+                int(observer_id): {
+                    int(target_id): [float(position[0]), float(position[1])]
+                    for target_id, position in (targets or {}).items()
+                    if isinstance(position, (list, tuple)) and len(position) >= 2
+                }
+                for observer_id, targets in (observers or {}).items()
+            }
+            for team, observers in (
+                task_data.get("robot_visible_positions") or {}
+            ).items()
+        }
+    if "team_communication_inboxes" in task_data:
+        inboxes = task_data.get("team_communication_inboxes") or {}
+        for team_inboxes in inboxes.values():
+            if not isinstance(team_inboxes, dict):
+                continue
+            for channels in team_inboxes.values():
+                if not isinstance(channels, dict):
+                    continue
+                for packet in channels.values():
+                    if not isinstance(packet, dict):
+                        continue
+                    payload = packet.get("payload")
+                    if not isinstance(payload, dict):
+                        continue
+                    positions = payload.get("positions")
+                    if isinstance(positions, dict):
+                        payload["positions"] = {
+                            int(target_id): [
+                                float(position[0]),
+                                float(position[1]),
+                            ]
+                            for target_id, position in positions.items()
+                            if isinstance(position, (list, tuple))
+                            and len(position) >= 2
+                        }
+        task_data["team_communication_inboxes"] = inboxes
     for resource_name in (
         "robot_heat",
         "own_robot_heat",
         "robot_power",
         "own_robot_power",
+        "robot_buffer_energy",
+        "own_robot_buffer_energy",
+        "robot_chassis_power_cut_remaining",
+        "own_robot_chassis_power_cut_remaining",
         "robot_invincible_remaining",
         "own_robot_invincible_remaining",
         "robot_out_of_combat_seconds",
@@ -151,6 +226,15 @@ def restore_snapshot(
             }
     if "zone_inside" in task_data:
         task_data["zone_inside"] = set(task_data.get("zone_inside") or [])
+    if "assembly_success_probability" in task_data:
+        # JSON object keys are strings; TaskScenario uses integer difficulty
+        # keys for direct lookup during the referee tick.
+        task_data["assembly_success_probability"] = {
+            int(difficulty): float(probability)
+            for difficulty, probability in (
+                task_data.get("assembly_success_probability") or {}
+            ).items()
+        }
     for occupant_name in (
         "base_gain_occupants",
         "trapezoid_gain_occupants",
@@ -301,6 +385,62 @@ def restore_snapshot(
             int(target_id): float(value)
             for target_id, value in (task_data.get("radar_marks") or {}).items()
         }
+    if "radar_mark_x" in task_data:
+        task_data["radar_mark_x"] = {
+            int(target_id): float(value)
+            for target_id, value in (task_data.get("radar_mark_x") or {}).items()
+        }
+    if "radar_last_report_quality" in task_data:
+        task_data["radar_last_report_quality"] = {
+            int(target_id): str(value)
+            for target_id, value in (
+                task_data.get("radar_last_report_quality") or {}
+            ).items()
+        }
+    if "radar_last_report_roll" in task_data:
+        task_data["radar_last_report_roll"] = {
+            int(target_id): (None if value is None else float(value))
+            for target_id, value in (
+                task_data.get("radar_last_report_roll") or {}
+            ).items()
+        }
+    if "radar_missing_seconds" in task_data:
+        task_data["radar_missing_seconds"] = {
+            int(target_id): max(0.0, float(value))
+            for target_id, value in (
+                task_data.get("radar_missing_seconds") or {}
+            ).items()
+        }
+    if "radar_estimated_positions" in task_data:
+        task_data["radar_estimated_positions"] = {
+            int(target_id): [float(position[0]), float(position[1])]
+            for target_id, position in (
+                task_data.get("radar_estimated_positions") or {}
+            ).items()
+            if isinstance(position, (list, tuple)) and len(position) >= 2
+        }
+    if "radar_accuracy_probability" in task_data:
+        task_data["radar_accuracy_probability"] = {
+            str(key): max(0.0, float(value))
+            for key, value in (
+                task_data.get("radar_accuracy_probability") or {}
+            ).items()
+        }
+    if "radar_air_lock_probability" in task_data:
+        task_data["radar_air_lock_probability"] = {
+            int(key): max(0.0, float(value))
+            for key, value in (
+                task_data.get("radar_air_lock_probability") or {}
+            ).items()
+        }
+    if "radar_team_packet" in task_data:
+        packet = task_data.get("radar_team_packet") or {}
+        if isinstance(packet, dict) and isinstance(packet.get("targets"), dict):
+            packet["targets"] = {
+                int(target_id): value
+                for target_id, value in packet["targets"].items()
+            }
+        task_data["radar_team_packet"] = packet
     if "active_buffs" in task_data:
         task_data["active_buffs"] = [
             ActiveBuff(**item) for item in (task_data.get("active_buffs") or [])

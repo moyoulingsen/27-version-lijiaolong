@@ -37,8 +37,9 @@ class HeatRefereeTests(unittest.TestCase):
         scenario = TaskScenario()
         self.assertEqual(scenario.robot_heat_limit(1), 160)
         self.assertEqual(scenario.robot_q2_limit(1), 360)
-        scenario.robot_ammo[1] = 10
-        self.assertEqual(scenario.record_robot_fire(1, 4, team="blue"), 4)
+        scenario.robot_heat[1] = 300.0
+        scenario.robot_ammo[1] = 1
+        self.assertEqual(scenario.record_robot_fire(1, 1, team="blue"), 1)
         self.assertEqual(scenario.robot_heat[1], 400.0)
         self.assertEqual(scenario.robot_heat_lock_state(1, team="blue"), "q2")
 
@@ -67,6 +68,30 @@ class HeatRefereeTests(unittest.TestCase):
         )
         self.assertEqual(sentry.heat, 360.0)
         self.assertEqual(scenario.robot_heat_lock_state(8, team="red"), "q2")
+
+    def test_default_sentry_rate_reaches_q1_in_attack_posture(self) -> None:
+        scenario = TaskScenario(active_posture=1)
+        sentry = SentryState()
+        elapsed = 0.0
+        while not scenario.sentry_heat_locked and elapsed < 3.0:
+            scenario.update(
+                0.05,
+                sentry,
+                fire_request=True,
+                hit_target_id=6,
+                critical_zone=False,
+            )
+            elapsed += 0.05
+        self.assertTrue(scenario.sentry_heat_locked)
+        self.assertLess(elapsed, 2.5)
+        self.assertGreater(sentry.heat, 260.0)
+
+    def test_entering_reinforced_attack_posture_clears_heat_immediately(self) -> None:
+        scenario = TaskScenario(active_posture=1, sentry_heat_locked=True)
+        sentry = SentryState(heat=200.0)
+        scenario.toggle_posture_reinforced(sentry)
+        self.assertEqual(sentry.heat, 0.0)
+        self.assertFalse(scenario.sentry_heat_locked)
 
     def test_heat_cooling_runs_on_100ms_ticks(self) -> None:
         scenario = TaskScenario()

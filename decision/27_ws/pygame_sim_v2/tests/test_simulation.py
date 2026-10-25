@@ -49,6 +49,23 @@ class RobotSimulationTests(unittest.TestCase):
         self.app.navigator = AStarNavigator(self.planning_grid)
         self.app._planning_robot_signature = None
         self.app._manual_fire_held = False
+        self.app.special_wall_traverse_timers = {}
+        self.app.special_wall_traverse_active = set()
+        self.app.robot_chassis_dynamics = {}
+        self.app.region_edit_target = None
+        self.app.region_edit_custom_id = None
+        self.app.region_edit_kind = None
+        self.app.region_edit_patrol_kind = None
+        self.app.region_edit_new_custom = False
+        self.app.region_edit_points = []
+        self.app.region_edit_drag_index = None
+        self.app.region_edit_error = ""
+        self.app.region_edit_wall_id = None
+        self.app.region_edit_special_id = None
+        self.app.region_edit_slow_id = None
+        self.app.region_edit_new_wall = False
+        self.app.region_edit_new_special = False
+        self.app.region_edit_new_slow = False
         self.app._normalize_robot_positions()
 
     def test_spawn_positions_are_free_and_do_not_overlap(self) -> None:
@@ -121,6 +138,60 @@ class RobotSimulationTests(unittest.TestCase):
                 self.assertGreater(x, 1.5)
                 self.assertLessEqual(x, 3.0 - 2 * ROBOT_ENTITY_COLLISION_RADIUS)
                 self.assertAlmostEqual(y, 4.0)
+
+    def test_enemy_robots_two_three_four_cross_special_wall_after_one_second(self) -> None:
+        base_grid = OccupancyGrid.empty(self.app.arena)
+        polygon = ((2.0, 4.0), (2.2, 4.0), (2.2, 6.0), (2.0, 6.0))
+        self.app.collision_grid = base_grid
+        self.app.infantry_collision_grid = base_grid
+        self.app.special_wall_collision_polygons = (("enemy_test_wall", polygon),)
+        self.app.special_wall_individual_grids = {
+            "enemy_test_wall": base_grid.with_blocked_polygons(
+                (polygon,),
+                inflation=ROBOT_ENTITY_COLLISION_RADIUS,
+            )
+        }
+        self.app.special_wall_only_grids = {
+            "enemy_test_wall": OccupancyGrid.empty(
+                self.app.arena,
+                collision_radius=0.0,
+            ).with_blocked_polygons(
+                (polygon,),
+                inflation=ROBOT_ENTITY_COLLISION_RADIUS,
+            )
+        }
+        start = (1.5, 5.0)
+        proposed = (2.7, 5.0)
+
+        for target_id in (2, 3, 4):
+            with self.subTest(target_id=target_id):
+                self.app.special_wall_traverse_timers = {}
+                self.app.special_wall_traverse_active = set()
+                halfway = self.app._move_with_special_wall_delay(
+                    "blue",
+                    target_id,
+                    start,
+                    proposed,
+                    elapsed_seconds=0.5,
+                    collision_bodies=(),
+                    moving_radius=ROBOT_ENTITY_COLLISION_RADIUS,
+                )
+                released = self.app._move_with_special_wall_delay(
+                    "blue",
+                    target_id,
+                    start,
+                    proposed,
+                    elapsed_seconds=0.5,
+                    collision_bodies=(),
+                    moving_radius=ROBOT_ENTITY_COLLISION_RADIUS,
+                )
+
+                self.assertLess(halfway[0], 2.0)
+                self.assertEqual(released, proposed)
+                self.assertIn(
+                    ("blue", target_id, "enemy_test_wall"),
+                    self.app.special_wall_traverse_active,
+                )
 
     def test_selecting_friendly_sentry_reuses_existing_sentry_state(self) -> None:
         self.app._select_own_robot(3)
@@ -202,7 +273,6 @@ class RobotSimulationTests(unittest.TestCase):
         self.assertEqual(self.app._bridge_state(), before_bridge)
         self.assertEqual(self.app._local_decision(), before_decision)
         self.assertEqual(self.app.task.resolve_fire_target(self.app.sentry), before_target)
-
 
 if __name__ == "__main__":
     unittest.main()

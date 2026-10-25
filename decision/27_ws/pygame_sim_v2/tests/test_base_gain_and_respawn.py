@@ -68,7 +68,6 @@ class BaseGainAndRespawnTests(unittest.TestCase):
 
     def test_rulebook_revive_is_invincible_then_base_clears_weakness(self) -> None:
         scenario = self.configured_scenario(
-            revive_mode="rulebook",
             remaining_time=420.0,
             defence_buff=0,
         )
@@ -98,7 +97,6 @@ class BaseGainAndRespawnTests(unittest.TestCase):
 
     def test_other_ground_robot_uses_same_weak_and_invincible_flow(self) -> None:
         scenario = self.configured_scenario(
-            revive_mode="rulebook",
             remaining_time=420.0,
         )
         sentry = SentryState(x=10.0, y=12.0)
@@ -132,7 +130,7 @@ class BaseGainAndRespawnTests(unittest.TestCase):
         self.assertEqual(scenario.economy, 390)
 
     def test_snapshot_round_trip_preserves_robot_rule_states(self) -> None:
-        scenario = self.configured_scenario(revive_mode="rulebook")
+        scenario = self.configured_scenario()
         sentry = SentryState(x=3.0, y=7.5)
         scenario.robot_weak_state[3] = True
         scenario.robot_invincible_remaining[3] = 12.5

@@ -20,7 +20,7 @@ REGION_TYPES = (
     ("region_01_supply_red", "补给区增益点（红方）"),
     ("region_01_supply_blue", "补给区增益点（蓝方）"),
     ("region_02_road", "地形跨越卡（公路，按低→高添加）"),
-    ("region_03_tunnel", "地形跨越卡（隧道，按端→中→端添加）"),
+    ("region_03_tunnel", "地形跨越卡（隧道，每条框选完整端→中→端）"),
     ("region_04_fly_slope", "地形跨越卡（飞坡，每两处一组）"),
     ("region_05_trapezoid_highland_red", "梯形高地增益点（红方）"),
     ("region_05_trapezoid_highland_blue", "梯形高地增益点（蓝方）"),

@@ -119,6 +119,23 @@ class FortGainTests(unittest.TestCase):
         scenario.add_buff("test-rune", "heat_cooling", 5.0, 30.0)
         self.assertEqual(scenario.robot_heat_cooling_rate(3, team="red"), base * 5.0)
 
+    def test_sentry_posture_multiplies_after_fortress_cooling_selection(self) -> None:
+        scenario = self.configured_scenario(
+            active_posture=2,
+            own_outpost_hp=0,
+            own_outpost_destroyed_ever=True,
+            own_base_hp=2000,
+            own_base_min_hp=2000,
+        )
+        self.move_eligible_outside(scenario, team="red")
+        sentry = SentryState(x=7.0, y=7.0)
+        scenario.update(0.0, sentry)
+        self.assertTrue(scenario.robot_in_own_fort_gain("red", 8))
+        self.assertAlmostEqual(scenario.effective_sentry_heat_cooling, 35.0)
+
+        scenario.active_posture = 1
+        self.assertAlmostEqual(scenario.effective_sentry_heat_cooling, 315.0)
+
     def test_reserve_ammo_is_consumed_before_robot_ammo(self) -> None:
         scenario = self.configured_scenario(
             own_outpost_hp=0,

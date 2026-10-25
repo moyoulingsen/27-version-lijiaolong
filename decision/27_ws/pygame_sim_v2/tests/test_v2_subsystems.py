@@ -22,9 +22,32 @@ class EngineeringAssemblyTests(unittest.TestCase):
         scenario.own_robot_positions[2] = [2.5, 7.5]
 
     def _complete(self, scenario: TaskScenario, difficulty: int) -> None:
+        # Effect-specific regression tests should not depend on the calibrated
+        # random success table.  Probability behavior is covered separately.
+        scenario.assembly_success_probability[difficulty] = 1.0
         self.assertTrue(scenario.select_assembly_difficulty(difficulty))
         self.assertTrue(scenario.start_assembly())
         scenario.update(scenario.assembly_required + 0.1, SentryState())
+
+    def test_fixed_success_probability_table_is_calibrated_per_difficulty(self) -> None:
+        scenario = self._scenario()
+        self.assertEqual(
+            scenario.assembly_success_probability,
+            {1: 0.95, 2: 0.80, 3: 0.40, 4: 0.05},
+        )
+
+    def test_zero_probability_fails_without_applying_effect(self) -> None:
+        scenario = self._scenario(
+            assembly_success_probability={1: 0.0, 2: 1.0, 3: 1.0, 4: 1.0}
+        )
+        self._place_engineer_in_zone(scenario)
+        self.assertTrue(scenario.select_assembly_difficulty(1))
+        self.assertTrue(scenario.start_assembly())
+        scenario.update(scenario.assembly_required + 0.1, SentryState())
+
+        self.assertEqual(scenario.assembly_last_result, "失败")
+        self.assertNotIn(1, scenario.assembly_completed)
+        self.assertEqual(scenario.assembly_bonus_per_10s, 0)
 
     def test_unmarked_zone_blocks_assembly(self) -> None:
         scenario = TaskScenario()
@@ -179,6 +202,64 @@ class RadarTests(unittest.TestCase):
         scenario.radar_double_remaining = 0.1
         scenario.update(0.2, SentryState())
         self.assertEqual(scenario.radar_double_remaining, 0.0)
+
+    def test_radar_scan_uses_configured_accuracy_and_updates_estimate(self) -> None:
+        scenario = TaskScenario()
+        scenario.radar_accuracy_probability = {
+            "accurate": 1.0,
+            "half_accurate": 0.0,
+            "error": 0.0,
+        }
+        scenario.radar_data_loss_probability = 0.0
+
+        self.assertEqual(scenario.radar_scan(2), "accurate")
+        self.assertEqual(scenario.radar_last_report_quality[2], "accurate")
+        self.assertEqual(scenario.radar_marks[2], 1.0)
+        self.assertEqual(
+            scenario.radar_estimated_positions[2],
+            list(scenario.robot_position(2, team="blue")),
+        )
+
+    def test_radar_information_wave_builds_team_packet(self) -> None:
+        scenario = TaskScenario()
+        scenario.radar_info_wave_probability = 1.0
+
+        self.assertTrue(scenario.parse_radar_information_wave())
+        packet = scenario.radar_team_packet
+        self.assertTrue(packet["valid"])
+        self.assertIn(2, packet["targets"])
+        self.assertIn("health", packet["targets"][2])
+        self.assertIn("ammo", packet["targets"][2])
+        self.assertIn("team_economy", packet)
+
+    def test_radar_air_countermeasure_locks_for_forty_five_seconds(self) -> None:
+        scenario = TaskScenario()
+        scenario.radar_air_lock_probability = {1: 1.0, 2: 1.0, 3: 1.0}
+        scenario.set_radar_air_support(True)
+
+        self.assertTrue(scenario.attempt_radar_air_countermeasure())
+        self.assertEqual(scenario.radar_air_lock_count, 1)
+        self.assertEqual(scenario.radar_air_lock_remaining, 45.0)
+        self.assertFalse(scenario.robot_can_fire(5, team="blue")[0])
+        self.assertEqual(
+            scenario.robot_can_fire(5, team="blue")[1],
+            "radar_countermeasure_locked",
+        )
+        scenario.update(45.1, SentryState())
+        self.assertEqual(scenario.radar_air_lock_remaining, 0.0)
+
+    def test_interference_level_can_suppress_radar_vulnerability(self) -> None:
+        scenario = TaskScenario()
+        scenario.radar_mark(1, 120)
+        self.assertAlmostEqual(scenario.radar_vulnerability(1), 0.20)
+
+        scenario.enemy_radar_interference_level = 2
+        self.assertEqual(scenario.radar_vulnerability(1), 0.0)
+
+        scenario.radar_interference_parse_probability = 1.0
+        self.assertTrue(scenario.parse_radar_interference_key())
+        self.assertEqual(scenario.radar_interference_level, 2)
+        self.assertAlmostEqual(scenario.radar_vulnerability(1), 0.20)
 
 
 if __name__ == "__main__":

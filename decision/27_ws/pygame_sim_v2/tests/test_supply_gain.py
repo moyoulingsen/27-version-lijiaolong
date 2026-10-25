@@ -101,7 +101,7 @@ class SupplyGainTests(unittest.TestCase):
         self.assertEqual(scenario.apply_attack_damage(2, "42mm", team="red"), 200)
 
     def test_supply_accelerates_other_robot_revive_read_bar(self) -> None:
-        scenario = self.configured_scenario(revive_mode="rulebook")
+        scenario = self.configured_scenario()
         sentry = SentryState()
         scenario.set_robot_position(3, (7.0, 7.0), team="red")
         scenario.apply_attack_damage(3, "42mm", team="red")
@@ -114,10 +114,7 @@ class SupplyGainTests(unittest.TestCase):
         self.assertLessEqual(scenario.own_robot_invincible_remaining[3], 10.0)
 
     def test_low_base_health_accelerates_revive_outside_supply(self) -> None:
-        scenario = self.configured_scenario(
-            revive_mode="rulebook",
-            own_base_hp=1900,
-        )
+        scenario = self.configured_scenario(own_base_hp=1900)
         sentry = SentryState()
         scenario.set_robot_position(3, (12.0, 12.0), team="red")
         scenario.apply_attack_damage(3, "42mm", team="red")
@@ -131,7 +128,7 @@ class SupplyGainTests(unittest.TestCase):
         )
 
     def test_gain_card_enforces_ten_total_seconds_of_readbar_invincibility(self) -> None:
-        scenario = self.configured_scenario(revive_mode="rulebook")
+        scenario = self.configured_scenario()
         sentry = SentryState(x=12.0, y=12.0)
         scenario.kill_sentry()
         scenario.update(10.0, sentry)

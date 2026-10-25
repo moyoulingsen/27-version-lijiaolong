@@ -39,8 +39,8 @@ BLUE_START_POSITIONS = {
 # Building centres are anchored to the black-circle centres in
 # ``rmuc2026_field_layout.png``.  The source image is 3708 x 2052 px; these
 # values are the corresponding points in the simulator's 28 x 15 m frame.
-RED_BASE = (1.0, 7.5)
-BLUE_BASE = (27.0, 7.5)
+RED_BASE = (2.840, 7.505)
+BLUE_BASE = (25.205, 7.478)
 RED_OUTPOST = (11.055, 3.894)
 BLUE_OUTPOST = (16.976, 11.099)
 

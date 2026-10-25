@@ -37,11 +37,25 @@ HOME = RED_HOME
 SUPPLY = RED_SUPPLY_POINT
 ATTACK = OUTPOST_ATTACK_POINT
 MATCH_DURATION = 420.0
+TASK_RESPAWN_CONFIRM_SECONDS = 5.0
 DETECTION_RANGE = 6.2
 ATTACK_RANGE = 4.0
 WEAPON_RANGE = ATTACK_RANGE
 FIRE_ALIGNMENT_TOLERANCE = math.radians(4.0)
+ROBOT_VISION_HALF_ANGLE = math.radians(24.0)
+ROBOT_TURRET_SPEED = math.radians(210.0)
+ROBOT_TURNTABLE_SPEED = math.radians(150.0)
+ROBOT_TURNTABLE_SPEED_SCALE = {0: 0.0, 1: 0.6, 2: 1.0, 3: 1.6}
+ROBOT_TURNTABLE_HIT_PROBABILITY = {0: 1.0, 1: 0.90, 2: 0.75, 3: 0.50}
+OUTPOST_HIT_PROBABILITY = 0.90
+COMMUNICATION_ROBOT_IDS = (1, 2, 3, 4, 5, 8)
+ORDINARY_COMMUNICATION_IDS = (1, 2, 3, 4, 5)
+RADAR_COMMUNICATION_NODE = "radar"
 RULE_FIRE_RATE_MAX = 20
+# The rulebook's 50 ms armour detection interval allows at most 20 detected
+# 17 mm hits per second.  The simulator uses that referee-detectable ceiling
+# instead of inventing a lower rulebook value.
+SENTRY_FIRE_RATE_DEFAULT = RULE_FIRE_RATE_MAX
 # Rulebook V2.2.0, table 5-2. Raw damage before attack/defence buffs.
 RULE_DAMAGE_17MM = 20
 RULE_DAMAGE_42MM = 200
@@ -66,9 +80,7 @@ EVADE_OFFSETS = (
 )
 PATROL_POINTS = CONSERVATIVE_PATROL_POINTS
 
-# v2 rule-fidelity constants.  The task-one sheet keeps the sentry in "task"
-# mode (5 s confirm, 400 HP); the other values follow rulebook V2.2.0.
-RESPAWN_CONFIRM_SECONDS = 5.0
+# v2 rule-fidelity constants following rulebook V2.2.0.
 OUT_OF_COMBAT_SECONDS = 6.0
 PENDING_AMMO_CAP = 1000
 AMMO_CAP = 1000
@@ -151,6 +163,14 @@ ASSEMBLY_GAIN_ZONE_IDS = {
 # the 2-D simulator.  Leaving the interaction region follows the rulebook's
 # continuous 15-second card-loss failure condition.
 ASSEMBLY_SIM_DURATION = {1: 6.0, 2: 8.0, 3: 10.0, 4: 12.0}
+# The 2-D referee deliberately uses one fixed success probability per
+# assembly difficulty.  No manipulator physics is simulated: once the
+# engineer is inside the configured assembly polygon and the timer expires,
+# exactly one Bernoulli trial is made.  These are referee-side calibrated
+# values; callers can override the mapping on
+# ``TaskScenario(assembly_success_probability=...)`` without touching the
+# behavior tree or ROS bridge.
+ASSEMBLY_SUCCESS_PROBABILITY = {1: 0.95, 2: 0.80, 3: 0.40, 4: 0.05}
 ASSEMBLY_OUTSIDE_FAILURE_SECONDS = 15.0
 SUPPLY_GAIN_HEAL = 0.10
 SUPPLY_GAIN_HEAL_LATE = 0.25
@@ -172,6 +192,8 @@ FORT_GAIN_ZONE_IDS = {
 }
 FORT_ROBOT_IDS = (1, 3, 4, 8)
 GROUND_ROBOT_IDS = (1, 2, 3, 4, 8)
+ENGINEER_OPENING_DEFENCE = 0.50
+ENGINEER_OPENING_DEFENCE_SECONDS = 180.0
 TERRAIN_CROSSING_KINDS = ("road", "highland", "fly_slope", "tunnel")
 TERRAIN_CROSSING_WINDOWS = {
     "road": 3.0,
@@ -197,6 +219,26 @@ TERRAIN_TUNNEL_DEFENCE = 0.50
 TERRAIN_TUNNEL_DEFENCE_DURATION = 10.0
 TERRAIN_TUNNEL_COOLING = 2.0
 TERRAIN_TUNNEL_COOLING_DURATION = 120.0
+
+# Radar referee-side abstraction.  The simulator does not model RF waveforms
+# or 3-D laser geometry; it samples these configurable outcomes and then
+# applies the rulebook P/threshold logic to the result.
+RADAR_ROBOT_IDS = (1, 2, 3, 4, 5, 8)
+RADAR_MARK_TARGET_IDS = RADAR_ROBOT_IDS + (6, 7)
+RADAR_REPORT_FREQUENCY_HZ = 5.0
+RADAR_REPORT_INTERVAL = 1.0 / RADAR_REPORT_FREQUENCY_HZ
+RADAR_ACCURACY_PROBABILITY = {
+    "accurate": 0.80,
+    "half_accurate": 0.15,
+    "error": 0.05,
+}
+RADAR_DATA_LOSS_PROBABILITY = 0.02
+RADAR_AIR_LOCK_DURATION = 45.0
+RADAR_AIR_MAX_LOCKS = 5
+RADAR_AIR_LOCK_PROBABILITY = {1: 0.85, 2: 0.65, 3: 0.45}
+RADAR_INFO_WAVE_PROBABILITY = 0.80
+RADAR_INTERFERENCE_PARSE_PROBABILITY = 0.70
+RADAR_INFO_PACKET_TTL = 2.0
 
 # Level tables (rulebook 5.4).  Sentry and engineer do not use levels.
 LEVEL_EXP_THRESHOLDS = (0, 550, 1100, 1650, 2200, 2750, 3300, 3850, 4400, 5000)
@@ -282,7 +324,7 @@ ROBOT_PROFILES = {
     2: RobotProfile("工程", 250, "无", 0, None, 120, None, None, None, RULE_COLLISION_DAMAGE, True, False, False, True, None),
     3: RobotProfile("步兵", 200, "17mm", 0, 25.0, 45, 40, 12, RULE_DAMAGE_17MM, RULE_COLLISION_DAMAGE, True, False, True, True, 10),
     4: RobotProfile("步兵", 200, "17mm", 0, 25.0, 45, 40, 12, RULE_DAMAGE_17MM, RULE_COLLISION_DAMAGE, True, False, True, True, 10),
-    5: RobotProfile("空中", 100, "17mm", 750, 25.0, None, 100, 20, RULE_DAMAGE_17MM, None, False, False, True, False, 10),
+    5: RobotProfile("空中", 100, "17mm", 750, 25.0, None, 100, 20, RULE_DAMAGE_17MM, None, False, False, True, True, 10),
     8: RobotProfile("自动哨兵", 400, "17mm", 300, 25.0, 100, 260, 30, RULE_DAMAGE_17MM, RULE_COLLISION_DAMAGE, True, True, True, True, 10),
 }
 
@@ -359,6 +401,34 @@ def _initial_own_robot_ammo() -> dict[int, int]:
     }
 
 
+def _initial_radar_marks() -> dict[int, float]:
+    return {target_id: 0.0 for target_id in RADAR_MARK_TARGET_IDS}
+
+
+def _initial_radar_mark_x() -> dict[int, float]:
+    return {target_id: 0.0 for target_id in RADAR_ROBOT_IDS}
+
+
+def _initial_radar_report_quality() -> dict[int, str]:
+    return {target_id: "未发送" for target_id in RADAR_ROBOT_IDS}
+
+
+def _initial_radar_report_rolls() -> dict[int, float | None]:
+    return {target_id: None for target_id in RADAR_ROBOT_IDS}
+
+
+def _initial_radar_missing_seconds() -> dict[int, float]:
+    return {target_id: 0.0 for target_id in RADAR_ROBOT_IDS}
+
+
+def _initial_radar_estimated_positions() -> dict[int, list[float]]:
+    return {
+        entity.target_id: [entity.x, entity.y]
+        for entity in FIELD_ENTITIES
+        if entity.kind == "robot"
+    }
+
+
 def _initial_robot_heat() -> dict[int, float]:
     return {target_id: 0.0 for target_id in ROBOT_PROFILES}
 
@@ -369,6 +439,52 @@ def _initial_robot_heat_flags() -> dict[int, bool]:
 
 def _initial_robot_power() -> dict[int, float]:
     return {target_id: 0.0 for target_id in ROBOT_PROFILES}
+
+
+def _initial_robot_buffer_energy() -> dict[int, float]:
+    return {target_id: BUFFER_ENERGY_CAP for target_id in ROBOT_PROFILES}
+
+
+def _initial_robot_power_cut() -> dict[int, float]:
+    return {target_id: 0.0 for target_id in ROBOT_PROFILES}
+
+
+def _initial_robot_view_angles() -> dict[str, dict[int, float]]:
+    return {
+        team: {target_id: 0.0 for target_id in COMMUNICATION_ROBOT_IDS}
+        for team in ("red", "blue")
+    }
+
+
+def _initial_robot_turntable_angles() -> dict[str, dict[int, float]]:
+    return {
+        team: {target_id: 0.0 for target_id in COMMUNICATION_ROBOT_IDS}
+        for team in ("red", "blue")
+    }
+
+
+def _initial_robot_turntable_modes() -> dict[str, dict[int, int]]:
+    return {
+        team: {target_id: 1 for target_id in COMMUNICATION_ROBOT_IDS}
+        for team in ("red", "blue")
+    }
+
+
+def _initial_robot_visible_positions() -> dict[str, dict[int, dict[int, list[float]]]]:
+    return {
+        team: {target_id: {} for target_id in COMMUNICATION_ROBOT_IDS}
+        for team in ("red", "blue")
+    }
+
+
+def _initial_team_communication_inboxes() -> dict[str, dict[str, dict[str, dict]]]:
+    receivers = tuple(str(target_id) for target_id in COMMUNICATION_ROBOT_IDS) + (
+        RADAR_COMMUNICATION_NODE,
+    )
+    return {
+        team: {receiver: {} for receiver in receivers}
+        for team in ("red", "blue")
+    }
 
 
 def _initial_robot_shots() -> dict[int, int | None]:
@@ -575,7 +691,10 @@ class TaskScenario:
     ammo: int = ROBOT_PROFILES[8].initial_ammo
     pending_ammo: int = 0
     economy: int = ECONOMY_INITIAL
-    fire_rate: int = RULE_FIRE_RATE_MAX
+    # Enemy economy is referee-side telemetry used by the radar information
+    # packet.  Existing gameplay controls continue to spend only ``economy``.
+    enemy_economy: int = ECONOMY_INITIAL
+    fire_rate: int = SENTRY_FIRE_RATE_DEFAULT
     # Retained for old scenario files and referee-panel compatibility.  The
     # live damage path intentionally ignores this debug value and uses the
     # projectile/armor rule tables below.
@@ -611,6 +730,26 @@ class TaskScenario:
     own_robot_positions: dict[int, list[float]] = field(
         default_factory=_initial_own_robot_positions
     )
+    # Every robot has a persistent viewing direction and a local position-only
+    # perception result.  The red sentry's live angle remains in SentryState;
+    # its mirrored entry here is refreshed during each scenario update.
+    robot_view_angles: dict[str, dict[int, float]] = field(
+        default_factory=_initial_robot_view_angles
+    )
+    robot_turntable_angles: dict[str, dict[int, float]] = field(
+        default_factory=_initial_robot_turntable_angles
+    )
+    robot_turntable_modes: dict[str, dict[int, int]] = field(
+        default_factory=_initial_robot_turntable_modes
+    )
+    robot_visible_positions: dict[str, dict[int, dict[int, list[float]]]] = field(
+        default_factory=_initial_robot_visible_positions
+    )
+    # Latest-message inboxes enforce the rulebook team communication topology.
+    # Keys are receiver node names ("1".."8" and "radar"), then channels.
+    team_communication_inboxes: dict[str, dict[str, dict[str, dict]]] = field(
+        default_factory=_initial_team_communication_inboxes
+    )
     own_robot_hp: dict[int, float] = field(default_factory=_initial_own_robot_health)
     own_robot_ammo: dict[int, int] = field(default_factory=_initial_own_robot_ammo)
     # Live referee-style resource telemetry.  The dictionaries include every
@@ -624,6 +763,22 @@ class TaskScenario:
     heat_cooling_accumulator: float = 0.0
     robot_power: dict[int, float] = field(default_factory=_initial_robot_power)
     own_robot_power: dict[int, float] = field(default_factory=_initial_robot_power)
+    robot_buffer_energy: dict[int, float] = field(
+        default_factory=_initial_robot_buffer_energy
+    )
+    own_robot_buffer_energy: dict[int, float] = field(
+        default_factory=_initial_robot_buffer_energy
+    )
+    robot_chassis_power_cut_remaining: dict[int, float] = field(
+        default_factory=_initial_robot_power_cut
+    )
+    own_robot_chassis_power_cut_remaining: dict[int, float] = field(
+        default_factory=_initial_robot_power_cut
+    )
+    hit_random_seed: int = 2026
+    hit_random_counter: int = 0
+    last_hit_probability: float = 1.0
+    last_hit_roll: float | None = None
     # Read-only cumulative dataset telemetry.  These are deliberately separate
     # from ``robot_ammo``/``ammo`` which retain live remaining-ammunition
     # semantics used by the simulator and rulebook controls.
@@ -654,7 +809,6 @@ class TaskScenario:
     )
     posture_reinforced: bool = False
     # v2 economy/respawn additions.
-    revive_mode: str = "task"
     revive_required: float = 0.0
     revive_progress: float = 0.0
     instant_revive_count: int = 0
@@ -699,6 +853,9 @@ class TaskScenario:
         default_factory=lambda: {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 0.0}
     )
     hero_mode: str = "ranged"
+    hero_deployed: dict[str, bool] = field(
+        default_factory=lambda: {"red": False, "blue": False}
+    )
     infantry_chassis_mode: str = "blood"
     infantry_launcher_mode: str = "cooling"
     # Field gain points / energy rune.
@@ -810,6 +967,13 @@ class TaskScenario:
     assembly_active: bool = False
     assembly_progress: float = 0.0
     assembly_required: float = 0.0
+    # Per-difficulty fixed success probabilities for the 2-D assembly trial.
+    assembly_success_probability: dict[int, float] = field(
+        default_factory=lambda: dict(ASSEMBLY_SUCCESS_PROBABILITY)
+    )
+    assembly_last_difficulty: int = 0
+    assembly_last_result: str = "未判定"
+    assembly_last_roll: float | None = None
     assembly_outside_seconds: float = 0.0
     assembly_level4_cooldown_remaining: float = 0.0
     assembly_completed: set[int] = field(default_factory=set)
@@ -834,12 +998,60 @@ class TaskScenario:
     dart_hits: int = 0
     enemy_base_armor_deployed: bool = False
     own_base_armor_deployed: bool = False
-    # Radar marking.
-    radar_marks: dict[int, float] = field(
-        default_factory=lambda: {target: 0.0 for target in (1, 3, 4, 5, 8, 6, 7)}
+    # Radar recognition/marking.  P and its double-vulnerability behavior are
+    # retained; reports now arrive through the probabilistic referee model
+    # below instead of only through a manual +10 button.
+    radar_marks: dict[int, float] = field(default_factory=_initial_radar_marks)
+    radar_mark_x: dict[int, float] = field(default_factory=_initial_radar_mark_x)
+    radar_last_report_quality: dict[int, str] = field(
+        default_factory=_initial_radar_report_quality
     )
+    radar_last_report_roll: dict[int, float | None] = field(
+        default_factory=_initial_radar_report_rolls
+    )
+    radar_estimated_positions: dict[int, list[float]] = field(
+        default_factory=_initial_radar_estimated_positions
+    )
+    radar_missing_seconds: dict[int, float] = field(
+        default_factory=_initial_radar_missing_seconds
+    )
+    radar_accuracy_probability: dict[str, float] = field(
+        default_factory=lambda: dict(RADAR_ACCURACY_PROBABILITY)
+    )
+    radar_data_loss_probability: float = RADAR_DATA_LOSS_PROBABILITY
+    radar_report_interval: float = RADAR_REPORT_INTERVAL
+    radar_report_accumulator: float = 0.0
+    radar_report_count: int = 0
+    radar_random_seed: int = 2026
+    radar_random_counter: int = 0
+    radar_last_report_status: str = "未发送"
     radar_double_remaining: float = 0.0
     radar_double_charges: int = 0
+    # Decoded information-wave referee object.  Team robot communication is
+    # routed separately through ``team_communication_inboxes``.
+    radar_team_packet: dict[str, object] = field(default_factory=dict)
+    radar_info_wave_decoded: bool = False
+    radar_info_wave_probability: float = RADAR_INFO_WAVE_PROBABILITY
+    radar_info_wave_last_roll: float | None = None
+    radar_info_wave_age: float = RADAR_INFO_PACKET_TTL
+    radar_info_wave_ttl: float = RADAR_INFO_PACKET_TTL
+    # Electronic-warfare levels start at the rulebook's level-one baseline.
+    radar_interference_level: int = 1
+    enemy_radar_interference_level: int = 1
+    radar_interference_parse_probability: float = RADAR_INTERFERENCE_PARSE_PROBABILITY
+    radar_interference_last_roll: float | None = None
+    radar_interference_last_result: str = "未解析"
+    # Simplified radar laser countermeasure state for the enemy aerial robot.
+    radar_air_support_active: bool = False
+    radar_air_lock_progress: float = 0.0
+    radar_air_lock_remaining: float = 0.0
+    radar_air_lock_count: int = 0
+    radar_air_lock_difficulty: int = 1
+    radar_air_lock_probability: dict[int, float] = field(
+        default_factory=lambda: dict(RADAR_AIR_LOCK_PROBABILITY)
+    )
+    radar_air_last_roll: float | None = None
+    radar_air_last_result: str = "未尝试"
     # Match result bookkeeping (rulebook 5.8).
     winner_team: str | None = None
     end_reason: str = ""
@@ -984,20 +1196,21 @@ class TaskScenario:
     @property
     def effective_sentry_heat_cooling(self) -> float:
         _, _, multiplier, _ = self.posture_effects
+        base = float(ROBOT_PROFILES[8].heat_cooling_per_second or 0)
         cooling_buff = max(
             1.0,
             self.buff_value("heat_cooling"),
             self.terrain_crossing_cooling(8, team="red"),
         )
-        multiplied = (
-            float(ROBOT_PROFILES[8].heat_cooling_per_second or 0)
-            * multiplier
-            * cooling_buff
-        )
+        cooling_before_posture = base * cooling_buff
         if self.robot_in_own_fort_gain("red", 8):
-            base = float(ROBOT_PROFILES[8].heat_cooling_per_second or 0) * multiplier
-            return max(multiplied, base + self.fortress_cooling_bonus("red"))
-        return multiplied
+            cooling_before_posture = max(
+                cooling_before_posture,
+                base + self.fortress_cooling_bonus("red"),
+            )
+        # Rulebook 5.6.4: first settle the strongest ordinary/fortress cooling
+        # gain, then multiply the result by the active sentry posture effect.
+        return cooling_before_posture * multiplier
 
     @property
     def effective_buffer_cap(self) -> float:
@@ -1217,6 +1430,21 @@ class TaskScenario:
         # Tech-core defence is a persistent team reward for ground robots.
         # Same-type defence bonuses use the greatest value rather than adding.
         defence = self.assembly_defence if team == "red" else 0.0
+        if target_id == 1 and self.hero_deployment_active(team):
+            defence = max(defence, 0.25)
+        if target_id == 2:
+            health = (
+                self.own_robot_hp.get(target_id, 0.0)
+                if team == "red"
+                else self.robot_hp.get(target_id, 0.0)
+            )
+            opening_cutoff = MATCH_DURATION - ENGINEER_OPENING_DEFENCE_SECONDS
+            if (
+                not self.game_finished
+                and health > 0.0
+                and self.remaining_time > opening_cutoff
+            ):
+                defence = max(defence, ENGINEER_OPENING_DEFENCE)
         defence = max(defence, self.terrain_crossing_defence(target_id, team=team))
         if self.robot_in_base_gain(team, target_id):
             defence = max(defence, BASE_GAIN_DEFENCE)
@@ -1278,6 +1506,14 @@ class TaskScenario:
         )
         return max(0.0, float(timers.get(target_id, 0.0)))
 
+    @property
+    def sentry_is_out_of_combat(self) -> bool:
+        """Whether the sentry is alive after six uninterrupted combat-free seconds."""
+        return (
+            self.sentry_hp > 0.0
+            and self.sentry_out_of_combat_seconds >= OUT_OF_COMBAT_SECONDS
+        )
+
     def _reset_robot_out_of_combat(self, target_id: int, *, team: str) -> None:
         if target_id not in GROUND_ROBOT_IDS:
             return
@@ -1295,9 +1531,34 @@ class TaskScenario:
     def sentry_chassis_power_cut(self) -> bool:
         return self.sentry_chassis_power_cut_remaining > 0.0
 
+    def robot_chassis_power_cut(self, target_id: int, *, team: str) -> bool:
+        if team == "red" and target_id == 8:
+            return self.sentry_chassis_power_cut
+        timers = (
+            self.robot_chassis_power_cut_remaining
+            if team == "blue"
+            else self.own_robot_chassis_power_cut_remaining
+        )
+        return float(timers.get(target_id, 0.0)) > 0.0
+
+    def robot_buffer_energy_value(self, target_id: int, *, team: str) -> float:
+        if team == "red" and target_id == 8:
+            return float(self.sentry_buffer_energy)
+        values = (
+            self.robot_buffer_energy
+            if team == "blue"
+            else self.own_robot_buffer_energy
+        )
+        return float(values.get(target_id, BUFFER_ENERGY_CAP))
+
     @property
     def sentry_fire_locked(self) -> bool:
         return self.sentry_heat_locked or self.sentry_heat_permanent_lock
+
+    @property
+    def radar_air_fire_locked(self) -> bool:
+        """Whether radar countermeasure currently blocks aerial firing."""
+        return self.radar_air_lock_remaining > 0.0
 
     @property
     def resources_low_for_patrol(self) -> bool:
@@ -1366,7 +1627,7 @@ class TaskScenario:
         if team not in ("red", "blue"):
             raise ValueError(f"unknown team {team}")
         positions = self.robot_positions if team == "blue" else self.own_robot_positions
-        allowed = (1, 2, 3, 4, 8) if team == "blue" else (1, 2, 3, 4, 5)
+        allowed = (1, 2, 3, 4, 5, 8)
         if target_id not in allowed or target_id not in positions:
             raise ValueError(f"target {target_id} is not a controllable robot")
         if elapsed_seconds < 0.0:
@@ -1406,6 +1667,286 @@ class TaskScenario:
                 return HOME
             return sentry.x, sentry.y
         return self.robot_position(target_id, team="red")
+
+    @staticmethod
+    def _communication_receivers(sender: int | str) -> tuple[str, ...]:
+        sender_key = str(sender)
+        ordinary = tuple(str(target_id) for target_id in ORDINARY_COMMUNICATION_IDS)
+        if sender_key == RADAR_COMMUNICATION_NODE:
+            return tuple(str(target_id) for target_id in COMMUNICATION_ROBOT_IDS)
+        if sender_key == "8":
+            return ordinary + (RADAR_COMMUNICATION_NODE,)
+        if sender_key in ordinary:
+            return tuple(receiver for receiver in ordinary if receiver != sender_key)
+        raise ValueError(f"unknown communication sender {sender}")
+
+    def send_team_message(
+        self,
+        team: str,
+        sender: int | str,
+        channel: str,
+        payload: dict,
+    ) -> tuple[str, ...]:
+        """Route one latest-value message using rulebook communication limits."""
+        if team not in ("red", "blue"):
+            raise ValueError(f"unknown team {team}")
+        if not channel:
+            raise ValueError("communication channel must not be empty")
+        sender_key = str(sender)
+        receivers = self._communication_receivers(sender_key)
+        team_inboxes = self.team_communication_inboxes.setdefault(team, {})
+        packet = {
+            "sender": sender_key,
+            "timestamp": self.match_elapsed,
+            "payload": dict(payload),
+        }
+        for receiver in receivers:
+            team_inboxes.setdefault(receiver, {})[channel] = packet
+        return receivers
+
+    def received_team_message(
+        self,
+        team: str,
+        receiver: int | str,
+        channel: str,
+    ) -> dict | None:
+        if team not in ("red", "blue"):
+            raise ValueError(f"unknown team {team}")
+        packet = (
+            self.team_communication_inboxes.get(team, {})
+            .get(str(receiver), {})
+            .get(channel)
+        )
+        return packet if isinstance(packet, dict) else None
+
+    def robot_view_angle(
+        self,
+        target_id: int,
+        *,
+        team: str,
+        sentry: SentryState | None = None,
+    ) -> float:
+        if team not in ("red", "blue"):
+            raise ValueError(f"unknown team {team}")
+        if target_id not in COMMUNICATION_ROBOT_IDS:
+            raise ValueError(f"unknown robot {target_id}")
+        if team == "red" and target_id == 8 and sentry is not None:
+            return float(sentry.turret_angle)
+        return float(self.robot_view_angles.get(team, {}).get(target_id, 0.0))
+
+    def set_robot_view_angle(
+        self,
+        target_id: int,
+        angle: float,
+        *,
+        team: str,
+    ) -> None:
+        if team not in ("red", "blue"):
+            raise ValueError(f"unknown team {team}")
+        if target_id not in COMMUNICATION_ROBOT_IDS:
+            raise ValueError(f"unknown robot {target_id}")
+        self.robot_view_angles.setdefault(team, {})[target_id] = (
+            float(angle) + math.pi
+        ) % math.tau - math.pi
+
+    def robot_turntable_mode(self, target_id: int, *, team: str) -> int:
+        if team not in ("red", "blue"):
+            raise ValueError(f"unknown team {team}")
+        if target_id not in COMMUNICATION_ROBOT_IDS:
+            raise ValueError(f"unknown robot {target_id}")
+        return int(self.robot_turntable_modes.get(team, {}).get(target_id, 1))
+
+    def set_robot_turntable_mode(
+        self,
+        target_id: int,
+        mode: int,
+        *,
+        team: str,
+    ) -> None:
+        if mode not in ROBOT_TURNTABLE_SPEED_SCALE:
+            raise ValueError("turntable mode must be 0, 1, 2, or 3")
+        self.robot_turntable_modes.setdefault(team, {})[target_id] = int(mode)
+
+    def cycle_robot_turntable_mode(self, target_id: int, *, team: str) -> int:
+        mode = self.robot_turntable_mode(target_id, team=team)
+        mode = 1 if mode >= 3 else mode + 1
+        self.set_robot_turntable_mode(target_id, mode, team=team)
+        labels = {1: "低速", 2: "中速", 3: "高速"}
+        self._set_event(
+            f"{'己方' if team == 'red' else '蓝方'} {target_id} 号小转盘切换为"
+            f"{labels[mode]}"
+        )
+        return mode
+
+    def robot_turntable_angle(
+        self,
+        target_id: int,
+        *,
+        team: str,
+        sentry: SentryState | None = None,
+    ) -> float:
+        if team == "red" and target_id == 8 and sentry is not None:
+            return float(sentry.spin_angle)
+        return float(self.robot_turntable_angles.get(team, {}).get(target_id, 0.0))
+
+    def robot_turntable_speed(self, target_id: int, *, team: str) -> float:
+        mode = self.robot_turntable_mode(target_id, team=team)
+        return ROBOT_TURNTABLE_SPEED * ROBOT_TURNTABLE_SPEED_SCALE[mode]
+
+    def shooting_hit_probability(
+        self,
+        shooter_id: int,
+        *,
+        team: str,
+        target_id: int | None = None,
+    ) -> float:
+        if target_id == 6:
+            return OUTPOST_HIT_PROBABILITY
+        mode = self.robot_turntable_mode(shooter_id, team=team)
+        return ROBOT_TURNTABLE_HIT_PROBABILITY[mode]
+
+    def _hit_random(self) -> float:
+        self.hit_random_counter += 1
+        return random.Random(self.hit_random_seed + self.hit_random_counter).random()
+
+    def robot_visible_enemy_positions(
+        self,
+        target_id: int,
+        *,
+        team: str,
+    ) -> dict[int, tuple[float, float]]:
+        visible = self.robot_visible_positions.get(team, {}).get(target_id, {})
+        return {
+            int(enemy_id): (float(position[0]), float(position[1]))
+            for enemy_id, position in visible.items()
+        }
+
+    @staticmethod
+    def target_in_sensor_view(
+        observer: tuple[float, float],
+        target: tuple[float, float],
+        view_angle: float,
+        *,
+        maximum_distance: float = DETECTION_RANGE,
+        half_angle: float = ROBOT_VISION_HALF_ANGLE,
+    ) -> bool:
+        """Return whether target is inside the sensor cone.
+
+        RMUC walls affect movement collision only.  They never occlude robot
+        vision, target locking, radar information, or referee hit geometry.
+        """
+        delta_x = target[0] - observer[0]
+        delta_y = target[1] - observer[1]
+        distance = math.hypot(delta_x, delta_y)
+        if distance > maximum_distance:
+            return False
+        target_angle = math.atan2(delta_y, delta_x)
+        angle_error = abs(
+            (target_angle - view_angle + math.pi) % math.tau - math.pi
+        )
+        return angle_error <= half_angle
+
+    def _update_robot_perception(
+        self,
+        sentry: SentryState,
+        elapsed_seconds: float,
+    ) -> None:
+        """Advance robot view angles, local vision, and routed position messages."""
+        self.team_communication_inboxes = _initial_team_communication_inboxes()
+        for team in ("red", "blue"):
+            target_team = self.opposing_team(team)
+            for target_id in COMMUNICATION_ROBOT_IDS:
+                if team == "red" and target_id == 8:
+                    self.robot_turntable_angles[team][target_id] = float(
+                        sentry.spin_angle
+                    )
+                elif not self.robot_chassis_power_cut(target_id, team=team):
+                    turntable_angle = self.robot_turntable_angle(
+                        target_id,
+                        team=team,
+                    )
+                    self.robot_turntable_angles[team][target_id] = (
+                        turntable_angle
+                        + self.robot_turntable_speed(target_id, team=team)
+                        * max(0.0, elapsed_seconds)
+                        + math.pi
+                    ) % math.tau - math.pi
+                if team == "red" and target_id == 8:
+                    angle = float(sentry.turret_angle)
+                    self.robot_view_angles[team][target_id] = angle
+                else:
+                    angle = self.robot_view_angle(target_id, team=team)
+                    angle = (
+                        angle + ROBOT_TURRET_SPEED * max(0.0, elapsed_seconds)
+                        + math.pi
+                    ) % math.tau - math.pi
+                    self.robot_view_angles[team][target_id] = angle
+
+                health = (
+                    self.own_robot_health(target_id)
+                    if team == "red"
+                    else self.enemy_health(target_id)
+                )
+                visible: dict[int, list[float]] = {}
+                if health > 0.0:
+                    observer = self.combatant_position(
+                        team,
+                        target_id,
+                        sentry=sentry,
+                    )
+                    for enemy_id in COMMUNICATION_ROBOT_IDS:
+                        enemy_health = (
+                            self.enemy_health(enemy_id)
+                            if target_team == "blue"
+                            else self.own_robot_health(enemy_id)
+                        )
+                        if enemy_health <= 0.0:
+                            continue
+                        enemy_position = self.combatant_position(
+                            target_team,
+                            enemy_id,
+                            sentry=sentry,
+                        )
+                        if self.target_in_sensor_view(
+                            observer,
+                            enemy_position,
+                            angle,
+                        ):
+                            visible[enemy_id] = [
+                                float(enemy_position[0]),
+                                float(enemy_position[1]),
+                            ]
+                self.robot_visible_positions[team][target_id] = visible
+
+        for team in ("red", "blue"):
+            target_team = self.opposing_team(team)
+            for sender_id in COMMUNICATION_ROBOT_IDS:
+                self.send_team_message(
+                    team,
+                    sender_id,
+                    f"vision:{sender_id}",
+                    {
+                        "positions": dict(
+                            self.robot_visible_positions[team][sender_id]
+                        )
+                    },
+                )
+            radar_positions = {
+                enemy_id: list(
+                    self.combatant_position(
+                        target_team,
+                        enemy_id,
+                        sentry=sentry,
+                    )
+                )
+                for enemy_id in COMMUNICATION_ROBOT_IDS
+            }
+            self.send_team_message(
+                team,
+                RADAR_COMMUNICATION_NODE,
+                "radar_positions",
+                {"positions": radar_positions},
+            )
 
     def own_robot_health(self, target_id: int) -> float:
         if target_id == 8:
@@ -1536,6 +2077,19 @@ class TaskScenario:
             )
             return table[index]
         return ROBOT_PROFILES[target_id].power_limit
+
+    def robot_muzzle_speed_limit(
+        self,
+        target_id: int,
+        *,
+        team: str = "blue",
+    ) -> float | None:
+        """Return the live muzzle-speed limit including hero deployment."""
+        if target_id not in ROBOT_PROFILES:
+            raise ValueError(f"unknown robot {target_id}")
+        if target_id == 1 and self.hero_deployment_active(team):
+            return 16.5
+        return ROBOT_PROFILES[target_id].muzzle_speed_limit
 
     def robot_q2_limit(self, target_id: int, *, team: str = "blue") -> int | None:
         q0 = self.robot_heat_limit(target_id, team=team)
@@ -1691,11 +2245,31 @@ class TaskScenario:
     def cycle_hero_mode(self) -> None:
         old = self._max_hp_snapshot((1,))
         self.hero_mode = "melee" if self.hero_mode == "ranged" else "ranged"
+        if self.hero_mode != "ranged":
+            self.hero_deployed = {"red": False, "blue": False}
         self._apply_max_hp_changes(old)
         self._refresh_heat_locks((1,))
         self._set_event(
             f"英雄整机：{'近战优先' if self.hero_mode == 'melee' else '远程优先'}"
         )
+
+    def hero_deployment_active(self, team: str) -> bool:
+        if team not in ("red", "blue"):
+            raise ValueError(f"unknown team {team}")
+        return self.hero_mode == "ranged" and bool(self.hero_deployed.get(team, False))
+
+    def toggle_hero_deployment(self, team: str) -> bool:
+        """Manually enter or exit ranged-priority hero deployment mode."""
+        if team not in ("red", "blue"):
+            raise ValueError(f"unknown team {team}")
+        if self.hero_mode != "ranged":
+            self._set_event("英雄需选择远程优先才能进入部署模式")
+            return False
+        self.hero_deployed[team] = not self.hero_deployed.get(team, False)
+        state = "进入" if self.hero_deployed[team] else "退出"
+        side = "己方" if team == "red" else "蓝方"
+        self._set_event(f"{side}英雄{state}部署模式")
+        return True
 
     def cycle_infantry_chassis(self) -> None:
         old = self._max_hp_snapshot((3, 4))
@@ -1832,6 +2406,9 @@ class TaskScenario:
             raise ValueError(f"unknown robot {target_id}")
         if shots <= 0:
             return 0
+        if team == "blue" and target_id == 5 and self.radar_air_lock_remaining > 0.0:
+            self._set_event("蓝方空中机器人被雷达反制，发射机构锁定")
+            return 0
         if target_id in GROUND_ROBOT_IDS and self.robot_is_weak(target_id, team=team):
             self._set_event(f"{ROBOT_PROFILES[target_id].role}处于虚弱状态，发射机锁定")
             return 0
@@ -1844,6 +2421,24 @@ class TaskScenario:
             return 0
         available = self.robot_available_shots(target_id, team=team)
         fired = min(int(shots), available)
+        multiplier = (
+            self.posture_heat_gain_multiplier
+            if target_id == 8 and team == "red"
+            else 1.0
+        )
+        heat_per_shot = float(profile.heat_per_shot) * multiplier
+        q0 = self.robot_heat_limit(target_id, team=team)
+        heat = self.robot_heat_value(target_id, team=team, sentry=sentry)
+        if heat_per_shot > 0.0 and q0 is not None:
+            # A long render frame must not bypass the referee lock by settling
+            # every accumulated projectile as one unrestricted batch.  Allow
+            # only the first projectile that crosses Q0; subsequent shots wait
+            # until the launcher has cooled and unlocked.
+            shots_until_lock = max(
+                1,
+                int(math.floor(max(0.0, float(q0) - heat) / heat_per_shot)) + 1,
+            )
+            fired = min(fired, shots_until_lock)
         if fired <= 0:
             self._set_event(f"{profile.role}允许发弹量不足")
             return 0
@@ -1864,15 +2459,9 @@ class TaskScenario:
             self.robot_ammo[target_id] -= own_ammo_shots
         else:
             self.own_robot_ammo[target_id] -= own_ammo_shots
-        multiplier = (
-            self.posture_heat_gain_multiplier
-            if target_id == 8 and team == "red"
-            else 1.0
-        )
-        heat = self.robot_heat_value(target_id, team=team, sentry=sentry)
         self._set_robot_heat_value(
             target_id,
-            heat + fired * float(profile.heat_per_shot) * multiplier,
+            heat + fired * heat_per_shot,
             team=team,
             sentry=sentry,
         )
@@ -1944,6 +2533,8 @@ class TaskScenario:
             return False, "weak_state"
         if team == "red" and target_id == 8 and self.respawn_fire_locked:
             return False, "respawn_fire_locked"
+        if team == "blue" and target_id == 5 and self.radar_air_lock_remaining > 0.0:
+            return False, "radar_countermeasure_locked"
         if self.robot_heat_lock_state(target_id, team=team) != "normal":
             return False, "heat_locked"
         if self.robot_available_shots(target_id, team=team) <= 0:
@@ -1985,6 +2576,8 @@ class TaskScenario:
         if fired <= 0:
             return FireResult(team, shooter_id, profile.projectile, reason="fire_rejected")
         if shot is None:
+            self.last_hit_probability = 0.0
+            self.last_hit_roll = None
             return FireResult(
                 team,
                 shooter_id,
@@ -1994,8 +2587,35 @@ class TaskScenario:
             )
 
         target_team = self.opposing_team(team)
+        hit_probability = self.shooting_hit_probability(
+            shooter_id,
+            team=team,
+            target_id=shot.target_id,
+        )
+        self.last_hit_probability = hit_probability
+        self.last_hit_roll = (
+            self._hit_random() if hit_probability < 1.0 else None
+        )
+        if (
+            self.last_hit_roll is not None
+            and self.last_hit_roll >= hit_probability
+        ):
+            return FireResult(
+                team,
+                shooter_id,
+                profile.projectile,
+                fired_shots=fired,
+                target_team=target_team,
+                target_id=shot.target_id,
+                reason="fired_miss",
+                shot=shot,
+            )
         if critical_zone is None:
-            critical_zone = self.is_center_hit(shot)
+            # The 2-D point-target model has no vertical impact coordinate and
+            # therefore cannot prove a hit landed inside the physical
+            # 10 mm x 10 mm building critical area.  Critical damage remains
+            # available to explicit referee/test callers via critical_zone.
+            critical_zone = False
         if target_armor_zone is None:
             shooter_position = self.combatant_position(
                 team,
@@ -2007,6 +2627,12 @@ class TaskScenario:
                 shooter_position,
                 target_team=target_team,
             )
+        if (
+            shooter_id == 1
+            and shot.target_id == 7
+            and self.hero_deployment_active(team)
+        ):
+            attack_buff = max(attack_buff, 1.5)
         damage = self.apply_attack_damage(
             shot.target_id,
             profile.projectile,
@@ -2105,8 +2731,8 @@ class TaskScenario:
     ) -> FireSolution | None:
         """Return the best aligned target and its shot geometry.
 
-        ``line_of_sight`` is injected by the 2-D layer so the pure scenario
-        model stays independent of the occupancy map.
+        ``line_of_sight`` remains accepted for integration compatibility, but
+        field walls do not block referee hit detection in this simulation.
         """
         return self.resolve_robot_fire_shot(
             8,
@@ -2166,10 +2792,6 @@ class TaskScenario:
                 (target_angle - aim_angle + math.pi) % math.tau - math.pi
             )
             if angle_error > alignment_tolerance:
-                continue
-            if line_of_sight is not None and not line_of_sight(
-                shooter_position, (target_x, target_y)
-            ):
                 continue
             aligned.append((angle_error, distance, target_id))
         if not aligned:
@@ -2402,14 +3024,6 @@ class TaskScenario:
         self.defence_buff = max(0, min(100, self.defence_buff + 10 * direction))
         self._set_event(f"防御增益已调整为 {self.defence_buff}%")
 
-    def toggle_revive_mode(self) -> None:
-        self.revive_mode = "rulebook" if self.revive_mode == "task" else "task"
-        self._set_event(
-            "复活模式：规则书读条"
-            if self.revive_mode == "rulebook"
-            else "复活模式：任务 5 秒确认"
-        )
-
     def exchange_17mm(
         self,
         *,
@@ -2417,15 +3031,55 @@ class TaskScenario:
         sentry: SentryState | None = None,
     ) -> bool:
         """Exchange sentry 17mm ammunition using rulebook table 5-6."""
+        allowed, reason = self.can_exchange_17mm(remote=remote, sentry=sentry)
+        if not allowed:
+            self._set_event(reason)
+            return False
         if remote:
-            if self.sentry_out_of_combat_seconds < OUT_OF_COMBAT_SECONDS:
-                self._set_event("远程兑换需要先脱战 6 秒")
-                return False
             cost = REMOTE_17MM_COST
             amount = REMOTE_17MM_AMOUNT
         else:
+            cost = LOCAL_17MM_COST
+            amount = LOCAL_17MM_AMOUNT
+        self.economy -= cost
+        self.exchanged_17mm += amount
+        if remote:
+            self.remote_ammo_pending += amount
+            self.remote_ammo_remaining = REMOTE_EXCHANGE_DELAY
+            self._set_event(
+                f"远程兑换 {amount} 发，6 秒后生效｜"
+                f"金币 -{cost}，剩余 {self.economy}"
+            )
+        else:
+            space = max(0, AMMO_CAP - self.ammo)
+            transferred = min(space, amount)
+            self.ammo += transferred
+            self.pending_ammo += amount - transferred
+            self._set_event(
+                f"增益点本地兑换 {amount} 发｜"
+                f"金币 -{cost}，剩余 {self.economy}"
+            )
+        return True
+
+    def can_exchange_17mm(
+        self,
+        *,
+        remote: bool,
+        sentry: SentryState | None = None,
+    ) -> tuple[bool, str]:
+        """Return whether the sentry can buy one 17 mm exchange unit."""
+        cost = REMOTE_17MM_COST if remote else LOCAL_17MM_COST
+        amount = REMOTE_17MM_AMOUNT if remote else LOCAL_17MM_AMOUNT
+        if self.sentry_hp <= 0.0:
+            return False, "哨兵已阵亡，不能兑换弹量"
+        if remote:
+            if not self.sentry_is_out_of_combat:
+                remaining = OUT_OF_COMBAT_SECONDS - self.sentry_out_of_combat_seconds
+                return False, f"远程兑换需脱战，还需 {remaining:.1f} 秒"
+        else:
             inside_base_gain = self.robot_in_base_gain("red", 8)
             inside_outpost_gain = self.robot_in_outpost_gain("red", 8)
+            inside_supply_gain = self.robot_in_supply_gain("red", 8)
             if sentry is not None:
                 inside_base_gain = self._position_in_base_gain(
                     "red", (sentry.x, sentry.y)
@@ -2437,65 +3091,49 @@ class TaskScenario:
                     )
                     for zone_team in ("red", "blue")
                 )
-            inside_supply_gain = self.robot_in_supply_gain("red", 8)
-            if sentry is not None:
                 inside_supply_gain = self._robot_position_in_supply_gain(
                     "red", 8, sentry
                 )
             if not inside_base_gain and not inside_outpost_gain and not inside_supply_gain:
-                self._set_event(
-                    "需要位于己方补给区、基地或可占领的前哨站增益点"
-                    "才能本地兑换弹量"
-                )
-                return False
-            cost = LOCAL_17MM_COST
-            amount = LOCAL_17MM_AMOUNT
+                return False, "需位于补给区、基地或可用前哨增益点"
         if self.economy < cost:
-            self._set_event(f"金币不足：需要 {cost}")
-            return False
+            return False, f"金币不足：需要 {cost}"
         if self.exchanged_17mm + amount > AMMO_EXCHANGE_CAP_17MM:
-            self._set_event("已达到 17mm 兑换上限")
-            return False
-        self.economy -= cost
-        self.exchanged_17mm += amount
-        if remote:
-            self.remote_ammo_pending += amount
-            self.remote_ammo_remaining = REMOTE_EXCHANGE_DELAY
-            self._set_event(f"远程兑换 {amount} 发，6 秒后生效，金币 -{cost}")
-        else:
-            space = max(0, AMMO_CAP - self.ammo)
-            transferred = min(space, amount)
-            self.ammo += transferred
-            self.pending_ammo += amount - transferred
-            self._set_event(f"增益点本地兑换 {amount} 发，金币 -{cost}")
-        return True
+            return False, "已达到 17mm 兑换上限"
+        return True, "可兑换"
 
     def exchange_remote_heal(self) -> bool:
-        if self.sentry_hp <= 0.0:
-            self._set_event("哨兵已阵亡，无法远程回血")
-            return False
-        if self.sentry_out_of_combat_seconds < OUT_OF_COMBAT_SECONDS:
-            self._set_event("远程回血需要先脱战 6 秒")
-            return False
-        if self.remote_heal_remaining is not None:
-            self._set_event("远程回血已在等待生效")
-            return False
         cost = self.remote_heal_cost
-        if self.economy < cost:
-            self._set_event(f"金币不足：远程回血需要 {cost}")
+        allowed, reason = self.can_exchange_remote_heal()
+        if not allowed:
+            self._set_event(reason)
             return False
         self.economy -= cost
         self.remote_heal_remaining = REMOTE_HEAL_DELAY
-        self._set_event(f"远程回血已购买，6 秒后生效，金币 -{cost}")
+        self._set_event(
+            f"远程回血已购买，6 秒后生效｜"
+            f"金币 -{cost}，剩余 {self.economy}"
+        )
         return True
 
-    def exchange_instant_revive(self) -> bool:
-        if self.sentry_hp > 0.0:
-            self._set_event("哨兵存活，无需立即复活")
-            return False
-        cost = self.instant_revive_cost
+    def can_exchange_remote_heal(self) -> tuple[bool, str]:
+        if self.sentry_hp <= 0.0:
+            return False, "哨兵已阵亡，无法远程回血"
+        if not self.sentry_is_out_of_combat:
+            remaining = OUT_OF_COMBAT_SECONDS - self.sentry_out_of_combat_seconds
+            return False, f"远程回血需脱战，还需 {remaining:.1f} 秒"
+        if self.remote_heal_remaining is not None:
+            return False, "远程回血已在等待生效"
+        cost = self.remote_heal_cost
         if self.economy < cost:
-            self._set_event(f"金币不足：立即复活需要 {cost}")
+            return False, f"金币不足：远程回血需要 {cost}"
+        return True, "可远程回血"
+
+    def exchange_instant_revive(self) -> bool:
+        cost = self.instant_revive_cost
+        allowed, reason = self.can_exchange_instant_revive()
+        if not allowed:
+            self._set_event(reason)
             return False
         self.economy -= cost
         self.instant_revive_count += 1
@@ -2510,8 +3148,18 @@ class TaskScenario:
         self.respawn_fire_locked = True
         self.sentry_heat_locked = self.sentry_heat_permanent_lock
         self.sentry_buffer_energy = self.effective_buffer_cap
-        self._set_event(f"立即复活，金币 -{cost}")
+        self._set_event(
+            f"立即复活｜金币 -{cost}，剩余 {self.economy}"
+        )
         return True
+
+    def can_exchange_instant_revive(self) -> tuple[bool, str]:
+        if self.sentry_hp > 0.0 or self.death_elapsed is None:
+            return False, "仅哨兵阵亡且复活读条进行中可立即复活"
+        cost = self.instant_revive_cost
+        if self.economy < cost:
+            return False, f"金币不足：立即复活需要 {cost}"
+        return True, "可立即复活"
 
     def adjust_own_outpost_health(self, direction: int) -> None:
         self._validate_adjustment_direction(direction)
@@ -2550,7 +3198,6 @@ class TaskScenario:
         target_defence_buff: float = 0.0,
         critical_zone: bool = False,
         target_armor_zone: str | None = None,
-        confirm_respawn: bool | None = None,
     ) -> DecisionView:
         if elapsed_seconds < 0.0:
             raise ValueError("elapsed_seconds must be non-negative")
@@ -2585,14 +3232,7 @@ class TaskScenario:
                 )
         self._update_heat_cooling(sentry, simulation_elapsed)
 
-        # Keep resource telemetry useful even for robots that are only shown
-        # in the two-dimensional referee view. Their power draw is supplied
-        # by a future controller; firing heat uses the referee's 10 Hz clock.
-        if simulation_elapsed > 0.0:
-            for target_id in ROBOT_PROFILES:
-                decay = max(0.0, 1.0 - simulation_elapsed * 5.0)
-                self.robot_power[target_id] *= decay
-                self.own_robot_power[target_id] *= decay
+        self._update_other_robot_power(simulation_elapsed)
         self._unseen_damage_window_remaining = max(
             0.0,
             self._unseen_damage_window_remaining - elapsed_seconds,
@@ -2617,10 +3257,6 @@ class TaskScenario:
             if self.remaining_time <= 0.0:
                 self.finish_game("比赛时间结束")
 
-        if confirm_respawn is None:
-            provisional = decision_override or self.evaluate(sentry)
-            confirm_respawn = bool(provisional.confirm_respawn)
-
         if not self.game_paused:
             self._update_buffs(simulation_elapsed)
             self._update_rune(simulation_elapsed)
@@ -2636,7 +3272,7 @@ class TaskScenario:
             if not self.game_finished and self.sentry_hp > 0.0:
                 self._update_power(sentry, simulation_elapsed)
             if not self.game_finished:
-                self._update_respawn(sentry, simulation_elapsed, bool(confirm_respawn))
+                self._update_respawn(sentry, simulation_elapsed)
                 self._update_robot_respawns(simulation_elapsed)
                 self._update_base_gain_points(sentry, simulation_elapsed)
                 self._update_trapezoid_gain_points(sentry, simulation_elapsed)
@@ -2669,6 +3305,8 @@ class TaskScenario:
         decision = decision_override or self.evaluate(sentry)
         if self.game_finished:
             decision = self.evaluate(sentry)
+        elif decision.confirm_respawn:
+            self._confirm_task_respawn(sentry)
         if not self.game_paused and not self.game_finished:
             self._update_posture(decision.posture, simulation_elapsed)
         requested = bool(decision.shoot_mode) if fire_request is None else fire_request
@@ -2703,6 +3341,7 @@ class TaskScenario:
                 )
                 if result.fired:
                     self._ammo_shot_accumulator -= result.fired_shots
+        self._update_robot_perception(sentry, simulation_elapsed)
         return decision
 
     def rule_damage(
@@ -3087,6 +3726,10 @@ class TaskScenario:
         elapsed_seconds: float,
     ) -> None:
         """Apply heat cooling on the referee system's 100 ms clock."""
+        if self.active_posture == 1 and self.posture_mode == "reinforced":
+            sentry.heat = 0.0
+            if self.sentry_heat_locked and not self.sentry_heat_permanent_lock:
+                self.sentry_heat_locked = False
         if elapsed_seconds <= 0.0:
             return
         self.heat_cooling_accumulator += elapsed_seconds
@@ -3153,9 +3796,7 @@ class TaskScenario:
         self.outpost_rebuild_progress["red"][8] = 0.0
         self.death_elapsed = 0.0
         self.revive_progress = 0.0
-        self.revive_required = (
-            self.revive_seconds_required if self.revive_mode == "rulebook" else 0.0
-        )
+        self.revive_required = self.revive_seconds_required
         self.remote_heal_remaining = None
         self.instant_revive_power_boost_remaining = 0.0
         self.revive_invincibility_source = ""
@@ -3222,11 +3863,7 @@ class TaskScenario:
             raise ValueError(f"unknown team {team}")
         death[target_id] = 0.0
         progress[target_id] = 0.0
-        required[target_id] = (
-            self.revive_seconds_required_for(target_id, team=team)
-            if self.revive_mode == "rulebook"
-            else RESPAWN_CONFIRM_SECONDS
-        )
+        required[target_id] = self.revive_seconds_required_for(target_id, team=team)
         weak[target_id] = False
         invincible[target_id] = 0.0
         sources = (
@@ -4300,7 +4937,7 @@ class TaskScenario:
             if kind not in TERRAIN_CROSSING_KINDS:
                 continue
             field_team = str(item.get("field_team") or item.get("team") or "")
-            if field_team not in ("red", "blue"):
+            if field_team not in ("red", "blue", "neutral"):
                 continue
             points = normalize_points(item.get("points"))
             if validate_polygon(points) is not None:
@@ -4707,8 +5344,25 @@ class TaskScenario:
             )
             return False
         self.assembly_difficulty = difficulty
+        self.assembly_last_difficulty = difficulty
+        self.assembly_last_result = "已选择，等待开始"
+        self.assembly_last_roll = None
         self._set_event(f"已选择 {difficulty} 级装配")
         return True
+
+    def assembly_success_rate(self, difficulty: int | None = None) -> float:
+        """Return the configured fixed success probability for one attempt.
+
+        The value is intentionally kept in the referee-side scenario state so
+        the Pygame simulator can vary it without changing the behavior tree.
+        Values outside ``[0, 1]`` are clamped defensively when read.
+        """
+        selected = self.assembly_difficulty if difficulty is None else difficulty
+        configured = self.assembly_success_probability.get(
+            selected,
+            ASSEMBLY_SUCCESS_PROBABILITY.get(selected, 1.0),
+        )
+        return max(0.0, min(1.0, float(configured)))
 
     def start_assembly(self) -> bool:
         if self.assembly_difficulty <= 0:
@@ -4741,9 +5395,12 @@ class TaskScenario:
         self.assembly_progress = 0.0
         self.assembly_outside_seconds = 0.0
         self.assembly_required = ASSEMBLY_SIM_DURATION[self.assembly_difficulty]
+        self.assembly_last_result = "装配中"
+        self.assembly_last_roll = None
         self._set_event(
             f"开始 {self.assembly_difficulty} 级装配，"
-            f"二维裁判计时 {self.assembly_required:.0f} 秒"
+            f"二维裁判计时 {self.assembly_required:.0f} 秒，"
+            f"固定成功率 {self.assembly_success_rate() * 100:.0f}%"
         )
         return True
 
@@ -4754,6 +5411,8 @@ class TaskScenario:
             self.assembly_progress = 0.0
             self.assembly_required = 0.0
             self.assembly_outside_seconds = 0.0
+            self.assembly_last_result = "取消"
+            self.assembly_last_roll = None
             if failed and difficulty == 4:
                 self.assembly_level4_cooldown_remaining = max(
                     self.assembly_level4_cooldown_remaining,
@@ -4764,12 +5423,34 @@ class TaskScenario:
 
     def _complete_assembly(self) -> None:
         difficulty = self.assembly_difficulty
+        success_probability = self.assembly_success_rate(difficulty)
+        self.assembly_last_roll = random.random()
+        if self.assembly_last_roll >= success_probability:
+            self.assembly_active = False
+            self.assembly_progress = 0.0
+            self.assembly_required = 0.0
+            self.assembly_outside_seconds = 0.0
+            self.assembly_last_result = "失败"
+            if difficulty == 4:
+                self.assembly_level4_cooldown_remaining = max(
+                    self.assembly_level4_cooldown_remaining,
+                    90.0,
+                )
+                cooldown = "，四级装配冷却 90 秒"
+            else:
+                cooldown = ""
+            self._set_event(
+                f"{difficulty} 级装配失败：随机值 {self.assembly_last_roll:.3f}"
+                f" ≥ 成功率 {success_probability:.3f}{cooldown}"
+            )
+            return
         first = difficulty not in self.assembly_completed
         self.assembly_completed.add(difficulty)
         self.assembly_active = False
         self.assembly_progress = 0.0
         self.assembly_required = 0.0
         self.assembly_outside_seconds = 0.0
+        self.assembly_last_result = "成功"
         self.assembly_difficulty = 0
         if difficulty == 1:
             self.assembly_bonus_per_10s += 50 if first else 5
@@ -4792,7 +5473,8 @@ class TaskScenario:
             self.own_base_shield += gained - applied
             self.assembly_bonus_per_10s += 50
         self._set_event(
-            f"{difficulty} 级装配完成，每 10 秒额外金币 "
+            f"{difficulty} 级装配成功（随机值 {self.assembly_last_roll:.3f}，"
+            f"成功率 {success_probability:.3f}），每 10 秒额外金币 "
             f"{self.assembly_bonus_per_10s}"
         )
 
@@ -4927,6 +5609,11 @@ class TaskScenario:
         self._finish_if_base_destroyed()
 
     def radar_mark(self, target_id: int, amount: float = 10.0) -> None:
+        """Compatibility helper for deterministic tests and referee setup.
+
+        The Pygame panel uses :meth:`radar_scan`; this method remains useful
+        for tests that need to place a target directly at a threshold.
+        """
         if target_id not in self.radar_marks:
             raise ValueError(f"target {target_id} has no radar mark")
         self.radar_marks[target_id] = min(
@@ -4937,7 +5624,11 @@ class TaskScenario:
         )
 
     def radar_vulnerability(self, target_id: int) -> float:
-        if target_id not in (1, 3, 4, 5, 8):
+        if target_id not in RADAR_ROBOT_IDS:
+            return 0.0
+        # If the opponent's interference level is higher than ours, the
+        # rulebook suppresses the radar-originated vulnerability effect.
+        if self.enemy_radar_interference_level > self.radar_interference_level:
             return 0.0
         progress = self.radar_marks.get(target_id, 0.0)
         if progress >= 120.0:
@@ -4959,10 +5650,235 @@ class TaskScenario:
         self._set_event("雷达双倍易伤已触发 30 秒")
         return True
 
+    def _radar_random(self) -> float:
+        """Return a replayable pseudo-random value for radar abstractions."""
+        self.radar_random_counter += 1
+        return random.Random(
+            self.radar_random_seed + self.radar_random_counter
+        ).random()
+
+    def _radar_quality_from_roll(self, roll: float) -> str:
+        probabilities = {
+            key: max(0.0, float(value))
+            for key, value in self.radar_accuracy_probability.items()
+            if key in ("accurate", "half_accurate", "error")
+        }
+        total = sum(probabilities.values())
+        if total <= 0.0:
+            return "error"
+        cursor = 0.0
+        for quality in ("accurate", "half_accurate", "error"):
+            cursor += probabilities.get(quality, 0.0) / total
+            if roll < cursor:
+                return quality
+        return "error"
+
+    def _radar_apply_quality(self, target_id: int, quality: str) -> None:
+        previous = self.radar_last_report_quality.get(target_id, "未发送")
+        x = self.radar_mark_x.get(target_id, 0.0)
+        if quality == "accurate":
+            x = x + 1.0 if previous in ("accurate", "half_accurate") else 1.0
+        elif quality == "half_accurate":
+            x = x + 0.5 if previous in ("accurate", "half_accurate") else 0.5
+        else:
+            x = x - 0.8 if previous in ("error", "中断") else -0.8
+        self.radar_mark_x[target_id] = x
+        self.radar_marks[target_id] = max(
+            0.0, min(150.0, self.radar_marks.get(target_id, 0.0) + x)
+        )
+        self.radar_last_report_quality[target_id] = quality
+
+    def _radar_update_estimated_position(
+        self, target_id: int, quality: str, roll: float
+    ) -> None:
+        actual_x, actual_y = self.robot_position(target_id, team="blue")
+        if quality == "accurate":
+            radius = 0.0
+        elif quality == "half_accurate":
+            radius = 0.8 + (roll * 997 % 1.0) * 0.8
+        else:
+            radius = 1.6 + (roll * 991 % 1.0) * 1.4
+        if radius <= 0.0:
+            estimate = [actual_x, actual_y]
+        else:
+            angle = (roll * 7919 % 1.0) * math.tau
+            estimate = [
+                actual_x + math.cos(angle) * radius,
+                actual_y + math.sin(angle) * radius,
+            ]
+        self.radar_estimated_positions[target_id] = estimate
+
+    def radar_scan(self, target_id: int) -> str:
+        """Generate one referee-side radar report for an enemy robot.
+
+        The result is one of ``accurate``, ``half_accurate``, ``error`` or
+        ``中断``.  P updates follow the rulebook after the probabilistic
+        measurement quality has been selected.
+        """
+        if target_id not in RADAR_ROBOT_IDS:
+            raise ValueError(f"target {target_id} is not a radar robot target")
+        loss_roll = self._radar_random()
+        self.radar_last_report_roll[target_id] = loss_roll
+        if loss_roll < max(0.0, min(1.0, self.radar_data_loss_probability)):
+            self.radar_missing_seconds[target_id] = (
+                self.radar_missing_seconds.get(target_id, 0.0)
+                + self.radar_report_interval
+            )
+            while self.radar_missing_seconds[target_id] >= 0.5:
+                self.radar_missing_seconds[target_id] -= 0.5
+                self._radar_apply_quality(target_id, "中断")
+            self.radar_last_report_status = f"{target_id}号数据中断"
+            return "中断"
+
+        quality_roll = self._radar_random()
+        quality = self._radar_quality_from_roll(quality_roll)
+        self.radar_missing_seconds[target_id] = 0.0
+        self._radar_apply_quality(target_id, quality)
+        self._radar_update_estimated_position(target_id, quality, quality_roll)
+        self.radar_last_report_quality[target_id] = quality
+        self.radar_last_report_status = f"{target_id}号{quality}"
+        return quality
+
+    def _refresh_radar_team_packet(self) -> None:
+        targets: dict[int, dict[str, object]] = {}
+        for target_id in RADAR_ROBOT_IDS:
+            actual_position = list(self.robot_position(target_id, team="blue"))
+            targets[target_id] = {
+                "position": actual_position,
+                "health": round(float(self.enemy_health(target_id)), 3),
+                "ammo": int(self.robot_ammo.get(target_id, 0)),
+                "level": int(self.robot_level.get(target_id, 1)),
+                "weak": bool(self.robot_weak_state.get(target_id, False)),
+                "defence": self.robot_effective_defence(target_id, team="blue"),
+                "radar_mark": round(self.radar_marks.get(target_id, 0.0), 3),
+                "radar_vulnerability": self.radar_vulnerability(target_id),
+            }
+        self.radar_team_packet = {
+            "valid": bool(self.radar_info_wave_decoded and self.radar_info_wave_age <= self.radar_info_wave_ttl),
+            "timestamp": self.match_elapsed,
+            "targets": targets,
+            "team_economy": {
+                "own": int(self.economy),
+                "enemy": int(self.enemy_economy),
+            },
+            "active_buffs": [
+                {
+                    "source": buff.source,
+                    "kind": buff.kind,
+                    "value": buff.value,
+                    "remaining": buff.remaining,
+                }
+                for buff in self.active_buffs
+            ],
+            "gain_points": {
+                "assembly_completed": sorted(self.assembly_completed),
+                "central_highland_owners": dict(self.central_highland_owners),
+            },
+        }
+
+    def parse_radar_information_wave(self) -> bool:
+        """Attempt to decode the rulebook information wave."""
+        self.radar_info_wave_last_roll = self._radar_random()
+        if self.radar_info_wave_last_roll >= max(
+            0.0, min(1.0, self.radar_info_wave_probability)
+        ):
+            self.radar_info_wave_decoded = False
+            self.radar_info_wave_age = self.radar_info_wave_ttl
+            self.radar_interference_last_result = "信息波解析失败"
+            self._refresh_radar_team_packet()
+            self._set_event("雷达信息波解析失败")
+            return False
+        self.radar_info_wave_decoded = True
+        self.radar_info_wave_age = 0.0
+        self.radar_interference_last_result = "信息波已解析"
+        self._refresh_radar_team_packet()
+        self._set_event("雷达信息波解析成功：全队态势包已更新")
+        return True
+
+    def parse_radar_interference_key(self) -> bool:
+        """Attempt to raise this radar base's interference difficulty."""
+        self.radar_interference_last_roll = self._radar_random()
+        if self.radar_interference_last_roll >= max(
+            0.0, min(1.0, self.radar_interference_parse_probability)
+        ):
+            self.radar_interference_last_result = "干扰密钥解析失败"
+            self._set_event("雷达干扰密钥解析失败")
+            return False
+        self.radar_interference_level = min(3, self.radar_interference_level + 1)
+        self.radar_interference_last_result = (
+            f"己方干扰等级 {self.radar_interference_level}"
+        )
+        self._set_event(
+            f"干扰密钥解析成功：己方干扰等级 {self.radar_interference_level}"
+        )
+        return True
+
+    def set_radar_air_support(self, active: bool) -> None:
+        self.radar_air_support_active = bool(active)
+        if not active:
+            self.radar_air_lock_progress = 0.0
+        self._set_event(
+            "对方空中支援已开始" if active else "对方空中支援已暂停"
+        )
+
+    def attempt_radar_air_countermeasure(self) -> bool:
+        """Try one simplified laser countermeasure attempt against robot 5."""
+        if not self.radar_air_support_active:
+            self.radar_air_last_result = "空中支援未启动"
+            self._set_event("空中支援未启动，无法进行雷达反制")
+            return False
+        if self.radar_air_lock_remaining > 0.0:
+            self.radar_air_last_result = "已在锁定"
+            return False
+        if self.radar_air_lock_count >= RADAR_AIR_MAX_LOCKS:
+            self.radar_air_last_result = "本局反制次数已用尽"
+            self._set_event("雷达反制次数已达上限5次")
+            return False
+        if self.radar_air_lock_count == 0:
+            difficulty = 1
+        elif self.radar_air_lock_count < 3:
+            difficulty = 2
+        else:
+            difficulty = 3
+        self.radar_air_lock_difficulty = difficulty
+        self.radar_air_last_roll = self._radar_random()
+        probability = max(
+            0.0, min(1.0, self.radar_air_lock_probability.get(difficulty, 0.0))
+        )
+        if self.radar_air_last_roll >= probability:
+            self.radar_air_last_result = f"反制失败（难度{difficulty}）"
+            self._set_event(self.radar_air_last_result)
+            return False
+        self.radar_air_lock_count += 1
+        self.radar_air_lock_progress = 100.0
+        self.radar_air_lock_remaining = RADAR_AIR_LOCK_DURATION
+        self.radar_air_last_result = f"反制成功，发射机构锁定{RADAR_AIR_LOCK_DURATION:.0f}秒"
+        self._set_event(
+            f"雷达反制成功：空中机器人发射机构锁定 {RADAR_AIR_LOCK_DURATION:.0f} 秒"
+        )
+        return True
+
     def _update_radar(self, elapsed_seconds: float) -> None:
         self.radar_double_remaining = max(
             0.0, self.radar_double_remaining - elapsed_seconds
         )
+        if self.radar_air_lock_remaining > 0.0:
+            self.radar_air_lock_remaining = max(
+                0.0, self.radar_air_lock_remaining - elapsed_seconds
+            )
+            if self.radar_air_lock_remaining <= 0.0:
+                self.radar_air_lock_progress = 0.0
+                self.radar_air_last_result = "反制锁定已解除"
+        self.radar_report_accumulator += elapsed_seconds
+        interval = max(0.01, float(self.radar_report_interval))
+        while self.radar_report_accumulator >= interval:
+            self.radar_report_accumulator -= interval
+            self.radar_report_count += 1
+            for target_id in RADAR_ROBOT_IDS:
+                self.radar_scan(target_id)
+        if self.radar_info_wave_decoded:
+            self.radar_info_wave_age += elapsed_seconds
+            self._refresh_radar_team_packet()
         if any(value >= 100.0 for value in self.radar_marks.values()):
             self._radar_mark_seconds = getattr(self, "_radar_mark_seconds", 0.0) + elapsed_seconds
             if self._radar_mark_seconds >= 60.0:
@@ -5011,12 +5927,69 @@ class TaskScenario:
             sentry.reset_chassis_dynamics()
             self._set_event("底盘功率超限，缓冲能量耗尽，断电 5 秒")
 
-    def toggle_posture_reinforced(self) -> None:
+    def _update_other_robot_power(self, elapsed_seconds: float) -> None:
+        """Apply the rulebook 60 J buffer and five-second chassis cut."""
+        if elapsed_seconds <= 0.0:
+            return
+        for team in ("red", "blue"):
+            power_values = self.own_robot_power if team == "red" else self.robot_power
+            buffers = (
+                self.own_robot_buffer_energy
+                if team == "red"
+                else self.robot_buffer_energy
+            )
+            cuts = (
+                self.own_robot_chassis_power_cut_remaining
+                if team == "red"
+                else self.robot_chassis_power_cut_remaining
+            )
+            for target_id in ROBOT_PROFILES:
+                if team == "red" and target_id == 8:
+                    continue
+                power_limit = self.robot_power_limit(target_id, team=team)
+                if power_limit is None:
+                    power_values[target_id] = 0.0
+                    buffers[target_id] = BUFFER_ENERGY_CAP
+                    cuts[target_id] = 0.0
+                    continue
+                if cuts[target_id] > 0.0:
+                    cuts[target_id] = max(0.0, cuts[target_id] - elapsed_seconds)
+                    power_values[target_id] = 0.0
+                    if cuts[target_id] <= 0.0:
+                        buffers[target_id] = BUFFER_ENERGY_CAP
+                    continue
+                over_power = power_values[target_id] - float(power_limit)
+                if over_power <= 0.0:
+                    buffers[target_id] = min(
+                        BUFFER_ENERGY_CAP,
+                        buffers[target_id] - over_power * elapsed_seconds,
+                    )
+                    continue
+                buffers[target_id] = max(
+                    0.0,
+                    buffers[target_id] - over_power * elapsed_seconds,
+                )
+                if buffers[target_id] <= 0.0:
+                    cuts[target_id] = CHASSIS_POWER_CUT_SECONDS
+                    power_values[target_id] = 0.0
+                    self._set_event(
+                        f"{'己方' if team == 'red' else '蓝方'} {target_id} 号"
+                        "底盘功率超限，断电 5 秒"
+                    )
+
+    def toggle_posture_reinforced(self, sentry: SentryState | None = None) -> None:
         active = self.active_posture
         if self.reinforced_time.get(active, 0.0) >= POSTURE_REINFORCED_SECONDS:
             self._set_event("该姿态的强化时间已用完")
             return
         self.posture_reinforced = not self.posture_reinforced
+        if self.posture_reinforced and active == 1 and sentry is not None:
+            # Reinforced attack posture requires current heat to remain zero,
+            # so entering it clears existing heat immediately rather than on
+            # the next simulation/referee tick.
+            sentry.heat = 0.0
+            if not self.sentry_heat_permanent_lock:
+                self.sentry_heat_locked = False
         self._set_event(
             "已进入强化姿态" if self.posture_reinforced else "已退出强化姿态"
         )
@@ -5056,26 +6029,37 @@ class TaskScenario:
         self,
         sentry: SentryState,
         elapsed_seconds: float,
-        confirmed: bool,
     ) -> None:
         if self.sentry_hp > 0.0 or self.death_elapsed is None:
             return
         self.death_elapsed += elapsed_seconds
-        if self.revive_mode == "rulebook":
-            self._update_rulebook_revive(sentry, elapsed_seconds)
-            return
-        if self.death_elapsed < RESPAWN_CONFIRM_SECONDS or not confirmed:
-            return
+        self._update_rulebook_revive(sentry, elapsed_seconds)
+
+    def _confirm_task_respawn(self, sentry: SentryState) -> bool:
+        """Apply the task-mode five-second autonomous respawn confirmation."""
+        if (
+            self.sentry_hp > 0.0
+            or self.death_elapsed is None
+            or self.death_elapsed < TASK_RESPAWN_CONFIRM_SECONDS
+        ):
+            return False
         self.sentry_hp = 400.0
         sentry.heat = 0.0
         self.death_elapsed = None
+        self.revive_progress = 0.0
+        self.revive_required = 0.0
+        self.invincible_remaining = 0.0
+        self.weak_state = True
+        self.revive_invincibility_source = "task_confirm"
+        self.instant_revive_power_boost_remaining = 0.0
         self.respawn_fire_locked = True
         self.sentry_heat_locked = self.sentry_heat_permanent_lock
         self.sentry_buffer_energy = self.effective_buffer_cap
         self.sentry_chassis_power_cut_remaining = 0.0
         sentry.reset_chassis_dynamics()
         self._ammo_shot_accumulator = 0.0
-        self._set_event("哨兵已复活，热量与缓冲能量重置，返回补给区解锁射击")
+        self._set_event("自主确认复活：恢复 400 血，返回补给区前禁止开火")
+        return True
 
     def _update_rulebook_revive(
         self,
@@ -5136,17 +6120,15 @@ class TaskScenario:
                     continue
                 death[target_id] = float(death[target_id] or 0.0) + elapsed_seconds
                 if required.get(target_id, 0.0) <= 0.0:
-                    required[target_id] = (
-                        self.revive_seconds_required_for(target_id, team=team)
-                        if self.revive_mode == "rulebook"
-                        else RESPAWN_CONFIRM_SECONDS
+                    required[target_id] = self.revive_seconds_required_for(
+                        target_id, team=team
                     )
                 base_hp = self.own_base_hp if team == "red" else self.enemy_base_hp
                 accelerated = (
                     self._robot_position_in_supply_gain(team, target_id)
                     or base_hp < 2000
                 )
-                rate = 4.0 if self.revive_mode == "rulebook" and accelerated else 1.0
+                rate = 4.0 if accelerated else 1.0
                 progress[target_id] = min(
                     required[target_id],
                     progress.get(target_id, 0.0) + rate * elapsed_seconds,
@@ -5154,20 +6136,15 @@ class TaskScenario:
                 if progress[target_id] < required[target_id]:
                     continue
                 maximum = self.robot_max_hp(target_id, team=team)
-                if self.revive_mode == "rulebook":
-                    hp_map[target_id] = maximum * RULEBOOK_REVIVE_HP_FRACTION
-                    weak[target_id] = True
-                    invincible[target_id] = RULEBOOK_REVIVE_INVINCIBLE
-                    sources = (
-                        self.robot_revive_invincibility_source
-                        if team == "blue"
-                        else self.own_robot_revive_invincibility_source
-                    )
-                    sources[target_id] = "readbar"
-                else:
-                    hp_map[target_id] = maximum
-                    weak[target_id] = False
-                    invincible[target_id] = 0.0
+                hp_map[target_id] = maximum * RULEBOOK_REVIVE_HP_FRACTION
+                weak[target_id] = True
+                invincible[target_id] = RULEBOOK_REVIVE_INVINCIBLE
+                sources = (
+                    self.robot_revive_invincibility_source
+                    if team == "blue"
+                    else self.own_robot_revive_invincibility_source
+                )
+                sources[target_id] = "readbar"
                 death[target_id] = None
                 progress[target_id] = 0.0
                 required[target_id] = 0.0
@@ -5175,8 +6152,11 @@ class TaskScenario:
                     f"{'红' if team == 'red' else '蓝'}方{target_id}号"
                 )
         if revived:
-            suffix = "，10%血量、30秒无敌并进入虚弱" if self.revive_mode == "rulebook" else ""
-            self._set_event("机器人复活：" + "、".join(revived) + suffix)
+            self._set_event(
+                "机器人复活："
+                + "、".join(revived)
+                + "，10%血量、30秒无敌并进入虚弱"
+            )
 
     def _update_economy_timers(
         self,

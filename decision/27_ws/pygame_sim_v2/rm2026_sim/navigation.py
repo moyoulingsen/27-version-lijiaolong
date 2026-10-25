@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import heapq
 import math
+from collections.abc import Sequence
 
 from .core import Arena
 from .map_asset import PgmImage
@@ -41,6 +42,30 @@ class OccupancyGrid:
     height: int
     blocked: bytes
     collision_radius: float = ROBOT_COLLISION_RADIUS
+
+    @classmethod
+    def empty(
+        cls,
+        arena: Arena,
+        *,
+        collision_radius: float = ROBOT_COLLISION_RADIUS,
+    ) -> "OccupancyGrid":
+        """Create a clear arena with only the outer field boundary blocked."""
+        if collision_radius < 0.0:
+            raise ValueError("collision_radius must be non-negative")
+        width = round(arena.width / arena.map_resolution)
+        height = round(arena.height / arena.map_resolution)
+        blocked = bytearray(width * height)
+        for row in range(height):
+            center_y = arena.height - (row + 0.5) * arena.map_resolution
+            for column in range(width):
+                center_x = (column + 0.5) * arena.map_resolution
+                if not (
+                    collision_radius <= center_x <= arena.width - collision_radius
+                    and collision_radius <= center_y <= arena.height - collision_radius
+                ):
+                    blocked[row * width + column] = 1
+        return cls(arena, width, height, bytes(blocked), collision_radius)
 
     @classmethod
     def from_pgm(
@@ -263,6 +288,107 @@ class OccupancyGrid:
                 for column in range(column_start, column_end + 1):
                     if 0 <= row < self.height and 0 <= column < self.width:
                         blocked[row * self.width + column] = 1
+        return OccupancyGrid(
+            self.arena,
+            self.width,
+            self.height,
+            bytes(blocked),
+            self.collision_radius,
+        )
+
+    def with_blocked_polygons(
+        self,
+        polygons: Sequence[Sequence[Sequence[float]]],
+        *,
+        inflation: float = 0.0,
+    ) -> "OccupancyGrid":
+        """Paint arbitrary world polygons into the occupancy grid.
+
+        Polygon vertices are expressed in arena metres.  Cells whose centres
+        are inside a polygon become blocked; ``inflation`` expands the new
+        walls by the requested robot-clearance radius in the same way as the
+        PGM map conversion.
+        """
+        if inflation < 0.0:
+            raise ValueError("polygon inflation must be non-negative")
+        blocked = bytearray(self.blocked)
+        newly_blocked: list[int] = []
+
+        def contains(x: float, y: float, points) -> bool:
+            inside = False
+            previous_x, previous_y = points[-1]
+            for current_x, current_y in points:
+                if (current_y > y) != (previous_y > y):
+                    edge_x = previous_x + (y - previous_y) * (
+                        current_x - previous_x
+                    ) / (current_y - previous_y)
+                    if x < edge_x:
+                        inside = not inside
+                previous_x, previous_y = current_x, current_y
+            return inside
+
+        for polygon in polygons:
+            points = []
+            for point in polygon:
+                try:
+                    if len(point) < 2:
+                        continue
+                    x, y = float(point[0]), float(point[1])
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(x) and math.isfinite(y):
+                    points.append((x, y))
+            if len(points) < 3:
+                continue
+            min_x = max(0.0, min(point[0] for point in points))
+            max_x = min(self.arena.width, max(point[0] for point in points))
+            min_y = max(0.0, min(point[1] for point in points))
+            max_y = min(self.arena.height, max(point[1] for point in points))
+            column_start = max(0, int(min_x / self.arena.map_resolution) - 1)
+            column_end = min(
+                self.width - 1,
+                int(max_x / self.arena.map_resolution) + 1,
+            )
+            row_start = max(
+                0,
+                int((self.arena.height - max_y) / self.arena.map_resolution) - 1,
+            )
+            row_end = min(
+                self.height - 1,
+                int((self.arena.height - min_y) / self.arena.map_resolution) + 1,
+            )
+            for row in range(row_start, row_end + 1):
+                for column in range(column_start, column_end + 1):
+                    world_x, world_y = self.cell_to_world((row, column))
+                    if contains(world_x, world_y, points):
+                        index = row * self.width + column
+                        if not blocked[index]:
+                            blocked[index] = 1
+                        newly_blocked.append(index)
+
+        if inflation <= 0.0 or not newly_blocked:
+            return OccupancyGrid(
+                self.arena,
+                self.width,
+                self.height,
+                bytes(blocked),
+                self.collision_radius,
+            )
+        radius_cells = math.ceil(inflation / self.arena.map_resolution)
+        offsets = [
+            (row_offset, column_offset)
+            for row_offset in range(-radius_cells, radius_cells + 1)
+            for column_offset in range(-radius_cells, radius_cells + 1)
+            if math.hypot(row_offset, column_offset) * self.arena.map_resolution
+            <= inflation
+        ]
+        for index in newly_blocked:
+            row, column = divmod(index, self.width)
+            for row_offset, column_offset in offsets:
+                candidate_row = row + row_offset
+                candidate_column = column + column_offset
+                if 0 <= candidate_row < self.height and 0 <= candidate_column < self.width:
+                    blocked[candidate_row * self.width + candidate_column] = 1
         return OccupancyGrid(
             self.arena,
             self.width,
