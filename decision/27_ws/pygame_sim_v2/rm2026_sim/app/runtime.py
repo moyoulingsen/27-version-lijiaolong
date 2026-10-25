@@ -10,6 +10,66 @@ from .main import *
 
 
 class RuntimeMixin:
+    def _advance_live_motion(
+        self,
+        elapsed_seconds: float,
+        move_x: float,
+        move_y: float,
+        motion_decision: DecisionView,
+        *,
+        restarting: bool,
+    ) -> float:
+        """Advance automatic simulation and higher-priority manual driving.
+
+        Pause freezes referee/automatic time, but an operator who has selected
+        a robot keeps direct chassis control. Restart signalling remains a hard
+        freeze because it is rebuilding the live decision state.
+        """
+        simulation_elapsed = (
+            0.0 if self.task.game_paused or restarting else elapsed_seconds
+        )
+        manual_elapsed = 0.0 if restarting else elapsed_seconds
+        self._collision_damage_cooldown = max(
+            0.0,
+            getattr(self, "_collision_damage_cooldown", 0.0)
+            - simulation_elapsed,
+        )
+
+        if self.controlled_robot_id is not None and manual_elapsed > 0.0:
+            self._move_controlled_robot(move_x, move_y, manual_elapsed)
+
+        if self.sentry.manual_control and not self.task.game_finished:
+            if manual_elapsed > 0.0:
+                self._update_sentry_motion(
+                    manual_elapsed,
+                    move_x,
+                    move_y,
+                    motion_decision,
+                )
+        elif simulation_elapsed > 0.0:
+            self._update_sentry_motion(
+                simulation_elapsed,
+                move_x,
+                move_y,
+                motion_decision,
+            )
+
+        if simulation_elapsed > 0.0:
+            self._update_other_robot_chassis_power(
+                simulation_elapsed,
+                move_x,
+                move_y,
+            )
+        elif self.controlled_robot_id is not None and manual_elapsed > 0.0:
+            # Keep manual-drive telemetry responsive while rule timers and
+            # buffer-energy settlement remain frozen by TaskScenario.update().
+            self._update_other_robot_chassis_power(
+                manual_elapsed,
+                move_x,
+                move_y,
+            )
+        return simulation_elapsed
+
     def run(
         self,
         *,
@@ -184,36 +244,13 @@ class RuntimeMixin:
                     team="red",
                 )
                 restarting = self._restart_signal_remaining > 0.0
-                simulation_elapsed = (
-                    0.0
-                    if self.task.game_paused or restarting
-                    else elapsed_seconds
+                simulation_elapsed = self._advance_live_motion(
+                    elapsed_seconds,
+                    move_x,
+                    move_y,
+                    motion_decision,
+                    restarting=restarting,
                 )
-                self._collision_damage_cooldown = max(
-                    0.0,
-                    self._collision_damage_cooldown - simulation_elapsed,
-                )
-                # Pause is a real simulation freeze.  Do not call the motion
-                # paths with a zero delta because they also maintain special
-                # wall traversal state and could reset or advance timers.
-                if simulation_elapsed > 0.0:
-                    if self.controlled_robot_id is not None:
-                        self._move_controlled_robot(
-                            move_x,
-                            move_y,
-                            simulation_elapsed,
-                        )
-                    self._update_sentry_motion(
-                        simulation_elapsed,
-                        move_x,
-                        move_y,
-                        motion_decision,
-                    )
-                    self._update_other_robot_chassis_power(
-                        simulation_elapsed,
-                        move_x,
-                        move_y,
-                    )
                 self.manual_fire_active = self._manual_fire_requested()
                 if restarting:
                     fire_request = False

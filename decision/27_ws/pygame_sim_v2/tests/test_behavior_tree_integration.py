@@ -27,6 +27,9 @@ def base_state() -> dict:
         "hp_base": 5000,
         "hp_enemy": [200, 250, 200, 200, 100, 1000, 5000, 400],
         "radar_data": [5.0, 7.5, 8.0, 7.5, 9.0, 9.0, 12.0, 5.0, 15.0, 10.0, 25.0, 8.0],
+        "hp_friend": [200, 250, 200, 200],
+        "friendly_ground_positions": [5.0, 5.0, 6.0, 5.0, 7.0, 5.0, 8.0, 5.0],
+        "pursuit_costmap_polygon": [[0.0, 15.0], [28.0, 15.0], [28.0, 0.0], [0.0, 0.0]],
         "pending_ammo": 0,
         "economy": 500,
         "x": 4.971,
@@ -39,7 +42,6 @@ def base_state() -> dict:
             "target_polar_r": [0.0] * 9,
             "target_polar_angle": [0.0] * 9,
         },
-        "aggressive_patrol": False,
         "conservative_patrol_points": [[5.0, 5.0], [9.0, 5.0], [9.0, 9.0]],
         "aggressive_patrol_points": [[12.0, 3.0], [14.0, 7.5], [12.3, 11.7]],
     }
@@ -94,6 +96,54 @@ def main() -> None:
             "Pygame manual patrol route reaches behavior-tree blackboard",
         )
 
+        # Both patrol policies share waypoint_index. Exercise an aggressive
+        # route index that is larger than the conservative route, then switch
+        # policy without changing either route. The conservative route must
+        # wrap the stale index instead of failing to publish a goal.
+        unequal_routes = copy.deepcopy(route_state)
+        unequal_routes["aggressive_patrol_points"] = [
+            [11.0, 3.0],
+            [12.0, 3.0],
+            [13.0, 3.0],
+            [14.0, 3.0],
+            [15.0, 3.0],
+        ]
+        unequal_routes["conservative_patrol_points"] = [
+            [5.0, 5.0],
+            [6.0, 5.0],
+        ]
+        stopped = copy.deepcopy(unequal_routes)
+        stopped["game_period"] = 0
+        for _ in range(5):
+            client.publish_state(stopped)
+            time.sleep(0.05)
+        wait_for(
+            client,
+            unequal_routes,
+            lambda output: near_goal(output, (11.0, 3.0)),
+            "unequal patrol routes start from the first aggressive point",
+        )
+        for current_point, next_point in zip(
+            unequal_routes["aggressive_patrol_points"][:-1],
+            unequal_routes["aggressive_patrol_points"][1:],
+        ):
+            unequal_routes["x"], unequal_routes["y"] = current_point
+            wait_for(
+                client,
+                unequal_routes,
+                lambda output, expected=tuple(next_point): near_goal(output, expected),
+                f"aggressive patrol advances to {tuple(next_point)}",
+            )
+        unequal_routes["ammo"] = 24
+        unequal_routes["pending_ammo"] = 0
+        wait_for(
+            client,
+            unequal_routes,
+            lambda output: near_goal(output, (5.0, 5.0))
+            and output["serial"]["tripod_mode"] == 1,
+            "short conservative route wraps the shared waypoint index",
+        )
+
         dead_state = copy.deepcopy(state)
         dead_state["hp_sentry"] = 0
         dead_state["x"], dead_state["y"] = 10.0, 8.0
@@ -144,6 +194,53 @@ def main() -> None:
             and near_goal(output, (13.44, 11.14)),
             "engineer robot 2 is excluded from target selection",
         )
+
+        # Aerial robot 5 is visible but configured as an invincible target in
+        # the XML attack policy. Even at low health and in range it must not
+        # preempt the opening outpost.
+        state["hp_enemy"][4] = 20
+        state["autoaim"]["target"][5] = 1
+        state["autoaim"]["target_distance"][5] = 3.0
+        state["autoaim"]["target_polar_r"][5] = 3.0
+        wait_for(
+            client,
+            state,
+            lambda output: output["autoaim"]["target"] == 6
+            and near_goal(output, (13.44, 11.14)),
+            "aerial robot 5 is excluded as an invincible target",
+        )
+        state["hp_enemy"][4] = 100
+        state["autoaim"]["target"][5] = 0
+        state["autoaim"]["target_distance"][5] = 0.0
+        state["autoaim"]["target_polar_r"][5] = 0.0
+
+        # The base uses the same visual candidate path as attackable robots.
+        # Its living outpost keeps it invincible; once that protection ends,
+        # a visible low-health base is selected and fired upon directly.
+        state["hp_enemy"][6] = 40
+        state["autoaim"]["target"][7] = 1
+        state["autoaim"]["target_distance"][7] = 3.0
+        state["autoaim"]["target_polar_r"][7] = 3.0
+        wait_for(
+            client,
+            state,
+            lambda output: output["autoaim"]["target"] == 6,
+            "enemy base remains excluded while its outpost survives",
+        )
+        state["hp_enemy"][5] = 0
+        wait_for(
+            client,
+            state,
+            lambda output: output["autoaim"]["target"] == 7
+            and output["serial"]["posture"] == 1
+            and output["serial"]["shoot_mode"] == 1,
+            "visible vulnerable enemy base uses normal attack selection",
+        )
+        state["hp_enemy"][5] = 1000
+        state["hp_enemy"][6] = 5000
+        state["autoaim"]["target"][7] = 0
+        state["autoaim"]["target_distance"][7] = 0.0
+        state["autoaim"]["target_polar_r"][7] = 0.0
 
         # A visual target must be projected from camera-relative polar data.
         # Deliberately publish a contradictory radar coordinate to prove that
@@ -225,6 +322,15 @@ def main() -> None:
         state["autoaim"]["target_distance"][3] = 5.0
         state["autoaim"]["target_polar_r"][3] = 5.0
         state["autoaim"]["target_polar_angle"][3] = 0.0
+        state["hp_friend"] = [200, 0, 0, 0]
+        wait_for(
+            client,
+            state,
+            lambda output: output["autoaim"]["target"] != 3
+            or output.get("goal") is None,
+            "two costmap friendlies block moving-target pursuit",
+        )
+        state["hp_friend"] = [200, 250, 0, 0]
         wait_for(
             client,
             state,
@@ -234,6 +340,7 @@ def main() -> None:
             and output.get("goal") is not None,
             "detected low-health target preempts in-range outpost and is pursued",
         )
+        state["hp_friend"] = [200, 250, 200, 200]
 
         state["autoaim"]["target_distance"][3] = 3.0
         state["autoaim"]["target_polar_r"][3] = 3.0
@@ -256,14 +363,14 @@ def main() -> None:
         state["autoaim"]["target_distance"][6] = 0.0
         state["hp_sentry"] = 150
         wait_for(
-            client, state, lambda output: near_goal(output, (2.0, 1.0))
+            client, state, lambda output: near_goal(output, (2.10, 1.30))
             and output["serial"]["posture"] == 3,
             "low-health recovery",
         )
 
         state["hp_sentry"] = 250
         wait_for(
-            client, state, lambda output: near_goal(output, (2.0, 1.0))
+            client, state, lambda output: near_goal(output, (2.10, 1.30))
             and output["serial"]["posture"] == 3,
             "health recovery remains active above trigger threshold",
         )
@@ -288,6 +395,39 @@ def main() -> None:
             and output["serial"]["spin_mode"] == 1
             and output["serial"]["tripod_mode"] == 1,
             "economy boundary keeps aggressive patrol",
+        )
+
+        state["economy"] = 399
+        state["hp_sentry"] = 299
+        stopped_at_boundary = copy.deepcopy(state)
+        stopped_at_boundary["game_period"] = 0
+        for _ in range(5):
+            client.publish_state(stopped_at_boundary)
+            time.sleep(0.05)
+        wait_for(
+            client,
+            state,
+            lambda output: near_goal(output, (5.0, 5.0))
+            and output["serial"]["spin_mode"] == 3
+            and output["serial"]["tripod_mode"] == 1,
+            "XML 300 HP boundary selects conservative patrol",
+        )
+
+        state["hp_sentry"] = 300
+        wait_for(
+            client,
+            state,
+            lambda output: near_goal(output, (12.0, 3.0))
+            and output["serial"]["spin_mode"] == 1,
+            "XML 300 HP boundary keeps aggressive patrol at equality",
+        )
+
+        state["hp_sentry"] = 400
+        wait_for(
+            client,
+            state,
+            lambda output: near_goal(output, (12.0, 3.0)),
+            "restore full health before accumulated-damage checks",
         )
 
         # One 25 HP hit remains below the accumulated significant-damage threshold.
@@ -350,14 +490,14 @@ def main() -> None:
             lambda output: output["autoaim"]["target"] == 3
             and output["serial"]["posture"] == 1
             and output["serial"]["shoot_mode"] == 1
-            and not near_goal(output, (2.0, 1.0)),
+            and not near_goal(output, (2.10, 1.30)),
             "sub-50-HP target preempts health recovery",
         )
 
         # A non-low-health target cannot block recovery.
         state["hp_enemy"][2] = 100
         wait_for(
-            client, state, lambda output: near_goal(output, (2.0, 1.0))
+            client, state, lambda output: near_goal(output, (2.10, 1.30))
             and output["serial"]["posture"] == 3,
             "non-low-health target does not block recovery",
         )
@@ -372,25 +512,55 @@ def main() -> None:
             timeout=7.0,
         )
 
-        # Reproduce the UI sequence: clear carried ammunition first, allow the
-        # no-ammo patrol to start, then add ammunition waiting at the supply.
-        # The behavior tree must preempt patrol as soon as pickup becomes
-        # available instead of staying latched on the RUNNING patrol child.
-        state["ammo"] = 0
-        state["pending_ammo"] = 0
+        # Exactly 25 rounds remains combat-ready; dropping below 25 latches a
+        # supply trip. If no pickup is available the sentry may patrol, but a
+        # newly available pickup must immediately preempt that patrol.
+        state["ammo"] = 25
+        state["pending_ammo"] = 100
         wait_for(
             client, state, lambda output: near_goal(output, (12.0, 3.0)),
-            "no-ammo patrol before pickup becomes available",
+            "25 rounds does not trigger ammunition recovery",
+        )
+
+        state["ammo"] = 24
+        state["pending_ammo"] = 0
+        wait_for(
+            client, state, lambda output: near_goal(output, (5.0, 5.0))
+            and output["serial"]["spin_mode"] == 3
+            and output["serial"]["tripod_mode"] == 1,
+            "low-ammo state uses conservative patrol before pickup is available",
         )
 
         state["pending_ammo"] = 100
         wait_for(
-            client, state, lambda output: near_goal(output, (2.0, 1.0)),
+            client, state, lambda output: near_goal(output, (2.10, 1.30)),
             "newly available ammunition preempts patrol",
         )
 
-        state["ammo"] = 120
+        # Simulate Pygame's supply settlement: ammunition transfers at the
+        # supply point, but the behavior tree remains there until HP is full.
+        state["x"], state["y"] = 2.10, 1.30
+        state["ammo"] = 124
         state["pending_ammo"] = 0
+        state["hp_sentry"] = 300
+        wait_for(
+            client,
+            state,
+            lambda output: output.get("goal") is None
+            and output["serial"]["posture"] == 3
+            and output["serial"]["shoot_mode"] == 0,
+            "ammunition recovery waits at supply until full health",
+        )
+
+        state["hp_sentry"] = 400
+        wait_for(
+            client,
+            state,
+            lambda output: near_goal(output, (12.0, 3.0)),
+            "ammunition recovery releases only after full health",
+        )
+
+        state["x"], state["y"] = 4.971, 7.5
         state["hp_outpost"] = 0
         wait_for(
             client,
@@ -412,7 +582,7 @@ def main() -> None:
         wait_for(
             client,
             state,
-            lambda output: near_goal(output, (2.0, 1.0))
+            lambda output: near_goal(output, (2.10, 1.30))
             and output["serial"]["spin_mode"] == 0,
             "both-low patrol boundary remains below health-recovery priority",
         )
@@ -426,7 +596,7 @@ def main() -> None:
         finished["game_period"] = 0
         finished["time"] = 0
         wait_for(
-            client, finished, lambda output: near_goal(output, (4.971, 7.5)),
+            client, finished, lambda output: near_goal(output, (3.725, 7.975)),
             "return home after match",
         )
     finally:

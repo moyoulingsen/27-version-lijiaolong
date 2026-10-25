@@ -31,6 +31,8 @@ from ..field_geometry import BLUE_BASE, BLUE_OUTPOST, FIELD_WIDTH
 from ..map_asset import load_p5_pgm
 from ..map_regions import (
     geometry_payload,
+    wall_collision_polygons,
+    traversable_tunnel_corridors,
     load_geometry_file,
     restore_extra_geometry_payload,
     restore_slow_regions_payload,
@@ -443,7 +445,11 @@ class SimulatorApp(
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="RMUC 2026 Pygame SimulatorApp")
-    parser.add_argument("--replay", action="store_true", help="在原 SimulatorApp 中开启 SQLite 回放")
+    parser.add_argument(
+        "--dataset-replay",
+        action="store_true",
+        help="在 v2 裁判系统与可视化界面中加载 SQLite 比赛数据",
+    )
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET_PATH)
     parser.add_argument("--game-id", type=int)
     parser.add_argument("--region")
@@ -459,7 +465,7 @@ def main(argv: list[str] | None = None) -> None:
         ) from error
     repository = None
     try:
-        if not args.replay:
+        if not args.dataset_replay:
             SimulatorApp(pygame).run(
                 max_frames=args.max_frames,
                 screenshot_path=args.screenshot,

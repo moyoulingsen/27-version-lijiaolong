@@ -427,6 +427,9 @@ class InteractionMixin:
             ))
         special_wall_points = [polygon for _, polygon in special_wall_entries]
         all_wall_points = wall_points + special_wall_points
+        tunnel_corridors = tuple(
+            traversable_tunnel_corridors(self.custom_map_polygons).values()
+        )
         self.collision_grid = OccupancyGrid.empty(
             self.arena,
         ).with_blocked_rectangles(
@@ -435,6 +438,8 @@ class InteractionMixin:
         ).with_blocked_polygons(
             all_wall_points,
             inflation=ROBOT_ENTITY_COLLISION_RADIUS,
+        ).with_cleared_polygons(
+            tunnel_corridors,
         )
         # Engineer and 3/4 infantry use this grid after their one-second
         # traverse delay; they still collide with every normal wall.
@@ -446,6 +451,8 @@ class InteractionMixin:
         ).with_blocked_polygons(
             wall_points,
             inflation=ROBOT_ENTITY_COLLISION_RADIUS,
+        ).with_cleared_polygons(
+            tunnel_corridors,
         )
         # Aerial robots ignore every authored wall. This grid deliberately
         # contains only the arena boundary.
@@ -478,6 +485,7 @@ class InteractionMixin:
             STATIC_COLLISION_RECTANGLES,
             inflation=0.0,
         ).with_blocked_polygons(all_wall_points, inflation=0.0)
+        self.los_grid = self.los_grid.with_cleared_polygons(tunnel_corridors)
         self.planning_grid = OccupancyGrid.empty(
             self.arena,
             collision_radius=ASTAR_PLANNING_RADIUS,
@@ -487,6 +495,8 @@ class InteractionMixin:
         ).with_blocked_polygons(
             all_wall_points,
             inflation=ASTAR_PLANNING_RADIUS,
+        ).with_cleared_polygons(
+            tunnel_corridors,
         )
         self.base_planning_grid = self.planning_grid
         if hasattr(self, "navigator"):
@@ -500,39 +510,7 @@ class InteractionMixin:
         wall_items,
     ) -> list[tuple[tuple[float, float], ...]]:
         """Convert editable wall segments into thick collision rectangles."""
-        polygons: list[tuple[tuple[float, float], ...]] = []
-        for item in wall_items:
-            if not isinstance(item, dict):
-                continue
-            points = normalize_points(item.get("points"))
-            if len(points) < 2:
-                continue
-            start, end = points[0], points[1]
-            delta_x = end[0] - start[0]
-            delta_y = end[1] - start[1]
-            length = math.hypot(delta_x, delta_y)
-            if length <= 1e-6:
-                continue
-            try:
-                thickness = float(item.get("thickness", DEFAULT_WALL_THICKNESS))
-            except (TypeError, ValueError):
-                thickness = DEFAULT_WALL_THICKNESS
-            half = max(0.025, min(1.0, thickness * 0.5))
-            direction_x = delta_x / length
-            direction_y = delta_y / length
-            normal_x = -direction_y * half
-            normal_y = direction_x * half
-            start_x = start[0] - direction_x * half
-            start_y = start[1] - direction_y * half
-            end_x = end[0] + direction_x * half
-            end_y = end[1] + direction_y * half
-            polygons.append((
-                (start_x + normal_x, start_y + normal_y),
-                (end_x + normal_x, end_y + normal_y),
-                (end_x - normal_x, end_y - normal_y),
-                (start_x - normal_x, start_y - normal_y),
-            ))
-        return polygons
+        return wall_collision_polygons(wall_items)
 
     def _region_type_configured(self, kind: str) -> bool:
         """Return whether a type has at least one valid polygon."""

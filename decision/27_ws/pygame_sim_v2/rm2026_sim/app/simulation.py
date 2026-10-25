@@ -111,8 +111,16 @@ class SimulationMixin:
         if getattr(self, "replay_mode", False):
             return
         self._refresh_dynamic_planning_grid()
-        power_cut = self.task.sentry_chassis_power_cut
-        if self.sentry.manual_control:
+        # Match-end return is a referee-level reset/safety action.  A chassis
+        # power cut that was active at the final whistle must not permanently
+        # block the robot, because normal power timers stop after game_finished.
+        power_cut = (
+            self.task.sentry_chassis_power_cut and not self.task.game_finished
+        )
+        # Match-end return is a referee-level safety action.  It must take
+        # control even when the operator had selected the sentry for manual
+        # driving before the whistle.
+        if self.sentry.manual_control and not self.task.game_finished:
             start = (self.sentry.x, self.sentry.y)
             move_x = 0.0 if power_cut else manual_x
             move_y = 0.0 if power_cut else manual_y
@@ -496,6 +504,10 @@ class SimulationMixin:
         *,
         moving_radius: float = ROBOT_ENTITY_COLLISION_RADIUS,
     ) -> None:
+        # Manual driving remains available while paused, but pause still
+        # freezes referee damage settlement.
+        if self.task.game_paused:
+            return
         if getattr(self, "_collision_damage_cooldown", 0.0) > 0.0:
             return
         if math.hypot(actual[0] - proposed[0], actual[1] - proposed[1]) <= 0.02:
@@ -883,12 +895,17 @@ class SimulationMixin:
 
         autoaim = self._simulated_autoaim(self._enemy_health_snapshot())
         candidates = []
-        for target_id in (1, 3, 4, 5, 8):
+        # Target 5 is an aerial robot and is invulnerable in the Pygame
+        # armour model, so the local fallback must never pursue it either.
+        # The base is an ordinary visual target once its outpost protection
+        # has ended; unlike the outpost it has no dedicated attack point.
+        for target_id in (1, 3, 4, 7, 8):
             health = self.task.enemy_health(target_id)
             if (
                 autoaim["target"][target_id]
                 and 0.0 < health < 50.0
                 and health != 1001.0
+                and (target_id != 7 or self.task.enemy_outpost_hp <= 0.0)
             ):
                 candidates.append(
                     (autoaim["target_distance"][target_id], target_id)
@@ -898,6 +915,8 @@ class SimulationMixin:
 
         distance, target_id = min(candidates)
         if distance > ATTACK_RANGE:
+            if not self.task.pursuit_cost_support_ready(self.sentry):
+                return base
             polar_radius = autoaim["target_polar_r"][target_id]
             polar_angle = autoaim["target_polar_angle"][target_id]
             map_angle = self.sentry.turret_angle + polar_angle
@@ -936,6 +955,12 @@ class SimulationMixin:
         )
 
     def _bridge_decision(self) -> DecisionView | None:
+        # Do not let the last cached BehaviorTree output keep controlling the
+        # chassis after the match ends.  The local match-end decision owns the
+        # return-home route, even if the external bridge stops publishing at
+        # the whistle.
+        if self.task.game_finished:
+            return None
         if not self.bridge.connected:
             return None
         output = self.bridge.latest_output()
@@ -968,6 +993,17 @@ class SimulationMixin:
             else:
                 continue
             break
+        if goal is not None:
+            if any(
+                self._near_goal(goal, tuple(point))
+                for point in self.task.conservative_patrol_route
+            ):
+                self.task.aggressive_patrol = False
+            elif any(
+                self._near_goal(goal, tuple(point))
+                for point in self.task.aggressive_patrol_route
+            ):
+                self.task.aggressive_patrol = True
         return DecisionView(
             behavior=self._bridge_behavior(goal, target),
             posture=int(serial.get("posture", 3)),
@@ -998,9 +1034,15 @@ class SimulationMixin:
                 return "行为树：低血量回血"
             return "行为树：前往补给区"
         if goal is not None and any(
-            self._near_goal(goal, point) for point in self.task.patrol_points
+            self._near_goal(goal, tuple(point))
+            for point in self.task.conservative_patrol_route
         ):
-            return f"行为树：{self.task.patrol_name}"
+            return "行为树：保守巡逻"
+        if goal is not None and any(
+            self._near_goal(goal, tuple(point))
+            for point in self.task.aggressive_patrol_route
+        ):
+            return "行为树：激进巡逻"
         if goal is not None:
             return "行为树：执行导航"
         return "行为树：等待输出"
@@ -1017,9 +1059,9 @@ class SimulationMixin:
         ) <= tolerance
 
     def _bridge_state(self) -> dict:
-        # The external behavior tree still controls only the red sentry. Enemy
-        # positions now enter through the sentry's radar-only communication
-        # inbox instead of being read directly from global simulation state.
+        # The external behavior tree controls the red sentry. Enemy positions
+        # enter through its radar inbox, while referee packets expose friendly
+        # ground health/positions for tactical costmap evaluation.
         enemy_hp = self._enemy_health_snapshot()
         radar_data: list[float] = []
         radar_packet = self.task.received_team_message(
@@ -1038,6 +1080,10 @@ class SimulationMixin:
                 position = (0.0, 0.0)
             x, y = float(position[0]), float(position[1])
             radar_data.extend((x, y))
+        friendly_ground_positions: list[float] = []
+        for target_id in (1, 2, 3, 4):
+            x, y = self.task.own_robot_position(target_id)
+            friendly_ground_positions.extend((x, y))
         return {
             "game_period": 2 if self.task.game_running else 0,
             "time": max(
@@ -1053,6 +1099,14 @@ class SimulationMixin:
             "hp_base": max(0, round(self.task.own_base_hp)),
             "hp_enemy": enemy_hp,
             "radar_data": radar_data,
+            "hp_friend": [
+                max(0, round(self.task.own_robot_hp.get(target_id, 0.0)))
+                for target_id in (1, 2, 3, 4)
+            ],
+            "friendly_ground_positions": friendly_ground_positions,
+            "pursuit_costmap_polygon": [
+                list(point) for point in self.task.pursuit_cost_polygon()
+            ],
             "pending_ammo": max(0, round(self.task.pending_ammo)),
             "economy": max(0, round(self.task.economy)),
             "x": self.sentry.x,
@@ -1060,7 +1114,6 @@ class SimulationMixin:
             "yaw": self.sentry.spin_angle,
             "camera_yaw": self.sentry.turret_angle,
             "autoaim": self._simulated_autoaim(enemy_hp),
-            "aggressive_patrol": self.task.patrol_is_aggressive,
             "conservative_patrol_points": [
                 list(point) for point in self.task.conservative_patrol_route
             ],

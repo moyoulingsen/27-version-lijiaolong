@@ -23,6 +23,7 @@ from rm2026_sim.task_state import (
     DETECTION_RANGE,
     HOME,
     PATROL_POINTS,
+    PURSUIT_COST_ZONE_ID,
     ROBOT_PROFILES,
     RULE_BASE_HP,
     RULE_BASE_SHIELD,
@@ -131,6 +132,28 @@ class SentryStateTests(unittest.TestCase):
 
 
 class TaskScenarioTests(unittest.TestCase):
+    def test_pursuit_costmap_requires_three_living_ground_friendlies(self) -> None:
+        scenario = TaskScenario()
+        sentry = SentryState(x=20.5, y=8.0)
+        scenario.field_zone_overrides[PURSUIT_COST_ZONE_ID] = [
+            [19.0, 10.0],
+            [23.0, 10.0],
+            [23.0, 6.0],
+            [19.0, 6.0],
+        ]
+        scenario.own_robot_positions[1] = [21.0, 8.0]
+        scenario.own_robot_positions[3] = [22.0, 8.0]
+        scenario.own_robot_positions[2] = [5.0, 5.0]
+        scenario.own_robot_positions[4] = [5.0, 6.0]
+        scenario.own_robot_positions[5] = [21.5, 8.0]
+
+        self.assertEqual(scenario.pursuit_cost_friendly_count(sentry), 3)
+        self.assertTrue(scenario.pursuit_cost_support_ready(sentry))
+
+        scenario.own_robot_hp[3] = 0.0
+        self.assertEqual(scenario.pursuit_cost_friendly_count(sentry), 2)
+        self.assertFalse(scenario.pursuit_cost_support_ready(sentry))
+
     def test_ground_robot_manual_movement_uses_world_coordinates(self) -> None:
         scenario = TaskScenario()
         start_x, start_y = scenario.robot_position(3)
@@ -196,34 +219,17 @@ class TaskScenarioTests(unittest.TestCase):
         self.assertEqual(scenario.evaluate(SentryState()).tripod_mode, 1)
         scenario.toggle_patrol_mode()
         self.assertEqual(scenario.patrol_name, "保守巡逻")
-        self.assertEqual(scenario.evaluate(SentryState()).behavior, "低血量回血")
+        self.assertEqual(scenario.evaluate(SentryState()).behavior, "巡逻")
 
-    def test_patrol_boundary_requires_both_health_and_economy_low(self) -> None:
+    def test_local_patrol_mode_is_not_recomputed_from_resources(self) -> None:
         scenario = TaskScenario(
             enemy_outpost_hp=0.0,
-            sentry_hp=400.0,
+            sentry_hp=149.0,
             economy=399,
         )
-        decision = scenario.evaluate(SentryState())
         self.assertEqual(scenario.patrol_name, "激进巡逻")
-        self.assertEqual(decision.spin_mode, 1)
-        self.assertEqual(decision.tripod_mode, 1)
-
-        scenario.sentry_hp = 149
-        scenario.economy = 399
+        scenario.toggle_patrol_mode()
         self.assertEqual(scenario.patrol_name, "保守巡逻")
-
-        scenario.economy = 400
-        self.assertEqual(scenario.patrol_name, "激进巡逻")
-
-        scenario.sentry_hp = 150
-        scenario.economy = 399
-        self.assertEqual(scenario.patrol_name, "激进巡逻")
-
-        scenario.sentry_hp = 149
-        scenario.economy = 399
-        decision = scenario.evaluate(SentryState())
-        self.assertEqual(decision.behavior, "低血量回血")
 
     def test_attack_lock_stops_gimbal_and_enables_shooting(self) -> None:
         scenario = TaskScenario()
@@ -542,6 +548,7 @@ class TaskScenarioTests(unittest.TestCase):
             enemy_outpost_hp=0.0,
             sentry_hp=125.0,
             economy=350,
+            aggressive_patrol=False,
         )
         sentry = SentryState()
 
@@ -563,8 +570,7 @@ class TaskScenarioTests(unittest.TestCase):
         scenario.configure_patrol_routes(conservative, aggressive)
 
         self.assertEqual(scenario.evaluate(SentryState()).goal, tuple(aggressive[0]))
-        scenario.sentry_hp = 125.0
-        scenario.economy = 350
+        scenario.aggressive_patrol = False
         self.assertEqual(scenario.patrol_points, tuple(tuple(point) for point in conservative))
 
         scenario.reset_match_time()

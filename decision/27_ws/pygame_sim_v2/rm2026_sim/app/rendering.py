@@ -737,7 +737,11 @@ class RenderingMixin:
                 else f"{round(value)}/{round(maximum)}"
             )
             value_text = self.small_font.render(value_label, True, (220, 226, 228))
-            if target_id == 5 or self.replay_mode:
+            if (
+                target_id == 5
+                or self.replay_mode
+                or getattr(self, "rl_replay_mode", False)
+            ):
                 value_right = row.right - 8
             else:
                 plus_button = self.pg.Rect(row.right - 34, row.top + 2, 26, 26)

@@ -7,7 +7,7 @@ import unittest
 
 from rm2026_sim.core import SentryState
 from rm2026_sim.field_geometry import BLUE_BASE
-from rm2026_sim.task_state import ROBOT_PROFILES, TaskScenario
+from rm2026_sim.task_state import FireSolution, ROBOT_PROFILES, TaskScenario
 
 
 class RobotFiringTests(unittest.TestCase):
@@ -62,6 +62,36 @@ class RobotFiringTests(unittest.TestCase):
                         ),
                         0.0,
                     )
+
+    def test_no_robot_can_damage_an_aerial_target(self) -> None:
+        for team in ("red", "blue"):
+            for shooter_id in (1, 3, 4, 5, 8):
+                with self.subTest(team=team, shooter_id=shooter_id):
+                    scenario = TaskScenario()
+                    sentry = SentryState()
+                    scenario.set_robot_turntable_mode(shooter_id, 0, team=team)
+                    if team == "red":
+                        target_hp = scenario.robot_hp
+                        if shooter_id == 8:
+                            scenario.ammo = 10
+                        else:
+                            scenario.own_robot_ammo[shooter_id] = 10
+                    else:
+                        target_hp = scenario.own_robot_hp
+                        scenario.robot_ammo[shooter_id] = 10
+                    before_hp = target_hp[5]
+
+                    result = scenario.settle_robot_fire(
+                        shooter_id,
+                        team=team,
+                        sentry=sentry if team == "red" and shooter_id == 8 else None,
+                        shot=FireSolution(5, 1.0, 0.0),
+                    )
+
+                    self.assertTrue(result.fired)
+                    self.assertEqual(result.target_id, 5)
+                    self.assertEqual(result.damage, 0)
+                    self.assertEqual(target_hp[5], before_hp)
 
     def test_unaligned_shot_is_a_real_miss_and_consumes_resources(self) -> None:
         scenario = TaskScenario()

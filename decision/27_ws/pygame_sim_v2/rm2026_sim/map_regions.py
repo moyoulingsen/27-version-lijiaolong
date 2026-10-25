@@ -18,6 +18,8 @@ from .field_rules import REGION_TYPES, canonical_region_id
 
 Point = tuple[float, float]
 PATROL_ROUTE_KEYS = ("conservative", "aggressive")
+DEFAULT_WALL_THICKNESS = 0.20
+TRAVERSABLE_TUNNEL_IDS = ("custom_6", "custom_7")
 
 
 def normalize_points(
@@ -340,6 +342,76 @@ def restore_slow_regions_payload(payload: dict | None) -> list[dict]:
     return items
 
 
+def wall_collision_polygons(
+    wall_items: Sequence[dict],
+) -> list[tuple[Point, ...]]:
+    """Convert V2 authored wall segments into physical collision polygons."""
+    polygons: list[tuple[Point, ...]] = []
+    for item in wall_items:
+        if not isinstance(item, dict):
+            continue
+        points = normalize_points(item.get("points"))
+        if len(points) < 2:
+            continue
+        start, end = points[0], points[1]
+        delta_x = end[0] - start[0]
+        delta_y = end[1] - start[1]
+        length = math.hypot(delta_x, delta_y)
+        if length <= 1e-6:
+            continue
+        try:
+            thickness = float(item.get("thickness", DEFAULT_WALL_THICKNESS))
+        except (TypeError, ValueError):
+            thickness = DEFAULT_WALL_THICKNESS
+        half = max(0.025, min(1.0, thickness * 0.5))
+        direction_x = delta_x / length
+        direction_y = delta_y / length
+        normal_x = -direction_y * half
+        normal_y = direction_x * half
+        start_x = start[0] - direction_x * half
+        start_y = start[1] - direction_y * half
+        end_x = end[0] + direction_x * half
+        end_y = end[1] + direction_y * half
+        polygons.append((
+            (start_x + normal_x, start_y + normal_y),
+            (end_x + normal_x, end_y + normal_y),
+            (end_x - normal_x, end_y - normal_y),
+            (start_x - normal_x, start_y - normal_y),
+        ))
+    return polygons
+
+
+def traversable_tunnel_corridors(
+    custom_polygons: Sequence[dict],
+) -> dict[str, tuple[Point, ...]]:
+    """Build the two V2 tunnel passages explicitly marked by the user."""
+    corridors: dict[str, tuple[Point, ...]] = {}
+    for item in custom_polygons:
+        identifier = str(item.get("id", ""))
+        if identifier not in TRAVERSABLE_TUNNEL_IDS:
+            continue
+        points = normalize_points(item.get("points"))
+        if len(points) < 3:
+            continue
+        min_x = min(point[0] for point in points)
+        max_x = max(point[0] for point in points)
+        min_y = min(point[1] for point in points)
+        max_y = max(point[1] for point in points)
+        if identifier == "custom_6":
+            min_x -= 0.55
+            max_x += 1.45
+        else:
+            min_y -= 0.45
+            max_y += 0.45
+        corridors[identifier] = (
+            (min_x, max_y),
+            (max_x, max_y),
+            (max_x, min_y),
+            (min_x, min_y),
+        )
+    return corridors
+
+
 def restore_geometry_payload(payload: dict | None) -> tuple[dict[str, tuple[Point, ...]], list[dict]]:
     """Normalize persisted geometry, tolerating old or malformed snapshots."""
     payload = payload if isinstance(payload, dict) else {}
@@ -388,6 +460,32 @@ def load_geometry_file(path: Path) -> tuple[dict[str, tuple[Point, ...]], list[d
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {}, []
     return restore_geometry_payload(payload)
+
+
+def load_complete_geometry_file(
+    path: Path,
+    patrol_defaults: dict[str, Sequence[Point]],
+) -> tuple[
+    dict[str, tuple[Point, ...]],
+    list[dict],
+    dict[str, tuple[Point, ...]],
+    list[dict],
+    list[dict],
+    list[dict],
+]:
+    """Load every Pygame V2 geometry layer from one JSON document."""
+    if not path.is_file():
+        payload: dict = {}
+    else:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            payload = {}
+    zones, custom = restore_geometry_payload(payload)
+    routes = restore_patrol_routes(payload, patrol_defaults)
+    walls, special = restore_extra_geometry_payload(payload)
+    slow = restore_slow_regions_payload(payload)
+    return zones, custom, routes, walls, special, slow
 
 
 def restore_patrol_routes(

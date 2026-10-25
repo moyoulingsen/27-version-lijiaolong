@@ -34,6 +34,7 @@ REGION_TYPES = (
     ("region_11_central_highland", "中央高地增益点兼地形跨越增益点（高地）"),
     ("region_12_assembly_red", "装配区增益点（红方）"),
     ("region_12_assembly_blue", "装配区增益点（蓝方）"),
+    ("region_13_pursuit_cost_red", "追击代价区（红方）"),
 )
 
 # Snapshots created before side-specific slots were introduced used one id for
@@ -120,6 +121,7 @@ REGION_COLORS = (
     (160, 110, 220),
     (150, 150, 160),
     (150, 150, 160),
+    (225, 82, 82),
 )
 
 

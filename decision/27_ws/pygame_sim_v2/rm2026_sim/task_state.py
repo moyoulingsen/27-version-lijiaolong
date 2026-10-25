@@ -192,6 +192,8 @@ FORT_GAIN_ZONE_IDS = {
 }
 FORT_ROBOT_IDS = (1, 3, 4, 8)
 GROUND_ROBOT_IDS = (1, 2, 3, 4, 8)
+PURSUIT_COST_ZONE_ID = "region_13_pursuit_cost_red"
+PURSUIT_MIN_FRIENDLY_COUNT = 3
 ENGINEER_OPENING_DEFENCE = 0.50
 ENGINEER_OPENING_DEFENCE_SECONDS = 180.0
 TERRAIN_CROSSING_KINDS = ("road", "highland", "fly_slope", "tunnel")
@@ -711,7 +713,9 @@ class TaskScenario:
     death_elapsed: float | None = None
     dodge_remaining: float = 0.0
     dodge_goal: tuple[float, float] | None = None
-    aggressive_patrol: bool = False
+    # Local/manual display state only. Automatic resource-based patrol policy
+    # belongs exclusively to the XML behavior tree.
+    aggressive_patrol: bool = True
     patrol_index: int = 0
     conservative_patrol_route: list[list[float]] = field(
         default_factory=lambda: [list(point) for point in CONSERVATIVE_PATROL_POINTS]
@@ -724,9 +728,9 @@ class TaskScenario:
     robot_positions: dict[int, list[float]] = field(default_factory=_initial_robot_positions)
     robot_hp: dict[int, float] = field(default_factory=_initial_robot_health)
     robot_ammo: dict[int, int] = field(default_factory=_initial_robot_ammo)
-    # These friendly non-sentry robots are deliberately not read by evaluate(),
-    # resolve_fire_target(), or the ROS bridge. They belong to the 2-D scene
-    # UI/collision layer only.
+    # Friendly positions and health also model the referee-system information
+    # available to the sentry (0x0003 health and 0x020B ground positions).
+    # Local target selection still must not treat them as enemy candidates.
     own_robot_positions: dict[int, list[float]] = field(
         default_factory=_initial_own_robot_positions
     )
@@ -1561,12 +1565,8 @@ class TaskScenario:
         return self.radar_air_lock_remaining > 0.0
 
     @property
-    def resources_low_for_patrol(self) -> bool:
-        return self.sentry_hp < 150.0 and self.economy < 400.0
-
-    @property
     def patrol_is_aggressive(self) -> bool:
-        return not self.resources_low_for_patrol
+        return self.aggressive_patrol
 
     @property
     def patrol_name(self) -> str:
@@ -1667,6 +1667,35 @@ class TaskScenario:
                 return HOME
             return sentry.x, sentry.y
         return self.robot_position(target_id, team="red")
+
+    def pursuit_cost_polygon(self) -> tuple[tuple[float, float], ...]:
+        """Return the configured tactical region used to permit pursuit."""
+        points = normalize_points(self.field_zone_overrides.get(PURSUIT_COST_ZONE_ID))
+        return points if validate_polygon(points) is None else ()
+
+    def pursuit_cost_friendly_count(self, sentry: SentryState) -> int:
+        """Count living red ground robots inside the pursuit cost region.
+
+        The controlled sentry is included.  Aerial units are excluded because
+        they do not occupy the ground navigation costmap used by pursuit.
+        """
+        polygon = self.pursuit_cost_polygon()
+        if not polygon:
+            return 0
+        count = int(
+            self.sentry_hp > 0.0
+            and _point_in_polygon((sentry.x, sentry.y), polygon)
+        )
+        for target_id in (1, 2, 3, 4):
+            if self.own_robot_hp.get(target_id, 0.0) <= 0.0:
+                continue
+            if _point_in_polygon(self.own_robot_position(target_id), polygon):
+                count += 1
+        return count
+
+    def pursuit_cost_support_ready(self, sentry: SentryState) -> bool:
+        """Return whether more than two friendly ground robots support pursuit."""
+        return self.pursuit_cost_friendly_count(sentry) >= PURSUIT_MIN_FRIENDLY_COUNT
 
     @staticmethod
     def _communication_receivers(sender: int | str) -> tuple[str, ...]:
@@ -2862,17 +2891,9 @@ class TaskScenario:
         return "upper_front" if in_front else "normal"
 
     def toggle_patrol_mode(self) -> None:
-        if self.patrol_is_aggressive:
-            self.sentry_hp = min(self.sentry_hp, 125.0)
-            self.economy = 350
-        else:
-            # Return above both possible recovery thresholds so a manual
-            # patrol-mode toggle demonstrates aggressive patrol instead of
-            # remaining in recovery.
-            self.sentry_hp = max(self.sentry_hp, 200.0)
-            self.economy = 400
+        self.aggressive_patrol = not self.aggressive_patrol
         self.patrol_index = 0
-        self._set_event(f"已按资源边界切换为{self.patrol_name}")
+        self._set_event(f"已手动切换为{self.patrol_name}")
 
     def reset_match_time(self) -> None:
         self.reset()
@@ -3409,6 +3430,11 @@ class TaskScenario:
             raise ValueError("shots must be a positive integer")
         if team not in ("blue", "red"):
             raise ValueError(f"unknown team {team}")
+        # Pygame is a 2-D armour/referee validator.  Aerial robots have no
+        # damageable armour module in this layer, regardless of which robot
+        # fired or which projectile was submitted.
+        if target_id == 5:
+            return 0
         if (
             target_id in GROUND_ROBOT_IDS
             and self.robot_invincibility_remaining(target_id, team=team) > 0.0
@@ -3489,7 +3515,10 @@ class TaskScenario:
     def _apply_fire_damage(
         self, target_id: int, damage: float, *, team: str = "blue"
     ) -> None:
-        if damage <= 0.0:
+        # Keep the invariant at the mutation boundary as well, so future
+        # referee callers cannot bypass apply_attack_damage() and reduce an
+        # aerial robot's HP directly.
+        if target_id == 5 or damage <= 0.0:
             return
         before = self._target_health_total(target_id, team=team)
         if team == "red":
@@ -3716,6 +3745,11 @@ class TaskScenario:
         self.game_finished = True
         self.game_paused = False
         self.remaining_time = 0.0
+        # Forced return-home runs after normal referee simulation has stopped,
+        # so a remaining five-second chassis cut would otherwise never count
+        # down and would lock the sentry in place forever.
+        self.sentry_chassis_power_cut_remaining = 0.0
+        self.sentry_buffer_energy = self.effective_buffer_cap
         self.winner_team = self._decide_winner()
         self.end_reason = reason
         self._set_event(f"{reason}｜{self.result_label}")

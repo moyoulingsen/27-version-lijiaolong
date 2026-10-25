@@ -22,10 +22,12 @@ ROBOT_COLLISION_CLEARANCE = 0.02
 ROBOT_COLLISION_RADIUS = ROBOT_FOOTPRINT_RADIUS + ROBOT_COLLISION_CLEARANCE
 ROBOT_ENTITY_COLLISION_RADIUS = ROBOT_COLLISION_RADIUS
 
-# A* deliberately plans on a slightly larger virtual footprint than the real
-# collision checker.  This keeps route centers away from obstacle corners and
-# leaves continuous motion enough room to turn without sticking to a grid edge.
-ASTAR_PLANNING_CLEARANCE = 0.07
+# A* plans on a slightly larger virtual footprint than the real collision
+# checker.  The previous 0.07 m margin rounded the effective radius up far
+# enough on the 0.05 m grid to close several physically traversable passages
+# along the upper and lower field walls.  Keep a smaller numerical margin so
+# planned routes match the corridors the sentry can actually drive through.
+ASTAR_PLANNING_CLEARANCE = 0.03
 ASTAR_PLANNING_RADIUS = ROBOT_COLLISION_RADIUS + ASTAR_PLANNING_CLEARANCE
 
 # Values copied from the official rmuc2026.yaml map description.
@@ -389,6 +391,89 @@ class OccupancyGrid:
                 candidate_column = column + column_offset
                 if 0 <= candidate_row < self.height and 0 <= candidate_column < self.width:
                     blocked[candidate_row * self.width + candidate_column] = 1
+        return OccupancyGrid(
+            self.arena,
+            self.width,
+            self.height,
+            bytes(blocked),
+            self.collision_radius,
+        )
+
+    def with_cleared_polygons(
+        self,
+        polygons: Sequence[Sequence[Sequence[float]]],
+    ) -> "OccupancyGrid":
+        """Clear authored traversable corridors from an occupancy grid.
+
+        This is intended for physical passages such as tunnels which are dark
+        in the source PGM but are traversable in the field rules.  Only cells
+        whose centres are inside an explicit polygon are cleared; the arena
+        footprint boundary is always restored afterwards.
+        """
+        blocked = bytearray(self.blocked)
+
+        def contains(x: float, y: float, points) -> bool:
+            inside = False
+            previous_x, previous_y = points[-1]
+            for current_x, current_y in points:
+                if (current_y > y) != (previous_y > y):
+                    edge_x = previous_x + (y - previous_y) * (
+                        current_x - previous_x
+                    ) / (current_y - previous_y)
+                    if x < edge_x:
+                        inside = not inside
+                previous_x, previous_y = current_x, current_y
+            return inside
+
+        for polygon in polygons:
+            points: list[tuple[float, float]] = []
+            for point in polygon:
+                try:
+                    if len(point) < 2:
+                        continue
+                    x, y = float(point[0]), float(point[1])
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(x) and math.isfinite(y):
+                    points.append((x, y))
+            if len(points) < 3:
+                continue
+            min_x = max(0.0, min(point[0] for point in points))
+            max_x = min(self.arena.width, max(point[0] for point in points))
+            min_y = max(0.0, min(point[1] for point in points))
+            max_y = min(self.arena.height, max(point[1] for point in points))
+            column_start = max(0, int(min_x / self.arena.map_resolution) - 1)
+            column_end = min(
+                self.width - 1,
+                int(max_x / self.arena.map_resolution) + 1,
+            )
+            row_start = max(
+                0,
+                int((self.arena.height - max_y) / self.arena.map_resolution) - 1,
+            )
+            row_end = min(
+                self.height - 1,
+                int((self.arena.height - min_y) / self.arena.map_resolution) + 1,
+            )
+            for row in range(row_start, row_end + 1):
+                for column in range(column_start, column_end + 1):
+                    world_x, world_y = self.cell_to_world((row, column))
+                    if contains(world_x, world_y, points):
+                        blocked[row * self.width + column] = 0
+
+        for row in range(self.height):
+            center_y = self.arena.height - (row + 0.5) * self.arena.map_resolution
+            for column in range(self.width):
+                center_x = (column + 0.5) * self.arena.map_resolution
+                if not (
+                    self.collision_radius
+                    <= center_x
+                    <= self.arena.width - self.collision_radius
+                    and self.collision_radius
+                    <= center_y
+                    <= self.arena.height - self.collision_radius
+                ):
+                    blocked[row * self.width + column] = 1
         return OccupancyGrid(
             self.arena,
             self.width,

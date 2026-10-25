@@ -13,7 +13,12 @@ class ControlsMixin:
         for rect, action, target_id, direction in reversed(self.click_regions):
             if not rect.collidepoint(position):
                 continue
-            if self.replay_mode and action not in {
+            read_only_replay = self.replay_mode or getattr(
+                self,
+                "rl_replay_mode",
+                False,
+            )
+            if read_only_replay and action not in {
                 "replay_toggle",
                 "replay_previous",
                 "replay_next",
@@ -429,6 +434,14 @@ class ControlsMixin:
                     getattr(self.task, "aggressive_patrol_route", AGGRESSIVE_PATROL_POINTS)
                 ),
             }
+        geometry_before_load = geometry_payload(
+            self.map_zone_overrides,
+            self.custom_map_polygons,
+            self.patrol_routes,
+            self.wall_polygons,
+            self.special_regions,
+            self.slow_regions,
+        )
         try:
             task, sentry, controlled_robot_id = restore_snapshot(
                 self.snapshots[index]
@@ -495,7 +508,20 @@ class ControlsMixin:
             self.slow_regions = []
         self._sync_task_zone_overrides()
         self._sync_task_patrol_routes()
-        self._rebuild_collision_grids()
+        geometry_after_load = geometry_payload(
+            self.map_zone_overrides,
+            self.custom_map_polygons,
+            self.patrol_routes,
+            self.wall_polygons,
+            self.special_regions,
+            self.slow_regions,
+        )
+        # Scene snapshots mostly change referee/robot state. Rebuilding all
+        # collision, LOS and A* grids takes about a second on the current map
+        # and blocks the Pygame event loop. Reuse the existing grids whenever
+        # the effective global map geometry did not actually change.
+        if geometry_after_load != geometry_before_load:
+            self._rebuild_collision_grids()
         self.map_layer_visibility = {
             key: value
             for key, value in self.map_layer_visibility.items()

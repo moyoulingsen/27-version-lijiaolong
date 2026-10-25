@@ -7,6 +7,7 @@ import unittest
 
 from rm2026_sim.app import SimulatorApp
 from rm2026_sim.core import Arena, SentryState
+from rm2026_sim.field_geometry import BLUE_BASE
 from rm2026_sim.map_asset import load_p5_pgm
 from rm2026_sim.navigation import (
     ASTAR_PLANNING_RADIUS,
@@ -20,6 +21,7 @@ from rm2026_sim.task_state import (
     ATTACK,
     DecisionView,
     HOME,
+    PURSUIT_COST_ZONE_ID,
     SUPPLY,
     TaskScenario,
 )
@@ -125,6 +127,47 @@ class RobotSimulationTests(unittest.TestCase):
         self.assertGreater(peak_power, self.app.task.effective_sentry_power_limit)
         self.assertTrue(self.app.task.sentry_chassis_power_cut)
 
+    def test_match_end_return_home_overrides_manual_control(self) -> None:
+        self.app.sentry.x, self.app.sentry.y = ATTACK
+        self.app.sentry.enable_manual_control()
+        self.app.task.finish_game("比赛时间结束")
+        decision = self.app.task.evaluate(self.app.sentry)
+        before = math.dist((self.app.sentry.x, self.app.sentry.y), HOME)
+
+        self.app._update_sentry_motion(0.1, 0.0, 0.0, decision)
+
+        after = math.dist((self.app.sentry.x, self.app.sentry.y), HOME)
+        self.assertLess(after, before)
+
+    def test_match_end_return_home_clears_chassis_power_cut(self) -> None:
+        self.app.sentry.x, self.app.sentry.y = ATTACK
+        self.app.task.sentry_chassis_power_cut_remaining = 5.0
+        self.app.task.sentry_buffer_energy = 0.0
+
+        self.app.task.finish_game("比赛时间结束")
+        decision = self.app.task.evaluate(self.app.sentry)
+        before = math.dist((self.app.sentry.x, self.app.sentry.y), HOME)
+        self.app._update_sentry_motion(0.1, 0.0, 0.0, decision)
+        after = math.dist((self.app.sentry.x, self.app.sentry.y), HOME)
+
+        self.assertFalse(self.app.task.sentry_chassis_power_cut)
+        self.assertGreater(self.app.task.sentry_buffer_energy, 0.0)
+        self.assertLess(after, before)
+
+    def test_match_end_ignores_cached_behavior_tree_output(self) -> None:
+        self.app.task.finish_game("比赛时间结束")
+        self.app.bridge = SimpleNamespace(
+            connected=True,
+            latest_output=lambda: {
+                "serial": {},
+                "autoaim": {"target": 6},
+                "goal": list(ATTACK),
+            },
+        )
+
+        self.assertIsNone(self.app._bridge_decision())
+        self.assertEqual(self.app._local_decision().goal, HOME)
+
     def test_manual_control_collides_with_either_team(self) -> None:
         for team in ("red", "blue"):
             with self.subTest(team=team):
@@ -138,6 +181,91 @@ class RobotSimulationTests(unittest.TestCase):
                 self.assertGreater(x, 1.5)
                 self.assertLessEqual(x, 3.0 - 2 * ROBOT_ENTITY_COLLISION_RADIUS)
                 self.assertAlmostEqual(y, 4.0)
+
+    def test_manual_sentry_control_has_priority_over_pause(self) -> None:
+        self.app.task.game_paused = True
+        self.app.sentry.enable_manual_control()
+        decision = self.app.task.evaluate(self.app.sentry)
+        before = (self.app.sentry.x, self.app.sentry.y)
+        remaining_time = self.app.task.remaining_time
+
+        simulation_elapsed = self.app._advance_live_motion(
+            0.1,
+            1.0,
+            0.0,
+            decision,
+            restarting=False,
+        )
+        self.app.task.update(
+            0.1,
+            self.app.sentry,
+            decision_override=decision,
+            fire_request=False,
+        )
+
+        self.assertEqual(simulation_elapsed, 0.0)
+        self.assertGreater(self.app.sentry.x, before[0])
+        self.assertEqual(self.app.sentry.y, before[1])
+        self.assertEqual(self.app.task.remaining_time, remaining_time)
+
+    def test_manual_other_robot_control_has_priority_over_pause(self) -> None:
+        self.app.task.game_paused = True
+        self.app.controlled_robot_id = 3
+        self.app.controlled_robot_team = "red"
+        decision = self.app.task.evaluate(self.app.sentry)
+        sentry_before = (self.app.sentry.x, self.app.sentry.y)
+        robot_before = self.app.task.own_robot_position(3)
+
+        simulation_elapsed = self.app._advance_live_motion(
+            0.1,
+            0.0,
+            1.0,
+            decision,
+            restarting=False,
+        )
+
+        robot_after = self.app.task.own_robot_position(3)
+        self.assertEqual(simulation_elapsed, 0.0)
+        self.assertGreater(robot_after[1], robot_before[1])
+        self.assertEqual((self.app.sentry.x, self.app.sentry.y), sentry_before)
+
+    def test_pause_still_freezes_automatic_sentry_motion(self) -> None:
+        self.app.task.game_paused = True
+        decision = self.app.task.evaluate(self.app.sentry)
+        before = (self.app.sentry.x, self.app.sentry.y)
+
+        self.app._advance_live_motion(
+            0.1,
+            1.0,
+            0.0,
+            decision,
+            restarting=False,
+        )
+
+        self.assertEqual((self.app.sentry.x, self.app.sentry.y), before)
+
+    def test_paused_manual_collision_blocks_without_damage(self) -> None:
+        self.app.task = TaskScenario(game_paused=True)
+        self.app.task.set_robot_position(1, (1.5, 4.0), team="red")
+        self.app.task.set_robot_position(3, (3.0, 4.0), team="blue")
+        self.app.controlled_robot_id = 1
+        self.app.controlled_robot_team = "red"
+        decision = self.app.task.evaluate(self.app.sentry)
+        own_hp = self.app.task.own_robot_health(1)
+        enemy_hp = self.app.task.enemy_health(3)
+
+        self.app._advance_live_motion(
+            1.0,
+            1.0,
+            0.0,
+            decision,
+            restarting=False,
+        )
+
+        x, _ = self.app.task.own_robot_position(1)
+        self.assertLessEqual(x, 3.0 - 2 * ROBOT_ENTITY_COLLISION_RADIUS)
+        self.assertEqual(self.app.task.own_robot_health(1), own_hp)
+        self.assertEqual(self.app.task.enemy_health(3), enemy_hp)
 
     def test_enemy_robots_two_three_four_cross_special_wall_after_one_second(self) -> None:
         base_grid = OccupancyGrid.empty(self.app.arena)
@@ -214,6 +342,18 @@ class RobotSimulationTests(unittest.TestCase):
         self.app._move_controlled_robot(0.0, 1.0, 0.01)
         self.assertGreater(self.app.task.own_robot_position(3)[1], start_y)
 
+    def test_loading_snapshot_reuses_unchanged_collision_grids(self) -> None:
+        self.app.snapshots = [
+            capture_snapshot("不改地图", self.app.task, self.app.sentry, None)
+        ]
+        self.app.bridge = SimpleNamespace(clear_output=lambda: None)
+        rebuild_calls = []
+        self.app._rebuild_collision_grids = lambda: rebuild_calls.append(True)
+
+        self.app._load_snapshot(0)
+
+        self.assertEqual(rebuild_calls, [])
+
     def test_ros_bridge_maps_legacy_navigation_goals_to_field_geometry(self) -> None:
         self.app.bridge = SimpleNamespace(
             connected=True,
@@ -247,6 +387,7 @@ class RobotSimulationTests(unittest.TestCase):
 
         state = self.app._bridge_state()
 
+        self.assertNotIn("aggressive_patrol", state)
         self.assertEqual(state["aggressive_patrol_points"], aggressive)
         self.assertEqual(state["conservative_patrol_points"], conservative)
         self.app.bridge = SimpleNamespace(
@@ -257,9 +398,72 @@ class RobotSimulationTests(unittest.TestCase):
                 "goal": list(AGGRESSIVE_PATROL_POINTS[1]),
             },
         )
-        self.assertEqual(self.app._bridge_decision().goal, tuple(aggressive[1]))
+        decision = self.app._bridge_decision()
+        self.assertEqual(decision.goal, tuple(aggressive[1]))
+        self.assertEqual(decision.behavior, "行为树：激进巡逻")
+        self.assertTrue(self.app.task.patrol_is_aggressive)
 
-    def test_friendly_scene_changes_do_not_enter_bridge_or_target_selection(self) -> None:
+        self.app.bridge.latest_output = lambda: {
+            "serial": {},
+            "autoaim": {"target": 0},
+            "goal": list(conservative[0]),
+        }
+        decision = self.app._bridge_decision()
+        self.assertEqual(decision.behavior, "行为树：保守巡逻")
+        self.assertFalse(self.app.task.patrol_is_aggressive)
+
+    def test_local_low_health_selection_treats_vulnerable_base_as_visual_target(self) -> None:
+        self.app.task.enemy_outpost_hp = 0.0
+        self.app.task.enemy_base_hp = 40.0
+        self.app.sentry.x = BLUE_BASE[0] - 3.0
+        self.app.sentry.y = BLUE_BASE[1]
+        self.app.sentry.turret_angle = 0.0
+
+        decision = self.app._local_decision()
+
+        self.assertEqual(decision.target, 7)
+        self.assertEqual(decision.shoot_mode, 1)
+        self.assertIsNone(decision.goal)
+
+        self.app.task.enemy_outpost_hp = 1000.0
+        self.assertNotEqual(self.app._local_decision().target, 7)
+
+    def test_local_pursuit_stops_when_costmap_support_drops_below_three(self) -> None:
+        self.app._restart_signal_remaining = 0.0
+        self.app.task.enemy_outpost_hp = 0.0
+        self.app.task.robot_hp[3] = 40.0
+        self.app.sentry.x, self.app.sentry.y = (20.5, 8.0)
+        autoaim = {
+            "target": [0] * 9,
+            "target_distance": [0.0] * 9,
+            "target_polar_r": [0.0] * 9,
+            "target_polar_angle": [0.0] * 9,
+        }
+        autoaim["target"][3] = 1
+        autoaim["target_distance"][3] = 5.0
+        autoaim["target_polar_r"][3] = 5.0
+        self.app._simulated_autoaim = lambda _health: autoaim
+        self.app.task.field_zone_overrides[PURSUIT_COST_ZONE_ID] = [
+            [19.0, 10.0],
+            [23.0, 10.0],
+            [23.0, 6.0],
+            [19.0, 6.0],
+        ]
+        self.app.task.own_robot_positions[1] = [21.0, 8.0]
+        self.app.task.own_robot_positions[3] = [22.0, 8.0]
+        self.app.task.own_robot_positions[2] = [5.0, 5.0]
+        self.app.task.own_robot_positions[4] = [5.0, 6.0]
+
+        self.assertEqual(self.app._local_decision().behavior, "追击残血目标")
+        self.assertEqual(self.app.task.pursuit_cost_friendly_count(self.app.sentry), 3)
+        self.assertEqual(self.app._bridge_state()["hp_friend"][2], 200)
+
+        self.app.task.own_robot_hp[3] = 0.0
+        self.assertNotEqual(self.app._local_decision().behavior, "追击残血目标")
+        self.assertEqual(self.app.task.pursuit_cost_friendly_count(self.app.sentry), 2)
+        self.assertEqual(self.app._bridge_state()["hp_friend"][2], 0)
+
+    def test_friendly_referee_state_enters_bridge_but_not_enemy_selection(self) -> None:
         self.app._restart_signal_remaining = 0.0
         before_bridge = self.app._bridge_state()
         before_decision = self.app._local_decision()
@@ -270,7 +474,13 @@ class RobotSimulationTests(unittest.TestCase):
         self.app.task.own_robot_hp[1] = 1.0
         self.app.task.own_robot_ammo[1] = 0
 
-        self.assertEqual(self.app._bridge_state(), before_bridge)
+        after_bridge = self.app._bridge_state()
+        self.assertNotEqual(after_bridge, before_bridge)
+        self.assertEqual(after_bridge["hp_friend"][0], 1)
+        self.assertEqual(
+            after_bridge["friendly_ground_positions"][:2],
+            [self.app.sentry.x + 1.0, self.app.sentry.y],
+        )
         self.assertEqual(self.app._local_decision(), before_decision)
         self.assertEqual(self.app.task.resolve_fire_target(self.app.sentry), before_target)
 

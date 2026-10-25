@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch the RMUC 2026 Pygame validator or SQLite replay player."""
+"""Launch the RMUC 2026 Pygame referee visualizer."""
 
 import sys
 

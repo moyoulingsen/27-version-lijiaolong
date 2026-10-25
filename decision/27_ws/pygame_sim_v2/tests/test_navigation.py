@@ -46,13 +46,40 @@ class OccupancyGridTests(unittest.TestCase):
             ROBOT_COLLISION_RADIUS,
             math.hypot(ROBOT_COLLISION_LENGTH, ROBOT_COLLISION_WIDTH) * 0.5,
         )
-        self.assertAlmostEqual(ASTAR_PLANNING_CLEARANCE, 0.07)
+        self.assertAlmostEqual(ASTAR_PLANNING_CLEARANCE, 0.03)
         self.assertAlmostEqual(
             ASTAR_PLANNING_RADIUS,
             ROBOT_COLLISION_RADIUS + ASTAR_PLANNING_CLEARANCE,
         )
         self.assertGreater(sum(self.grid.blocked), sum(self.collision_grid.blocked))
         self.assertEqual((self.grid.width, self.grid.height), (560, 300))
+
+    def test_astar_keeps_physically_traversable_wall_corridor_open(self) -> None:
+        arena = Arena(width=4.0, height=3.0, map_resolution=0.05)
+        # The 0.88 m passage is wider than the sentry's real circular footprint
+        # and the reduced A* footprint, but was closed by the old 0.07 m margin
+        # after grid-cell rounding.
+        corridor_width = 0.88
+        lower_top = (arena.height - corridor_width) * 0.5
+        upper_bottom = lower_top + corridor_width
+        grid = OccupancyGrid.empty(
+            arena,
+            collision_radius=ASTAR_PLANNING_RADIUS,
+        ).with_blocked_rectangles(
+            (
+                (0.0, 0.0, arena.width, lower_top),
+                (0.0, upper_bottom, arena.width, arena.height),
+            ),
+            inflation=0.0,
+        )
+        start = (0.6, arena.height * 0.5)
+        goal = (3.4, arena.height * 0.5)
+
+        path = grid.find_path(start, goal)
+
+        self.assertTrue(path)
+        self.assertEqual(path[-1], goal)
+        self.assertTrue(all(grid.is_free_world(*point) for point in path))
 
     def test_required_navigation_goals_are_free_after_map_inflation(self) -> None:
         goals = (

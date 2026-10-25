@@ -124,6 +124,27 @@ class RobotPropertyUITests(unittest.TestCase):
             all(team == "blue" for _, team, _ in self.app.robot_property_regions)
         )
 
+    def test_rl_replay_keeps_team_tabs_interactive_and_values_read_only(self) -> None:
+        self.app.rl_replay_mode = True
+        self.render_at((0, 0))
+        enemy_tab = next(
+            rect
+            for rect, action, team, _ in self.app.click_regions
+            if action == "robot_team_tab" and team == "blue"
+        )
+        self.assertTrue(self.app._handle_mouse_click(enemy_tab.center))
+        self.render_at((0, 0))
+        self.assertEqual(self.app.robot_property_team, "blue")
+        self.assertTrue(
+            all(team == "blue" for _, team, _ in self.app.robot_property_regions)
+        )
+        self.assertFalse(
+            any(
+                action in {"enemy_health", "own_robot_health"}
+                for _, action, _, _ in self.app.click_regions
+            )
+        )
+
     def test_map_region_layers_are_hidden_until_selected_in_bottom_panel(self) -> None:
         self.render_at((0, 0))
         self.assertFalse(self.app.map_layers_panel_open)
